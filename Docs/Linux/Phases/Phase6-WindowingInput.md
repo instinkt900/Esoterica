@@ -26,16 +26,16 @@ Three of the largest platform files are windowing and input:
 | `Code/Base/Input/InputDevices/Platform/InputDevice_KeyboardMouse_Win32.cpp` | 408 |
 
 That is ~2,300 of the port's ~4,300 platform lines — but the real cost is much lower than it
-looks, because **`ImguiPlatform_Win32.cpp` is a vendored copy of upstream Dear ImGui's
-`imgui_impl_win32.cpp`**, lightly adapted. The survey confirmed this: it contains
-`ImGui_ImplWin32_Data`, `ImGui_ImplWin32_ViewportData`,
+looks, because **upstream Dear ImGui's `imgui_impl_win32.cpp` is inlined into
+`ImguiPlatform_Win32.cpp`**, lightly adapted (no separate impl file is vendored in the tree).
+The survey confirmed this: it contains `ImGui_ImplWin32_Data`, `ImGui_ImplWin32_ViewportData`,
 `ImGui_ImplWin32_UpdateMonitors_EnumFunc`, and the standard DPI-awareness helpers, all with
 upstream's naming.
 
 So the Linux equivalent is **upstream's `imgui_impl_sdl3.cpp`**, adapted the same way — a port of
-the adaptations, not a from-scratch backend. Diff the vendored file against the matching upstream
-release of `imgui_impl_win32.cpp` first, to isolate exactly what Esoterica changed. That diff is
-your actual worklist.
+the adaptations, not a from-scratch backend. Diff the inlined body against `imgui_impl_win32.cpp`
+from the vendored imgui release (`Code/Base/ThirdParty/imgui`, 1.92.9b) first, to isolate exactly
+what Esoterica changed. That diff is your actual worklist.
 
 SDL3 also absorbs keyboard, mouse, gamepad, multi-monitor, DPI, and the X11-vs-Wayland question.
 Do not hand-roll any of it.
@@ -95,7 +95,8 @@ small — the app subclasses are 124 and 127 lines.
 
 Procedure:
 
-1. Identify which Dear ImGui version is vendored at `Code/Base/ThirdParty/imgui/`.
+1. The vendored Dear ImGui at `Code/Base/ThirdParty/imgui/` is **1.92.9b**
+   (`IMGUI_VERSION`, `imgui.h:32`). Diff against that release's `backends/`.
 2. Diff `ImguiPlatform_Win32.cpp` against that version's `imgui_impl_win32.cpp` to isolate
    Esoterica's adaptations.
 3. Start from that version's `imgui_impl_sdl3.cpp` and apply the same adaptations.

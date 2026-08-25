@@ -61,10 +61,14 @@ where parallelism is possible it is called out in the phase doc.
 
 Findings from the initial survey of the codebase (2026-08-13, at commit `6813cf9`):
 
-- **Total Win32-specific code is ~4,300 lines across 15 files.** The engine already uses a
+- **Total Win32-specific code is ~4,900 lines across 23 files** (recounted 2026-08-25):
+  4,118 in the 21 `*_Win32.*` files, plus two Windows-only files that carry no suffix at all —
+  `FileSystemWatcher.cpp` and `SystemDialogs.cpp`. The engine already uses a
   `Code/Base/<System>/Platform/<System>_Win32.cpp` convention.
-- **Only 10 shared files contain a platform guard at all**, and 9 of those are a single
-  `#if _WIN32` include-switch that takes an `#elif` sibling. See
+- **15 shared files contain a platform-relevant guard** (9 for `_WIN32`, 1 for
+  `_MSC_VER`, 5 for `EE_DLL`); only three of those are a bare `#if _WIN32` include-switch
+  that takes an `#elif` sibling. **8 more shared files contain unguarded Windows-only
+  includes or `Platform::Win32::` calls** that need a small local guard. See
   [TouchedFiles.md](TouchedFiles.md) for the exact list with line numbers.
 - **`RHI.h` is genuinely API-agnostic.** Zero `ID3D12*`, `DXGI*`, or `D3D12_*` types appear
   in it. All 6,084 lines of Direct3D live in one file. The swapchain takes a
@@ -75,8 +79,12 @@ Findings from the initial survey of the codebase (2026-08-13, at commit `6813cf9
   platform .cpp*.** The Linux file defines it as `'/'` and no shared code changes.
 - **`DataPath` already hardcodes `'/'`** (`DataPath.h:47`), so serialized resource paths are
   platform-neutral. **Compiled data is portable — there is no data migration problem.**
-- **The imgui Win32 backend is a vendored copy of upstream `imgui_impl_win32.cpp`**, so
-  upstream's `imgui_impl_sdl3.cpp` is a near-drop-in replacement rather than a rewrite.
+- **imgui is vendored** (`Code/Base/ThirdParty/imgui`, version `1.92.9b`), and the Win32
+  backend code is **inlined** in `Code/Base/Imgui/Platform/ImguiPlatform_Win32.cpp` (1,198
+  lines; there is no separately vendored `imgui_impl_win32.cpp`). Replacing it means diffing
+  that inlined backend against the official `imgui_impl_win32.cpp` from the same `1.92.9b`
+  release, then porting the differences onto upstream's `imgui_impl_sdl3.cpp` — still a
+  near-drop-in rather than a rewrite.
 - **`.vcxproj` files list every source explicitly** (Base 147, Engine 236, EngineTools 155
   `ClCompile` entries) with **zero `ExcludedFromBuild` entries**. This is what makes a
   vcxproj-derived build generator viable: upstream adding or moving source files needs no

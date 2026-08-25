@@ -41,8 +41,12 @@ it without the `-shaders` flag.
 
 Resolves [open question 2](../Progress.md#open-questions).
 
-1. Read `Code/PropertySheets/LLVM.props` to determine the **exact** LLVM version upstream links
-   against.
+1. Determine the **exact** LLVM version upstream links against. It is **not written in
+   `Code/PropertySheets/LLVM.props`** (verified 2026-08-25) — the version is baked into the
+   `External.zip` that `DownloadDependencies.bat` fetches from upstream's `Dependencies`
+   release. Fetch and inspect that archive once (or match the libs in it to an official
+   LLVM/Clang release), and record the resulting version in
+   [03-Dependencies.md](../03-Dependencies.md).
 2. Acquire that version for Linux. The Windows build links these:
    `libclang`, `clangAST`, `clangBasic`, `clangLex`, and ~18 `LLVM*` libraries
    (`LLVMSupport`, `LLVMCore`, `LLVMFrontendHLSL`, …).
@@ -63,8 +67,8 @@ The Reflector's Windows coupling is small:
 
 | Location | Issue | Fix |
 |---|---|---|
-| `ReflectorApplication.cpp` | includes `<windows.h>` | Guard the include, or wrap the Windows-only region |
-| `TypeReflection/Clang/ClangParser.cpp` | calls `Platform::Win32::GetShortPath( fullPath )` | Route through `Platform::Linux::GetShortPath`, which is a pass-through (Phase 1, P1.5) |
+| `ReflectorApplication.cpp:5,7` | unguarded `<windows.h>` and `<consoleapi2.h>` — **both dead** (nothing in the file uses them) | wrap the two lines in `#ifdef _WIN32` / `#endif` (2 lines added, nothing else) |
+| `TypeReflection/Clang/ClangParser.cpp:75` | unguarded `Platform::Win32::GetShortPath( fullPath )` call (the line-5 `PlatformUtils_Win32.h` include is harmless — the header self-guards) | wrap the call in `#if _WIN32` / `#elif defined( __linux__ )`; the `#elif` routes through `Platform::Linux::GetShortPath`, which is a pass-through (Phase 1, P1.5) |
 
 `GetShortPath` exists on Windows to work around `MAX_PATH`. On Linux it is meaningless and the
 Phase 1 implementation returns the input unchanged, so the call site just needs to reach the

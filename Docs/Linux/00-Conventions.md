@@ -36,7 +36,7 @@ namespace EE::Threading
 ```
 
 Every new `.h` uses the same guard placement as its Win32 sibling. Note that upstream is
-inconsistent here — `Platform_Win32.h` puts `#ifdef _WIN32` *before* `#pragma once`, while
+inconsistent here — `Platform_Win32.h` puts `#pragma once` *before* `#ifdef _WIN32`, while
 `Application_Win32.h` puts it *after*. **Match whichever sibling you are mirroring**, so the
 two files diff cleanly against each other.
 

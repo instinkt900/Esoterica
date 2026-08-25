@@ -46,7 +46,9 @@ though the ResourceCompiler itself never uses it. There is no way to defer it to
 ### P3.1 — `FileSystemWatcher_Linux.cpp`
 
 **New:** `Code/EngineTools/FileSystem/FileSystemWatcher_Linux.cpp`
-**Edits:** `FileSystemWatcher.h:15`, `FileSystemWatcher.cpp` (guard its `<windows.h>` block)
+**Edits:** `FileSystemWatcher.h:15`, `FileSystemWatcher.cpp:8–16` (guard its unguarded
+`NOMINMAX` / `WIN32_LEAN_AND_MEAN` defines and `<windows.h>` include — the body itself already
+sits inside `#if _WIN32`, line 20 → `#endif` line 270)
 
 The header edit is one line:
 
@@ -135,9 +137,13 @@ the real Linux implementation to Phase 7. Verify nothing in the ResourceCompiler
 actually invokes a dialog; if something does, you need a minimal `SystemDialogs_Linux.cpp` stub
 here rather than in Phase 7.
 
-Similarly, the six `OpenInExplorer` call sites in `EngineTools` need to *compile*. They are in
-UI code the ResourceCompiler never runs, but they still need a resolvable symbol — the Phase 1
-`Platform::Linux::OpenInExplorer` provides it.
+Similarly, the six `OpenInExplorer` call sites in `EngineTools` (3 in
+`EditorTool_ResourceBrowser.cpp`, 1 each in `EditorTool_ResourceImporter.cpp`,
+`ResourcePickers.cpp`, `DataPathPicker.cpp`) are unguarded calls into `Platform::Win32::`,
+whose declarations vanish on Linux (the header self-guards) — a **compile** error, not a link
+one. Each site takes a `#if _WIN32` / `#elif defined( __linux__ )` guard, the `#elif` calling
+`Platform::Linux::OpenInExplorer` (Phase 1). All four edits are recorded in
+[TouchedFiles.md](../TouchedFiles.md#small-additive-edits) and land in this phase.
 
 ### P3.4 — Compile `Esoterica.Game.Runtime` and `Esoterica.Game.Tools`
 

@@ -27,7 +27,9 @@ What remains:
 2. `EditorApplication_Linux` — thin, mirrors Phase 6's engine app.
 3. The Resource Server, which is a Win32 GUI app (`_tWinMain` + imgui) and spawns worker
    processes.
-4. `OpenInExplorer` call sites — already resolvable since Phase 1, needs verifying they behave.
+4. `OpenInExplorer` call sites — with `Platform::Win32` gone on Linux, the two remaining sites in
+   `ResourceServerUI.cpp` (799, 811) are compile errors until routed to the Phase 1 Linux
+   implementation. The six `EngineTools` sites were already fixed in Phase 3.
 
 ---
 
@@ -82,8 +84,13 @@ that is a shared-header concern — **escalate** rather than changing it.
 ### P7.3 — Resource Server
 
 `Code/Applications/ResourceServer/` is a Win32 GUI application:
-`ResourceServerApplication.cpp:432` is `_tWinMain`, and it has an imgui UI
-(`ResourceServerUI.cpp`).
+`ResourceServerApplication.cpp` is Windows-only (`HINSTANCE`, `_tWinMain` at `:432`,
+`<shobjidl_core.h>`), and it has an imgui UI (`ResourceServerUI.cpp`).
+
+It drops out of the Linux build **by filename, not by content**: `ResourceServerApplication.cpp`
+carries no `_Win32` suffix, so the generator excludes it (Phase 0, P0.3). This phase therefore
+writes a new Linux entry point (a `ResourceServerApplication_Linux` mirroring Phase 6's app
+pattern), not a port of that file.
 
 Two decisions to make here:
 
@@ -96,18 +103,21 @@ on it having a window. **Recommended: implement GUI mode**, since `LinuxApplicat
 backend already exist from Phase 6, making it nearly free — and headless-only would be a
 behavioural divergence from Windows.
 
-**(b) Worker processes.** `ResourceServerWorker.cpp` uses `CreateProcess` to spawn
-`EsotericaResourceCompiler` instances. The vendored `subprocess` library
-(`Code/EngineTools/ThirdParty/subprocess/`) may already provide a portable path — check before
-writing `fork`/`execv` by hand. If `ResourceServerWorker.cpp` calls Win32 directly, it needs a
-platform split; add it to [TouchedFiles.md](../TouchedFiles.md) when you know.
+**(b) Worker processes.** `ResourceServerWorker.cpp` already uses the vendored single-header
+`subprocess` library (`Code/EngineTools/ThirdParty/subprocess/subprocess.h`, sheredom's
+subprocess.h) with portable argv-style calls: `subprocess_create( { compilerPath, "-worker", id,
+nullptr }, ..., &m_process )` at `:120` and `:307`. Its POSIX `fork`/`execvp` path ships in the
+same header, and `subprocess_option_no_window` is a Windows-only flag ignored on POSIX — so
+**no platform split is needed there**. Verify instead that
+`m_resourceCompilerExecutablePath` resolves on Linux and the combined stdout/stderr pipe works.
 
-Also relevant: `ResourceServerUI.cpp` calls `Platform::Win32::OpenInExplorer` twice. Route to the
-Phase 1 Linux implementation.
+Also relevant: `ResourceServerUI.cpp` calls `Platform::Win32::OpenInExplorer` twice
+(`:799`, `:811`), unguarded. Route them to the Phase 1 Linux implementation.
 
 ### P7.4 — `OpenInExplorer` verification
 
-Six `EngineTools` call sites plus two in the Resource Server:
+Six `EngineTools` call sites (guarded in Phase 3, P3.3) plus two in the Resource Server
+(this phase, P7.3):
 
 - `Code/EngineTools/Resource/Tools/EditorTool_ResourceBrowser.cpp` (×3)
 - `Code/EngineTools/Resource/Tools/EditorTool_ResourceImporter.cpp`
@@ -115,7 +125,8 @@ Six `EngineTools` call sites plus two in the Resource Server:
 - `Code/EngineTools/Widgets/Pickers/ResourcePickers.cpp`
 - `Code/Applications/ResourceServer/ResourceServerUI.cpp` (×2)
 
-These compile since Phase 1. This task is verifying they *work* — `xdg-open` on a directory should
+The `EngineTools` sites compile from Phase 3, the Resource Server sites from P7.3. This task is
+verifying they *work* — `xdg-open` on a directory should
 open the file manager, and on a file should either select it in the file manager or open it in the
 associated application. Note Win32's `OpenInExplorer` on a *file* selects it in Explorer, whereas
 `xdg-open` on a file **opens** it. If selecting is the intent, `dbus-send` to

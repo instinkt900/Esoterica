@@ -94,10 +94,13 @@ sibling, add it, and update the registry.
 Also re-check the invariant that makes the build generator work:
 
 ```bash
-# Should be 0. A non-zero count means upstream started using per-config file exclusion,
+# Should print nothing. Any hit means upstream started using per-config file exclusion,
 # which the generator does not model.
-grep -c 'ExcludedFromBuild' Code/*/*.vcxproj Code/*/*/*.vcxproj | grep -v ':0'
+find Code -name '*.vcxproj' ! -path '*ThirdParty*' -exec grep -H 'ExcludedFromBuild' {} +
 ```
+
+(`find` rather than glob depths, so a project moved deeper under `Code/` cannot be silently
+skipped by the audit.)
 
 ## Special case: `Code/Scripts/NinjaGen/NinjaGen.py`
 
@@ -133,6 +136,7 @@ Append to the table below on every merge. This is the fork's provenance record; 
 | Date | Upstream commit | Notes |
 |---|---|---|
 | 2026-08-13 | `6813cf9` | Fork point for the Linux port plan. Survey in [README.md](README.md) reflects this commit. |
+| 2026-08-25 | `6813cf9` | Plan re-verified line by line against this commit (upstream had not moved since the fork point; `main..upstream/main` empty). Doc corrections recorded in [TouchedFiles.md](TouchedFiles.md), [README.md](README.md), [02-Architecture.md](02-Architecture.md), [03-Dependencies.md](03-Dependencies.md), [Progress.md](Progress.md) and the phase docs. No code changed. |
 
 ## Merge notes
 

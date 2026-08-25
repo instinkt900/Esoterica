@@ -46,7 +46,36 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
-*(none yet)*
+### 2026-08-25 — Plan re-verification (docs only)
+- Re-verified every claim in `Docs/Linux/` line by line against `6813cf9`; upstream had not
+  moved since the fork point (`main..upstream/main` empty).
+- Upstream files edited: none. No acceptance criteria involved (docs-only change).
+- Corrections, by file:
+  - [TouchedFiles.md](TouchedFiles.md): `Memory.h` / `Memory.cpp` reclassified from "no change
+    needed" to substantive edits with exact fix descriptions; `IniFile.cpp` re-described (the
+    `#if defined( _MSC_VER )` wraps the *entire file*; fix is a 2-line rescoping);
+    `FileSystemWatcher.cpp` line numbers corrected (guarded body starts at line 20; unguarded
+    includes are lines 8–16); Tester `API.h` removed from the edit list (it is a `#pragma once`
+    stub); `BaseModule.cpp` moved to "verified no change" (already fully self-guarded); eight
+    previously unlisted files added with line numbers (`ReflectorApplication.cpp`,
+    `ClangParser.cpp`, four EngineTools `OpenInExplorer` files, `ResourceServerUI.cpp`); new
+    "Excluded by filename" section (`RHI_Direct3D12.cpp`, `ResourceServerApplication.cpp`).
+  - [README.md](README.md): line/file counts corrected (~4,900 across 23 files; 15 guarded + 8
+    unguarded shared files); imgui Win32 backend is *inlined* in `ImguiPlatform_Win32.cpp`, not
+    a vendored `imgui_impl_win32.cpp`.
+  - [00-Conventions.md](00-Conventions.md): rule 1 guard-ordering example was reversed
+    (`Platform_Win32.h` is `#pragma once` *then* `#ifdef`).
+  - [02-Architecture.md](02-Architecture.md): `Platform::Win32::` call-site census rewritten
+    (21 sites in 8 files; 12 already guarded, 9 unguarded — the survey's "BaseModule.cpp" claim
+    was wrong, it needs nothing); "three applications" with plain `main` → four.
+  - [03-Dependencies.md](03-Dependencies.md): LLVM version is *not* in `LLVM.props` (it is
+    baked into upstream's `External.zip`); SDL3 availability on Ubuntu 24.04 recorded.
+  - [01-UpstreamMerges.md](01-UpstreamMerges.md): sync-point row added; `ExcludedFromBuild`
+    audit grep made depth-independent.
+  - Phase 0/1/2/3/6/7 docs: matching corrections (see each).
+- Anything the next agent needs to know: the plan is now line-verified against `6813cf9`.
+  Phase 0 can start; the External.zip download decision (LLVM version pinning) is the one open
+  item it should settle first.
 
 ---
 
@@ -79,7 +108,7 @@ Move to "Decisions made" once answered.
 | 3 | `volk` vs the plain Vulkan loader? | Phase 5 | open |
 | 4 | Is SDL3 packaged on the target distros, or must we always build it? | Phase 6 | open |
 | 5 | Does `GameNetworkingSockets` block the first `Base` link, or can it be deferred? | Phase 1 | open |
-| 6 | Does `Memory.cpp`'s `VirtualAlloc` region (`PageAllocator`, ~line 234) have a working non-Windows path? | Phase 1 | open |
+| 6 | Does `Memory.cpp`'s `VirtualAlloc` region (`PageAllocator`, ~line 234) have a working non-Windows path? | Phase 1 | **answered 2026-08-25: No, and the survey description was wrong.** `VirtualMemoryReserve` / `VirtualMemoryCommit` / `VirtualMemoryFree` (lines 231–252) are *completely unguarded* — there is no `#else` anywhere in the file, and `PageAllocator` is a separate consumer, not a region in this file. The fix (guarded `mmap` / `mprotect` / `munmap` branch) is recorded in [TouchedFiles.md](TouchedFiles.md#substantive-edits) for Phase 1. |
 
 ---
 
@@ -104,6 +133,21 @@ Also noted, not fixed:
   definitions, and parses the legacy `.sln` GUID format). Left alone deliberately.
 - `Docs/docs/CodingGuidelines.md` is referenced by `Esoterica.slnx` but absent from the
   repository.
+
+Re-verification on 2026-08-25 (against `6813cf9`) noted, not fixed:
+
+- **Case-sensitive-path landmines.** `Esoterica.props` imports `Code\PropertySheets\Navpower.props`
+  but the file on disk is `NavPower.props` (capital P); `ResourceServerApplication.cpp:6` includes
+  `"Base/Imgui/Platform/ImguiPlatform_win32.h"` but the header on disk is `ImguiPlatform_Win32.h`.
+  Both compile on Windows because the filesystem and toolchain are case-insensitive. The build
+  generator must resolve `.props` imports **and** `#include` paths case-insensitively.
+- `Code/Base/Memory/Memory.h` lines 23–27: the non-Windows `#else` defines `EE_STACK_ALLOC` /
+  `EE_STACK_ARRAY_ALLOC` as **empty macros** — a non-functional stub that breaks every call
+  site on a non-Windows build. The port completes it in Phase 1 (see [TouchedFiles.md](TouchedFiles.md)).
+- `Code/Base/Math/Platform/Math_Win32.h`: `GetMostSignificantBit( uint64_t )` passes its
+  argument to `_BitScanReverse64` cast to `unsigned long`, silently truncating 64-bit values to
+  32 bits. The Linux `__builtin_clzll` implementation will be correct for the full 64-bit range;
+  that is a deliberate behaviour fix, and it is recorded here rather than hidden.
 
 ---
 

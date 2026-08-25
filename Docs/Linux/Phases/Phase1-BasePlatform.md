@@ -70,7 +70,7 @@ P1.10 depend on the rest.
 ### P1.1 — `Platform_Linux.h`, module API visibility
 
 **New:** `Code/Base/Platform/Platform_Linux.h`
-**Edits:** `Code/Base/Esoterica.h:55`, and all six `_Module/API.h` files.
+**Edits:** `Code/Base/Esoterica.h:55`, and five `_Module/API.h` files.
 
 Mirror `Platform_Win32.h`. It must define:
 
@@ -81,10 +81,10 @@ Mirror `Platform_Win32.h`. It must define:
 | `EE_DISABLE_OPTIMIZATION` | `__pragma( optimize( "", off ) )` | `_Pragma( "clang optimize off" )` |
 | `EE_ENABLE_OPTIMIZATION` | `__pragma( optimize( "", on ) )` | `_Pragma( "clang optimize on" )` |
 
-Match the sibling's guard placement: `Platform_Win32.h` puts `#ifdef _WIN32` **before**
-`#pragma once`, so `Platform_Linux.h` puts `#ifdef __linux__` before `#pragma once` too.
+Match the sibling's guard placement: `Platform_Win32.h` puts `#pragma once` **before**
+`#ifdef _WIN32`, so `Platform_Linux.h` puts `#pragma once` before `#ifdef __linux__` too.
 
-For the six `API.h` files, the export macro becomes:
+For the five `API.h` files, the export macro becomes:
 
 ```cpp
 #if EE_DLL
@@ -100,8 +100,9 @@ For the six `API.h` files, the export macro becomes:
 
 The import case needs no attribute on ELF. Files:
 `Code/Base/_Module/API.h`, `Code/Engine/_Module/API.h`, `Code/EngineTools/_Module/API.h`,
-`Code/Game/_Module/API.h`, `Code/GameTools/_Module/API.h`,
-`Code/Applications/Tester/_Module/API.h`. Land them in one commit.
+`Code/Game/_Module/API.h`, `Code/GameTools/_Module/API.h`. Land them in one commit.
+(`Code/Applications/Tester/_Module/API.h` is **not** one of them — it contains only
+`#pragma once`, and `EE_TESTER_API` is defined and used nowhere.)
 
 ### P1.2 — `Math_Linux.h`
 
@@ -202,23 +203,27 @@ Mirror `EE::Platform::Win32` as `EE::Platform::Linux`:
 Note `IsProcessRunning` is an inline in the header that calls `GetProcessID`; keep it inline in
 the Linux header too.
 
-**Callers matter here.** ~30 call sites reference `Platform::Win32::` directly. Most are inside
-other `_Win32.cpp` files (fine — they compile out), but these are in platform-neutral code and
-will need attention in this phase or a later one:
+**Callers matter here.** Outside the `_Win32` files, 21 call sites reference
+`Platform::Win32::` directly (the sites inside `_Win32.cpp` files are fine — they compile out).
+Twelve of the 21 already sit inside existing `#if _WIN32` blocks and need nothing; the nine
+unguarded ones are handled per
+[TouchedFiles.md](../TouchedFiles.md#small-additive-edits):
 
-| Caller | Functions used | Phase |
-|---|---|---|
-| `Code/Base/_Module/BaseModule.cpp` | `GetCurrentModulePath`, `GetProcessID`, `GetProcessPath`, `KillProcess`, `StartProcess` | 1 |
-| `Code/Base/Profiling.cpp` | `GetCurrentModulePath`, `StartProcess` | already `#if _WIN32` guarded — no change |
-| `Code/EngineTools/**` (6 files) | `OpenInExplorer` | 7 |
-| `Code/Applications/ResourceServer/ResourceServerUI.cpp` | `OpenInExplorer` | 7 |
-| `Code/Applications/Reflector/TypeReflection/Clang/ClangParser.cpp` | `GetShortPath` | 2 |
+| Caller (sites) | Functions used | State | Handled in |
+|---|---|---|---|
+| `Code/Base/_Module/BaseModule.cpp` (6) | `GetCurrentModulePath`, `GetProcessID`, `GetProcessPath`, `KillProcess`, `StartProcess` | already fully guarded (`#if _WIN32` … `#else return false;`, lines 20–67) — **no change needed**; on Linux it simply declines to start a resource server | — (real Linux server startup is Phase 7) |
+| `Code/Base/Profiling.cpp` (2) | `GetCurrentModulePath`, `StartProcess` | already `#if _WIN32` guarded | — |
+| `Code/EngineTools/FileSystem/FileSystemWatcher.cpp` (4) | `GetLastErrorMessage` | already inside its `#if _WIN32` body (line 20); only the unguarded includes at lines 8–16 need guarding | 3 |
+| `Code/Applications/Reflector/TypeReflection/Clang/ClangParser.cpp:75` (1) | `GetShortPath` | unguarded | 2 |
+| `Code/EngineTools/Resource/Tools/EditorTool_ResourceBrowser.cpp` (3) | `OpenInExplorer` | unguarded | 3 |
+| `Code/EngineTools/Resource/Tools/EditorTool_ResourceImporter.cpp` (1) | `OpenInExplorer` | unguarded | 3 |
+| `Code/EngineTools/Widgets/Pickers/ResourcePickers.cpp` (1) | `OpenInExplorer` | unguarded | 3 |
+| `Code/EngineTools/Widgets/Pickers/DataPathPicker.cpp` (1) | `OpenInExplorer` | unguarded | 3 |
+| `Code/Applications/ResourceServer/ResourceServerUI.cpp` (2) | `OpenInExplorer` | unguarded | 7 |
 
-`BaseModule.cpp` already has `#ifdef _WIN32` guards at lines 9 and 20 around the
-`EnsureResourceServerIsRunning` body. Prefer extending the existing guard to
-`#if _WIN32 || defined( __linux__ )` and calling through a platform-neutral alias, rather than
-duplicating the function body. **If that requires more than a 2-line change, escalate** — this
-is exactly the kind of edit that grows if you are not careful.
+None of this requires an edit to `BaseModule.cpp` — the original survey's claim that it needs
+guard extension was wrong; it is listed "verified as needing no change" in
+[TouchedFiles.md](../TouchedFiles.md).
 
 ### P1.6 — `Types_Linux.cpp`
 
@@ -280,14 +285,27 @@ passes `m_pNativeWindowHandle` through) and should need nothing.
 
 ### P1.10 — Link `Esoterica.Base` and run `Tester`
 
-**Edit:** `Code/Base/Settings/IniFile.cpp:4` — add an `#else` branch that includes
-`Base/ThirdParty/mINI/ini.h` without the MSVC `#pragma warning` pair. Currently the include is
-*inside* `#if defined(_MSC_VER)`, so on clang it never happens and the file cannot compile.
+**Edits:** the three remaining upstream source edits, as
+[TouchedFiles.md](../TouchedFiles.md) records them:
 
-Then resolve remaining link errors. Expect issues in:
-- `Code/Base/Memory/Memory.cpp` — verify the `VirtualAlloc` region (`PageAllocator`, ~line 234)
-  has a working non-Windows path; `mmap` with `PROT_NONE` then `mprotect` is the equivalent of
-  `MEM_RESERVE` then `MEM_COMMIT`. This is [open question 6](../Progress.md#open-questions).
+- `Code/Base/Settings/IniFile.cpp:6,152` — the file-wide `#if defined( _MSC_VER )` (line 4)
+  wraps the *entire* implementation and closes at line 153, so on clang the file compiles to
+  nothing and every `IniFile` symbol is undefined at link. Insert `#endif` after line 6 (the
+  `#pragma warning( disable : 4866 )` line) and re-open `#if defined( _MSC_VER )` before the
+  `#pragma warning( pop )` at line 152. Two lines added, zero modified.
+- `Code/Base/Memory/Memory.h:23–27` — the non-Windows `#else` defines `EE_STACK_ALLOC` /
+  `EE_STACK_ARRAY_ALLOC` as **empty** macros, so call sites become syntax errors. Give the
+  `#else` a real `alloca` and add a Linux-guarded `#include <alloca.h>`.
+- `Code/Base/Memory/Memory.cpp:231–252` — `VirtualMemoryReserve` / `VirtualMemoryCommit` /
+  `VirtualMemoryFree` are **completely unguarded** (no `#else` exists;
+  [open question 6](../Progress.md#open-questions) was answered 2026-08-25: there is no
+  non-Windows path). Wrap the three functions in `#ifdef _WIN32` / `#else` / `#endif` and
+  implement Linux as `mmap( MAP_PRIVATE | MAP_ANONYMOUS, PROT_NONE )` reserve,
+  `mprotect( PROT_READWRITE )` commit, `munmap` free, with `__sync_add_and_fetch` in place of
+  `InterlockedAdd64`. Keep `s_totalVirtualMemoryCommitted` (line 229) unguarded —
+  `GetTotalRequestedMemory` (line 256) uses it on every platform.
+
+Then resolve remaining compile/link errors. Expect issues in:
 - `rpmalloc` — vendored and cross-platform, but confirm its Linux configuration path.
 - `GameNetworkingSockets` — `Base` imports it, so it may block the first link. This is
   [open question 5](../Progress.md#open-questions). If it blocks, build it now.

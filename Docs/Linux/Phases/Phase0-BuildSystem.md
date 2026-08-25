@@ -92,6 +92,12 @@ Line-based parsing is acceptable here (the stale script does it, and the files a
 machine-generated with one element per line), but XML parsing is more robust and costs little.
 Prefer XML.
 
+**Resolve `.props` imports case-insensitively.** Upstream carries a latent case bug:
+`Esoterica.props` imports `Code\PropertySheets\Navpower.props`, while the file on disk is
+`NavPower.props` (capital P). It compiles on Windows because the filesystem is case-insensitive;
+on Linux a case-sensitive lookup would fail on an *upstream* file, which we may not fix
+(Conventions rule 3). The generator must look props up case-insensitively.
+
 ### P0.3 — Platform source filtering
 
 The rule:
@@ -106,6 +112,11 @@ The rule:
 - Also exclude `.rc` / `.aps` resource files and anything under a `Win32/` directory
   (`Code/Applications/Editor/Win32/`, `Code/Applications/Engine/Win32/`), and include the
   corresponding `Linux/` directories.
+- **Two Windows-only sources have no `_Win32` suffix at all** and must be excluded by explicit
+  filename: `Code/Base/Render/RHI_Direct3D12.cpp` and
+  `Code/Applications/ResourceServer/ResourceServerApplication.cpp` (listed in
+  [TouchedFiles.md](../TouchedFiles.md#excluded-by-filename-no-source-edit)). If this list ever
+  needs to grow, escalate — a third entry means the survey missed something.
 
 Implement this as one well-commented function with a table of suffixes. It is the single most
 important piece of upstream-drift insulation in the generator.
@@ -232,7 +243,8 @@ Mechanically checkable. All must pass.
 1. `python3 Code/Scripts/NinjaGen/NinjaGen.py` exits 0 and writes
    `Build/Linux/Esoterica.ninja`.
 2. The generated ninja file contains a compile rule for every `.cpp` in
-   `Esoterica.Base.vcxproj` **except** those matching `*_Win32.cpp`.
+   `Esoterica.Base.vcxproj` **except** those matching `*_Win32.cpp` **or** the explicit
+   filename exclusions (`RHI_Direct3D12.cpp` in this project).
 3. `Esoterica.Base`'s compile commands include `-DESOTERICA_BASE`, `-DEE_DLL` (Debug), `-ICode`,
    `-std=c++20`, `-fno-exceptions`.
 4. `Esoterica.Base` resolves to a `.so` target in Debug/Release and a `.a` target in Shipping.

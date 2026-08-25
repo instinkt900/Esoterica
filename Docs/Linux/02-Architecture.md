@@ -140,12 +140,16 @@ survey would suggest. Two examples worth internalising, because they show the in
 `void* m_pNativeWindowHandle`. Nothing in a shared header names a platform type.
 
 Where a platform-specific *helper* namespace is needed, mirror `EE::Platform::Win32` as
-`EE::Platform::Linux`. Note that ~30 call sites across the codebase reference
-`Platform::Win32::` directly (mostly `GetLastErrorMessage()` inside other `_Win32.cpp` files,
-which is fine, but also `OpenInExplorer` from 6 EngineTools call sites and
-`GetCurrentModulePath` / `StartProcess` / `KillProcess` from `BaseModule.cpp`). Those
-cross-platform call sites are enumerated in [TouchedFiles.md](TouchedFiles.md) and are handled
-in Phases 1 and 7.
+`EE::Platform::Linux`. Outside the `_Win32` files, 21 call sites reference `Platform::Win32::`
+directly, in 8 files. Twelve of them already sit inside existing `#if _WIN32` blocks
+(`BaseModule.cpp`'s resource-server process management, `Profiling.cpp`'s Optick launch, and
+`FileSystemWatcher.cpp`'s error logging) and need nothing. The other **nine are unguarded** —
+one `GetShortPath` call in `ClangParser.cpp` (Phase 2) and eight `OpenInExplorer` calls across
+`EditorTool_ResourceBrowser.cpp` (3), `EditorTool_ResourceImporter.cpp`, `ResourcePickers.cpp`,
+`DataPathPicker.cpp` (Phase 3) and `ResourceServerUI.cpp` (Phase 7). Each takes a
+`#if _WIN32` / `#elif defined( __linux__ )` guard at the call site; the full list with line
+numbers is in [TouchedFiles.md](TouchedFiles.md). The Linux implementations the `#elif`
+branches call live in new files: `Platform/PlatformUtils_Linux.{h,cpp}` (Phase 1).
 
 ### Systems needing a Linux implementation
 
@@ -167,8 +171,10 @@ in Phases 1 and 7.
 | File watching | `EngineTools/FileSystem/FileSystemWatcher.cpp` | 269 | `inotify` |
 | System dialogs | `EngineTools/Core/SystemDialogs.cpp` | 552 | XDG portal, or vendored `pfd` |
 
-Total: **~4,300 lines**, and SDL3 plus upstream's own imgui SDL3 backend absorb a large
-fraction of the biggest three entries.
+Total: **~4,300 lines** in this table — **~4,900 across all 23 Windows-specific files**,
+including the two thin app entry points (`EditorApplication_Win32.*`, `EngineApplication_Win32.*`)
+covered in [Application and entry points](#application-and-entry-points) — and SDL3 plus
+upstream's own imgui SDL3 backend absorb a large fraction of the biggest three entries.
 
 ### `dllexport` → visibility
 
@@ -286,7 +292,7 @@ Code/Applications/Engine/Linux/EngineApplication_Linux.{h,cpp}
 Code/Applications/ResourceServer/...                          (see Phase 7)
 ```
 
-`_tWinMain` becomes `int main( int argc, char** argv )`. Three applications already use plain
+`_tWinMain` becomes `int main( int argc, char** argv )`. Four applications already use plain
 `main` (`Reflector`, `ResourceCompiler`, `BuildGenerator`, `Tester`), which is why Phases 2
 and 3 can land before any windowing work exists.
 

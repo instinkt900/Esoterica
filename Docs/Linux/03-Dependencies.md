@@ -14,7 +14,7 @@ Derived from `Code/PropertySheets/*.props` and the `.lib` files they reference.
 
 | Dependency | Used by | Linux plan |
 |---|---|---|
-| **LLVM / libclang** (`libclang.lib`, `clangAST`, `clangBasic`, `clangLex`, ~18 `LLVM*.lib`) | Reflector — C++ parsing | **Build from source or use official release tarball.** Cross-platform. The version must match what upstream links against; check `Code/PropertySheets/LLVM.props`. Distro `libclang-dev` is convenient but the version will drift from upstream's — prefer a pinned official tarball. |
+| **LLVM / libclang** (`libclang.lib`, `clangAST`, `clangBasic`, `clangLex`, ~18 `LLVM*.lib`) | Reflector — C++ parsing | **Build from source or use official release tarball.** Cross-platform. The version must match what upstream links against; **the version is not written in `Code/PropertySheets/LLVM.props`** (checked 2026-08-25) — it is baked into the `External.zip` that `DownloadDependencies.bat` fetches from upstream's `Dependencies` release, so the exact tarball has to be pinned explicitly and recorded here. Distro `libclang-dev` is convenient but the version will drift from upstream's — prefer the pinned official tarball. |
 | **DirectXShaderCompiler** (`dxcompiler.lib`) | Reflector — HLSL compilation; `RHI_Direct3D12.cpp` | **Build DXC from source for Linux.** Emits SPIR-V with `-spirv`. Produces `libdxcompiler.so`. Note DXIL signing (`dxil.dll`) is Windows-only and irrelevant for SPIR-V. |
 | **Freetype** | Font rasterisation | `libfreetype-dev`, or build from source. Trivial. |
 | **SQLite** | Resource database | `libsqlite3-dev`, or the vendored amalgamation. Trivial. |
@@ -43,7 +43,7 @@ Derived from `Code/PropertySheets/*.props` and the `.lib` files they reference.
 
 | Dependency | Purpose | Acquisition |
 |---|---|---|
-| **SDL3** | Windowing, input, gamepad, X11/Wayland abstraction | Build from source, or distro package where SDL3 (not SDL2) is available. Pin the version. |
+| **SDL3** | Windowing, input, gamepad, X11/Wayland abstraction | Build from source, or distro package where SDL3 (not SDL2) is available. Pin the version. (Ubuntu 24.04 — the dev target — packages `sdl3`, verified 2026-08-25.) |
 | **Vulkan headers + loader** | Vulkan API | `vulkan-headers`, `libvulkan-dev`. Consider `volk` for function loading to avoid the loader's dispatch overhead — decide in Phase 5. |
 | **VulkanMemoryAllocator (VMA)** | GPU allocator; replaces `D3D12MemoryAllocator` | Header-only. Vendor into `External/VMA/`. |
 | **SPIRV-Reflect** | Shader reflection; replaces `ID3D12ShaderReflection` | Small, header+source. Vendor into `External/SPIRV-Reflect/`. |
@@ -122,9 +122,12 @@ here.
    Linux. If it does not, options are: find the upstream project and port it, substitute an
    equivalent compressor, or leave texture compression Windows-only and accept uncompressed
    textures on Linux initially. This is the highest-uncertainty dependency in the list.
-2. **LLVM version pinning.** *(Phase 2)* Read the exact version from `LLVM.props` and confirm
-   the Reflector's use of `clangAST` compiles against it on Linux. Clang's AST C++ API is not
-   stable across major versions.
+2. **LLVM version pinning.** *(Phase 2)* Determine the exact version — it is **not in
+   `LLVM.props`** (checked 2026-08-25); it is baked into upstream's `External.zip` from the
+   `Dependencies` release, so either inspect that archive once or pin a matching official
+   LLVM/Clang tarball and record the version here — then confirm the Reflector's use of
+   `clangAST` compiles against it on Linux. Clang's AST C++ API is not stable across major
+   versions.
 3. **`volk` vs the Vulkan loader.** *(Phase 5)* Decide based on measured dispatch overhead.
    Default to the plain loader for simplicity; adopt `volk` only if profiling justifies it.
 4. **SDL3 availability.** *(Phase 6)* Confirm whether the target distributions package SDL3,
