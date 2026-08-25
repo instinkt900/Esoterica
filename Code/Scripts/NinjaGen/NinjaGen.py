@@ -2,9 +2,16 @@
 from ninja_syntax import Writer
 from pathlib import Path
 
-import re, copy, subprocess
+import copy, os, subprocess, sys
+import xml.etree.ElementTree as ET
 
-REGEX_PROJ = re.compile(r'Project\("\{([^\}]+)\}"\)[\s=]+"([^\"]+)",\s"(.+proj)", "(\{[^\}]+\})"')
+
+def note(message):
+    print(f'NinjaGen: {message}', file=sys.stderr)
+
+
+def warning(message):
+    print(f'NinjaGen: warning: {message}', file=sys.stderr)
 
 class Toolchain:
     def WineGCC():
@@ -73,16 +80,49 @@ class Project:
     def __init__(self, project_name):
         self.name = project_name
         self.project_type = ''
+        self.configuration_types = set()
         self.c_source_files = []
         self.cpp_source_files = []
         self.header_files = []
         self.project_references = []
+        self.build_dependencies = []
+        self.excluded_configs = set()
+
+def build_case_map(base_path):
+    result = {}
+    for directory, _directories, files in os.walk(base_path):
+        for filename in files:
+            current = Path(directory) / filename
+            try:
+                relative = current.relative_to(base_path).as_posix()
+            except ValueError:
+                continue
+            result.setdefault(relative.lower(), str(current))
+    return result
+
+
+def resolve_project_file(base_path, case_map, relative_source):
+    candidate = relative_source.replace('\\', '/').lstrip('/')
+    direct = base_path / candidate
+    if direct.is_file():
+        return str(direct)
+
+    actual = case_map.get(candidate.lower())
+    if actual is not None:
+        warning(f'{direct} does not exist, but {actual} does; using the on-disk case (upstream case inconsistency)')
+        return actual
+
+    warning(f'{direct} is listed in the project but does not exist on disk; skipping it')
+    return None
+
 
 def parse_vcxproj(filename):
     file_path = Path(filename)
     base_path = file_path.parent
 
     result = Project(file_path.stem)
+    case_map = build_case_map(base_path)
+
     with open(filename) as f:
         for line in f.readlines():
             line = line.strip()
@@ -93,10 +133,14 @@ def parse_vcxproj(filename):
 
                 source_file = line[index0:index1].replace('\\', '/');
 
+                resolved_file = resolve_project_file(base_path, case_map, source_file)
+                if resolved_file is None:
+                    continue
+
                 if source_file.endswith('.cpp'):
-                    result.cpp_source_files.append(str(base_path.joinpath(source_file)))
+                    result.cpp_source_files.append(resolved_file)
                 elif source_file.endswith('.c'):
-                    result.c_source_files.append(str(base_path.joinpath(source_file)))
+                    result.c_source_files.append(resolved_file)
                 else:
                     print(f'Unknown file {filename} {source_file}')
 
@@ -106,8 +150,12 @@ def parse_vcxproj(filename):
 
                 source_file = line[index0:index1].replace('\\', '/');
 
+                resolved_file = resolve_project_file(base_path, case_map, source_file)
+                if resolved_file is None:
+                    continue
+
                 if source_file.endswith('.h') or source_file.endswith('.hpp') or source_file.endswith('.inl'):
-                    result.header_files.append(str(base_path.joinpath(source_file)))
+                    result.header_files.append(resolved_file)
                 else:
                     print(f'Unknown file {filename} {source_file}')
 
@@ -125,6 +173,7 @@ def parse_vcxproj(filename):
                 index1 = line.rfind('<')
 
                 project_type = line[index0:index1]
+                result.configuration_types.add(project_type)
                 if project_type == 'StaticLibrary' or project_type == 'DynamicLibrary':
                     result.project_type = 'Lib'
                 elif project_type == 'Application':
@@ -133,16 +182,109 @@ def parse_vcxproj(filename):
                     result.project_type = None
     return result
 
-def parse_sln(filename):
+class SlnxProject:
+    def __init__(self, path, project_id, folder_name):
+        self.path = path
+        self.id = project_id
+        self.folder_name = folder_name
+        self.never_build = False
+        self.excluded_configs = set()
+        self.build_dependencies = []
+
+
+def parse_slnx(filename):
+    configuration_names = []
+    entries = []
+
+    tree = ET.parse(filename)
+    root = tree.getroot()
+
+    for element in root.findall('./Configurations/*'):
+        if element.tag == 'BuildType':
+            name = element.get('Name')
+            if name:
+                configuration_names.append(name)
+            else:
+                warning(f'<BuildType> without a Name in <Configurations> of {filename}')
+        elif element.tag != 'Platform':
+            warning(f'unexpected <{element.tag}> in <Configurations> of {filename}')
+
+    if not configuration_names:
+        raise SystemExit(f'NinjaGen: error: no <BuildType> configurations in {filename}')
+
+    for folder in root.findall('./Folder'):
+        folder_name = folder.get('Name', '')
+        for element in folder.findall('Project'):
+            path = element.get('Path')
+            if not path:
+                warning(f'<Project> without a Path in folder {folder_name} of {filename}')
+                continue
+            path = path.replace('\\', '/')
+
+            entry = SlnxProject(path, element.get('Id', ''), folder_name)
+
+            for build in element.findall('Build'):
+                if build.get('Project', 'true').lower() == 'true':
+                    continue
+                solution = build.get('Solution')
+                if solution is None:
+                    entry.never_build = True
+                else:
+                    configs = [ name for name in solution.split('|') if name != '*' ]
+                    if configs:
+                        entry.excluded_configs.update(configs)
+                    else:
+                        entry.never_build = True
+
+            for dependency in element.findall('BuildDependency'):
+                project = dependency.get('Project')
+                if project:
+                    entry.build_dependencies.append(project.replace('\\', '/'))
+                else:
+                    warning(f'<BuildDependency> without a Project for {path} in {filename}')
+
+            entries.append(entry)
+
+    return configuration_names, entries
+
+
+def parse_projects(filename):
+    configuration_names, entries = parse_slnx(filename)
+
+    recognized_types = { 'Application', 'DynamicLibrary', 'StaticLibrary', 'Makefile' }
     result = []
-    with open(filename) as f:
-        for line in f.readlines():
-            project_path = re.findall(REGEX_PROJ, line)
-            if project_path:
-                project = parse_vcxproj(project_path[0][2].replace('\\', '/'))
-                if project.name != 'Esoterica.Scripts.Reflect': # Special case
-                    result.append(project)
-    return result
+    for entry in entries:
+        if not Path(entry.path).is_file():
+            warning(f'{entry.path} (folder {entry.folder_name}) is listed in the solution but missing on disk; skipping')
+            continue
+
+        if entry.never_build:
+            note(f'skipping {entry.path} - <Build Project="false"/> in the solution')
+            continue
+
+        project = parse_vcxproj(entry.path)
+        project.build_dependencies = entry.build_dependencies
+        project.excluded_configs = entry.excluded_configs
+
+        if not project.cpp_source_files and not project.c_source_files:
+            note(f'skipping {entry.path} - no ClCompile entries (NMAKE wrapper or non-C++ project)')
+            continue
+
+        unrecognised = project.configuration_types - recognized_types
+        if unrecognised:
+            warning(f'{entry.path} uses ConfigurationType {sorted(unrecognised)}; the generator does not recognise it, skipping')
+            continue
+
+        result.append(project)
+
+    return configuration_names, result
+
+
+def project_output_path(toolchain, configuration, project):
+    base = f'Build/x64_Linux_{toolchain.name}_{configuration.name}/{project.name}'
+    if project.project_type == 'Lib':
+        return f'{base}/{project.name}.a'
+    return f'{base}/{project.name}'
 
 
 def build_toolchain(build, toolchain, configurations, projects):
@@ -170,6 +312,8 @@ def build_toolchain(build, toolchain, configurations, projects):
         build.rule(lib_rule, f'{toolchain.librarian} $LibrarianFlags_{toolchain.name} rcs $in $out')
         build.rule(link_rule, f'{toolchain.linker} $LinkerFlags_{toolchain.name} $LinkerFlags_{configuration.name} $in -o $out')
 
+        projects_by_name = { project.name: project for project in projects }
+
         for project in projects:
             object_files = []
 
@@ -189,12 +333,21 @@ def build_toolchain(build, toolchain, configurations, projects):
             for reference in project.project_references:
                 object_files.append(f'Build/x64_Linux_{toolchain.name}_{configuration.name}/{reference}/{reference}.a')
 
+            order_only = []
+            for dependency in project.build_dependencies:
+                dependency_name = Path(dependency).stem
+                dependency_project = projects_by_name.get(dependency_name)
+                if dependency_project is None:
+                    warning(f'{project.name} has a build dependency on {dependency} which the generator does not build; ignoring the edge')
+                    continue
+                order_only.append(project_output_path(toolchain, configuration, dependency_project))
+
             if project.project_type == 'Lib':
-                build.build(f'{project_out_path}/{project.name}.a', lib_rule, object_files)
+                build.build(f'{project_out_path}/{project.name}.a', lib_rule, object_files, order_only=order_only or None)
             elif project.project_type == 'Exe':
-                build.build(f'{project_out_path}/{project.name}', link_rule, object_files)
+                build.build(f'{project_out_path}/{project.name}', link_rule, object_files, order_only=order_only or None)
             else:
-                print(f'Unknown project type: {project.name} {project.project_type}')
+                warning(f'Unknown project type: {project.name} {project.project_type}')
 
 all_toolchains = [
     Toolchain.WineGCC(),
@@ -205,14 +358,32 @@ all_toolchains = [
 esoterica_flags = '-ICode/Base/ThirdParty/EA/EABase/include/Common -ICode/Base/ThirdParty/EA/EASTL/Include -ICode/Base/ThirdParty/imgui -IExternal/Optick/include'
 esoterica_flags_msvc = esoterica_flags.replace('-I', '/I')
 
-base_configurations = [
-    Configuration('Debug',      f'{esoterica_flags} -Wall -O0 -ICode -DEE_DEBUG=1',             ''),
-    Configuration('Release',    f'{esoterica_flags} -Wall -O2 -ICode -DEE_RELEASE=1',           ''),
-    Configuration('Shipping',   f'{esoterica_flags} -Wall -O2 -ICode -DEE_SHIPPING=1 -flto',    '-flto')
-]
+configuration_names, all_projects = parse_projects('Esoterica.slnx')
+
+configuration_flags_by_name = {
+    'Debug':    (f'{esoterica_flags} -Wall -O0 -ICode -DEE_DEBUG=1',             ''),
+    'Release':  (f'{esoterica_flags} -Wall -O2 -ICode -DEE_RELEASE=1',           ''),
+    'Shipping': (f'{esoterica_flags} -Wall -O2 -ICode -DEE_SHIPPING=1 -flto',    '-flto'),
+}
+
+base_configurations = []
+for name in configuration_names:
+    flags = configuration_flags_by_name.get(name)
+    if flags is None:
+        warning(f'no compiler/linker flags defined for configuration {name}; skipping it until a flag template is added')
+        continue
+    base_configurations.append(Configuration(name, flags[0], flags[1]))
+
+if not base_configurations:
+    raise SystemExit('NinjaGen: error: no configurations with known flags; nothing to generate')
 
 reflector_toolchain = all_toolchains[0]             # WineGCC
-reflector_configuration = base_configurations[2]    # Shipping
+reflector_configuration = next(
+    ( configuration for configuration in base_configurations if configuration.name == 'Shipping' ),
+    None)
+if reflector_configuration is None:
+    reflector_configuration = base_configurations[0]
+    warning(f'no Shipping configuration in the solution; REFLECT will use {reflector_configuration.name}')
 
 compile_commands_toolchain = Toolchain.ClangCL()
 compile_commands_warnings = (
@@ -246,8 +417,6 @@ for configuration in base_configurations:
     all_configurations.append(msan_configuration)
     all_configurations.append(tsan_configuration)
 
-all_projects = parse_sln('Esoterica.sln')
-
 Path('Build/x64_Linux').mkdir(parents = True, exist_ok = True)
 
 with open('Build/x64_Linux/Esoterica.x64.Linux.ninja', 'w') as build_output:
@@ -269,12 +438,19 @@ with open('Build/x64_Linux/Esoterica.x64.Linux.ninja', 'w') as build_output:
             if source_file.endswith(module_pattern):
                 autogenerated_files.append(source_file)
 
-    reflector_dependencies.update(reflector_project.c_source_files)
-    reflector_dependencies.update(reflector_project.cpp_source_files)
+    if reflector_project is not None:
+        reflector_dependencies.update(reflector_project.c_source_files)
+        reflector_dependencies.update(reflector_project.cpp_source_files)
 
-    build.rule('REFLECT',
-        f'Build/x64_Linux_{reflector_toolchain.name}_{reflector_configuration.name}/{reflector_project.name}/{reflector_project.name} -s Esoterica.sln')
-    build.build(autogenerated_files, 'REFLECT', list(reflector_dependencies))
+        build.rule('REFLECT',
+            f'Build/x64_Linux_{reflector_toolchain.name}_{reflector_configuration.name}/{reflector_project.name}/{reflector_project.name} -s Esoterica.slnx')
+        if autogenerated_files:
+            build.build(autogenerated_files, 'REFLECT', list(reflector_dependencies))
+        else:
+            note('no autogenerated sources present; the REFLECT rule is emitted without an output (Phase 0, P0.4 reworks this)')
+    else:
+        warning('Esoterica.Applications.Reflector not found in the solution; not emitting the REFLECT rule')
+
     build.close()
 
 with open('Build/x64_Linux/Esoterica.x64.CompileCommands.ninja', 'w') as build_output:
