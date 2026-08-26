@@ -1,35 +1,34 @@
 # AGENTS.md
 
-Development workflow for this repository. **How** work flows. For **what** the work is building
-towards, see [Docs/Linux/](Docs/Linux/README.md).
+Development workflow for this repository. This file covers **how** work flows. For **what** the
+work builds towards, see [Docs/Linux/](Docs/Linux/README.md).
 
 ---
 
 ## What this repository is
 
-A fork of [Esoterica](https://github.com/BobbyAnguelov/Esoterica), a prototype game engine, being
-extended with **Linux support**. Upstream is Windows-only, actively developed, and explicitly
-rejects large PRs.
+A fork of [Esoterica](https://github.com/BobbyAnguelov/Esoterica), a prototype game engine. This
+fork adds **Linux support**. Upstream is Windows-only, under active development, and rejects large
+PRs.
 
-**Prime directive: keep `git merge upstream/main` painless, forever.** A Linux port that works but
-cannot absorb upstream changes is a failure. Every workflow rule below exists to serve that.
+**Prime directive: keep `git merge upstream/main` cheap, forever.** A Linux port that works but
+cannot absorb upstream changes has failed. Every rule below serves that goal.
 
-In practice: add files rather than editing them, and when you must edit an upstream file, make it a
-2–3 line `#elif defined( __linux__ )` branch beside the existing `#if _WIN32`.
+In practice: add files instead of editing them. When you must edit an upstream file, make the edit
+a 2-3 line `#elif defined( __linux__ )` branch next to the existing `#if _WIN32`.
 
 ## At the start of every session
 
-Read, in order:
+Read these, in order:
 
-1. **[Docs/Linux/00-Conventions.md](Docs/Linux/00-Conventions.md)** — the porting rules and code
-   style. Non-negotiable. Violating these creates merge debt someone pays later.
-2. **[Docs/Linux/Progress.md](Docs/Linux/Progress.md)** — what is done, what is in flight, open
-   questions.
+1. **[Docs/Linux/00-Conventions.md](Docs/Linux/00-Conventions.md)** - the porting rules and code
+   style. These are not negotiable. A violation creates merge debt that someone else pays later.
+2. **[Docs/Linux/Progress.md](Docs/Linux/Progress.md)** - what is done, what is in flight, and the
+   open questions.
 3. **The phase document for your task**, in [Docs/Linux/Phases/](Docs/Linux/Phases/).
 
-Then do exactly the task you were given. Do not opportunistically fix, tidy, reformat, or improve
-upstream code you happen to read along the way — see Conventions rule 3, which lists the specific
-temptations to resist.
+Then do the task you were given, and nothing else. Do not fix, tidy, reformat, or improve upstream
+code that you read along the way. Conventions rule 3 lists the specific temptations to resist.
 
 ## Remotes
 
@@ -45,20 +44,21 @@ git remote add upstream https://github.com/BobbyAnguelov/Esoterica.git
 git fetch upstream
 ```
 
-`upstream/main` is the pristine reference. Never commit to it, never merge into it. Use it freely
-for comparison — `git diff upstream/main -- <path>` is the fastest way to see exactly what this
-fork has changed, and several phase acceptance criteria are stated in those terms.
+`upstream/main` is the clean reference. Never commit to it. Never merge into it. Use it freely for
+comparison. `git diff upstream/main -- <path>` is the fastest way to see what this fork changed,
+and several phase acceptance criteria are written in those terms.
 
 ## Branching
 
-**`main` carries the Linux work.** This is a fork; diverging from upstream is the point. There is
-deliberately no long-lived `linux` branch — `upstream/main` already provides a clean reference, so
-a second long-lived branch would only add a second drift axis to manage.
+**`main` carries the Linux work.** This is a fork, so divergence from upstream is the point. There
+is no long-lived `linux` branch, on purpose. `upstream/main` already gives a clean reference, so a
+second long-lived branch would only add a second drift axis to manage.
 
-**The invariant: `main` builds on both Windows and Linux.** That is the thing being protected. It
-is why every phase's acceptance criteria end with "the Windows MSBuild build still succeeds."
+**The invariant: `main` builds on both Windows and Linux.** That is what these rules protect. It is
+why every phase ends its acceptance criteria with "the Windows MSBuild build still succeeds".
 
-Do task work on a **short-lived branch off `main`**, named for its task ID from the phase docs:
+Do task work on a **short-lived branch off `main`**. Name the branch after its task ID from the
+phase docs:
 
 ```
 main
@@ -77,25 +77,24 @@ gh pr create --fill
 
 ### All code changes go through a pull request
 
-**Every work branch is merged via a reviewed PR. No exceptions, and never by the agent that wrote
-it.**
+**A reviewed PR merges every work branch. There are no exceptions, and the agent that wrote the
+branch never merges it.**
 
-- **Open a PR when the task is done.** Push the branch and open it; do not merge it yourself.
+- **Open a PR when the task is done.** Push the branch and open the PR. Do not merge it yourself.
 - **Do not merge your own PR.** Review is a human step. An agent that merges its own work has
   removed the only checkpoint in the process.
-- **Do not push to `main`** for anything covered by the "code" definition below.
-- **One PR per task**, matching one branch per task. Phases run for weeks; tasks are the
+- **Do not push to `main`** for anything that the "code" definition below covers.
+- **One PR per task**, to match one branch per task. A phase runs for weeks. A task is the
   reviewable unit.
-- **Open the PR promptly.** A task branch that lives more than a few days has become the
-  long-lived branch this strategy exists to avoid.
-- Merge with a merge commit (not squash, not rebase) so each task stays one identifiable unit in
-  `git log`, and delete the branch afterwards.
-- The PR description should state which acceptance criteria from the phase doc are met, and which
-  are not. See [Definition of done](#definition-of-done).
+- **Open the PR early.** A task branch that lives more than a few days has become the long-lived
+  branch that this strategy avoids.
+- Merge with a merge commit, not a squash and not a rebase. Each task then stays one identifiable
+  unit in `git log`. Delete the branch afterwards.
+- The PR description states which acceptance criteria from the phase doc are met, and which are
+  not. See [Definition of done](#definition-of-done).
 
-The reason this holds even with one person driving the work: **the agent writes, the human
-reviews.** That is the whole value of the checkpoint, and it disappears entirely if the agent both
-writes and merges.
+This rule holds even with one person driving the work: **the agent writes, the human reviews.**
+That is the whole value of the checkpoint. It disappears if the agent both writes and merges.
 
 ### What may go directly to `main`
 
@@ -107,28 +106,29 @@ Documentation and bookkeeping only:
 - `AGENTS.md` and `README.md` edits
 - Typos and wording fixes in any of the above
 
-Everything else is code and needs a PR — including build scripts (`NinjaGen.py`,
+Everything else is code and needs a PR. This includes the build scripts (`NinjaGen.py`,
 `DownloadDependencies.sh`, `RunReflection.sh`, `CompileShaders.sh`) and `.gitignore`. If a change
-alters what gets built or how, it is code, even if it isn't C++.
+alters what gets built, or how, it is code, even when it is not C++.
 
-An **upstream merge** also goes through a PR. It is not a doc change, and
-[01-UpstreamMerges.md](Docs/Linux/01-UpstreamMerges.md) requires a post-merge audit plus a
-two-platform rebuild — exactly the thing a review checkpoint is for. Put it on an
+An **upstream merge** also goes through a PR. It is not a doc change.
+[01-UpstreamMerges.md](Docs/Linux/01-UpstreamMerges.md) requires a post-merge audit and a
+two-platform rebuild, which is what a review checkpoint is for. Put the merge on an
 `upstream-merge/<date>` branch.
 
-If parallel agents are ever run on independent tasks, give each its own git worktree so they cannot
-collide on the filesystem.
+If you ever run parallel agents on independent tasks, give each one its own git worktree so they
+cannot collide on the filesystem.
 
 ## Commits
 
-Match upstream's style — short, Title Case, no conventional-commits prefixes:
+Match upstream style. Keep the subject short and in Title Case. Do not use conventional-commits
+prefixes:
 
 ```
 Render Stability Improvements
 Light Culling + Improvements to Gizmo + Fixes
 ```
 
-For Linux port work, **prefix with `[Linux]`**:
+For Linux port work, **prefix the subject with `[Linux]`**:
 
 ```
 [Linux] Threading platform layer
@@ -136,71 +136,88 @@ For Linux port work, **prefix with `[Linux]`**:
 [Linux] Build generator - slnx parsing
 ```
 
-This makes the port's commits trivially separable from merged-in upstream history in `git log`,
-which matters a lot when auditing a fork.
+This keeps the port commits easy to separate from merged upstream history in `git log`, which
+matters when you audit a fork.
 
-Never mix an upstream merge with port work in one commit.
+Never mix an upstream merge and port work in one commit.
+
+## Writing style
+
+Write all prose in plain, simple, concise English. This covers code comments, PR descriptions,
+Progress.md entries, commit messages, and these documents.
+
+Agent writing runs wordy by default. Keep it easy to read instead:
+
+- One idea per sentence. Keep sentences short.
+- Active voice. "The generator skips the project", not "the project is skipped by the generator".
+- Plain words. "use", not "leverage". "show", not "demonstrate". "fix", not "remediate".
+- Cut filler: hedging, throat-clearing, and restatements of what the reader already knows.
+- Be specific. Name the file, function, or flag instead of gesturing at it.
+
+The test: a reviewer who skims a PR, or a future session that reads Progress.md, gets the point in
+one pass. A paragraph that needs a second read is too long or too twisted. Rewrite it.
 
 ## Definition of done
 
-A task is not done until all of these hold:
+A task is done only when all of these hold:
 
-1. Its **acceptance criteria in the phase doc** are met — they are written to be mechanically
-   checkable, so check them rather than assuming.
-2. **The Linux build succeeds** (once Phase 0 has landed):
+1. The task meets its **acceptance criteria in the phase doc**. The criteria are written to be
+   checkable, so check them instead of assuming.
+2. **The Linux build succeeds** (after Phase 0 lands):
    ```bash
    python3 Code/Scripts/NinjaGen/NinjaGen.py && ninja -f Build/Linux/Esoterica.ninja
    ```
-3. **The Windows MSBuild build still succeeds**, unchanged. This is not optional and it is not
-   someone else's problem — a port that breaks Windows is worse than no port.
+3. **The Windows MSBuild build still succeeds**, unchanged. This is not optional, and it is not
+   someone else's problem. A port that breaks Windows is worse than no port.
 4. **[Docs/Linux/TouchedFiles.md](Docs/Linux/TouchedFiles.md)** lists every upstream file you
    edited, with its reason and status.
 5. **[Docs/Linux/Progress.md](Docs/Linux/Progress.md)** records what you did and anything the next
    session needs to know.
-6. **A PR is open** against `main`, with a description stating which acceptance criteria are met
-   and which are not.
+6. **A PR is open** against `main`. Its description states which acceptance criteria are met and
+   which are not.
 
-Items 4 and 5 are how a chain of independent sessions stays coherent. Skipping them is the most
-expensive shortcut available. Include them **in the task's own PR** — the "directly to `main`"
-allowance is for standalone doc updates, not for the bookkeeping that belongs with a task.
+Items 4 and 5 keep a chain of independent sessions coherent. Skipping them is the most expensive
+shortcut available. Include them **in the task's own PR**. The "directly to `main`" allowance
+covers standalone doc updates, not the bookkeeping that belongs with a task.
 
-**Your work ends at "PR open."** Merging is a human action. If review turns up changes, they land as
-new commits on the same branch.
+**Your work ends at "PR open".** A human merges. If review asks for changes, they land as new
+commits on the same branch.
 
 ## Reporting
 
-Report outcomes honestly. If acceptance criteria are not met, say so and say **which** ones. Do not
-mark a task complete because most of it works, and do not describe a stub as an implementation.
+Report outcomes honestly. If the task does not meet its acceptance criteria, say so, and say
+**which** ones. Do not mark a task complete because most of it works. Do not describe a stub as an
+implementation.
 
-"Vulkan buffer creation done; texture creation is stubbed and halts" is far more useful to the next
-session than an optimistic summary. This matters most in Phase 5, which spans months and where
-"which of the 16 groups are actually real" is the single most important piece of state.
+"Vulkan buffer creation done. Texture creation is stubbed and halts" helps the next session far
+more than an optimistic summary. This matters most in Phase 5, which runs for months. There,
+"which of the 16 groups are real" is the single most important piece of state.
 
 ## Merging upstream
 
-Merge upstream **weekly, or before starting a new phase**, whichever comes first. The cost of a
-merge grows super-linearly with drift: a week is routine, six months is a research project.
+Merge upstream **weekly, or before you start a new phase**, whichever comes first. Merge cost grows
+faster than the drift does. A week is routine. Six months is a research project.
 
-Full procedure, including the post-merge audit that catches newly-introduced Windows-only code
-paths: **[Docs/Linux/01-UpstreamMerges.md](Docs/Linux/01-UpstreamMerges.md)**.
+[01-UpstreamMerges.md](Docs/Linux/01-UpstreamMerges.md) holds the full procedure, including the
+post-merge audit that catches new Windows-only code paths.
 
-The merge goes on an `upstream-merge/<date>` branch and reaches `main` through a PR like any other
-code change — the post-merge audit and two-platform rebuild are exactly what review is for.
+The merge goes on an `upstream-merge/<date>` branch and reaches `main` through a PR, like any other
+code change. The post-merge audit and the two-platform rebuild are what review is for.
 
-Do not merge onto a dirty tree, and land or shelve in-flight task branches first.
+Do not merge onto a dirty tree. Land or shelve in-flight task branches first.
 
-## Escalate rather than improvise
+## Escalate instead of improvising
 
 Stop and ask when:
 
-- Your task needs an edit to an upstream file **not listed** in
-  [TouchedFiles.md](Docs/Linux/TouchedFiles.md). That registry was derived from a full survey; a
-  file outside it means either the survey missed something or your approach has drifted.
+- Your task needs an edit to an upstream file that
+  [TouchedFiles.md](Docs/Linux/TouchedFiles.md) does not list. A full survey produced that
+  registry. A file outside it means the survey missed something, or your approach has drifted.
 - Your task needs a public signature change in a shared header.
-- Your task needs to modify anything under `Code/**/ThirdParty/` — upstream owns those directories.
+- Your task needs to change anything under `Code/**/ThirdParty/`. Upstream owns those directories.
 - Your task needs a change to `Data/`.
 - A shared abstraction genuinely cannot express what Linux needs.
 - Two phases appear to conflict.
 
-Expanding scope quietly is worse than pausing. The blast radius of an edit is the thing being
-managed here.
+Quiet scope expansion is worse than a pause. The blast radius of an edit is the thing these rules
+manage.

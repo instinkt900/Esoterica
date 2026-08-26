@@ -1,46 +1,47 @@
-# Phase 0 — Build System
+# Phase 0 - Build System
 
-**Goal:** `ninja` produces Linux binaries from the existing `.vcxproj` files, with no
-`.vcxproj` changes required.
+**Goal:** `ninja` produces Linux binaries from the existing `.vcxproj` files, and no `.vcxproj`
+changes.
 
-**Deliverable:** `python3 Code/Scripts/NinjaGen/NinjaGen.py` emits
-`Build/Linux/Esoterica.ninja` and `compile_commands.json`. Running `ninja` gets *some* way into
-compiling `Esoterica.Base` — it will not link yet, and it will not compile every file. That is
-expected and fine; Phase 1 makes it compile.
+**Deliverable:** `python3 Code/Scripts/NinjaGen/NinjaGen.py` writes
+`Build/Linux/Esoterica.ninja` and `compile_commands.json`. Running `ninja` then gets *some* way
+into compiling `Esoterica.Base`. It will not link yet, and it will not compile every file. That
+is expected. Phase 1 makes it compile.
 
 **Prerequisites:** none. This is the first phase.
 
-**Rough cost:** 2–3 weeks.
+**Rough cost:** 2-3 weeks.
 
 **Read first:** [00-Conventions.md](../00-Conventions.md),
-[02-Architecture.md § Build system](../02-Architecture.md#build-system),
+[02-Architecture.md, Build system](../02-Architecture.md#build-system),
 [03-Dependencies.md](../03-Dependencies.md).
 
 ---
 
 ## Why this comes first
 
-Nothing can be verified without a build. Every later phase's acceptance criteria are of the
-form "this compiles" or "this runs", so the generator is the foundation. It is also the piece
-that most directly determines whether upstream merges stay cheap, which is this project's
-primary constraint.
+You cannot check anything without a build. Every later phase states its acceptance criteria as
+"this compiles" or "this runs", so the generator is the foundation. It is also the piece that
+most directly decides whether upstream merges stay cheap, which is this project's main
+constraint.
 
 ## Scope boundary
 
-**In scope:** the generator, the dependency-acquisition script, `.gitignore`.
-**Out of scope:** making anything actually compile. Do not write a single `_Linux.cpp` in this
-phase. Do not "helpfully" stub out Win32 code to get further. Compile errors from missing
-platform implementations are the *expected output* of Phase 0 and the input to Phase 1.
+**In scope:** the generator, the dependency-acquisition script, and `.gitignore`.
+
+**Out of scope:** making anything compile. Do not write a single `_Linux.cpp` in this phase. Do
+not stub out Win32 code to get further. Compile errors from missing platform implementations are
+the *expected output* of Phase 0, and the input to Phase 1.
 
 ---
 
 ## Tasks
 
-### P0.1 — `.slnx` parsing
+### P0.1 - `.slnx` parsing
 
 Replace the `.sln` regex with XML parsing of `Esoterica.slnx`.
 
-The file is straightforward XML. The elements that matter:
+The file is simple XML. These elements matter:
 
 ```xml
 <Solution>
@@ -58,78 +59,78 @@ The file is straightforward XML. The elements that matter:
 ```
 
 Requirements:
-- Use `xml.etree.ElementTree`. No new Python dependencies.
-- Honour `<Build Project="false"/>` (never build) and
+
+- Use `xml.etree.ElementTree`. Add no new Python dependencies.
+- Honor `<Build Project="false"/>` (never build) and
   `<Build Solution="Shipping|*" Project="false"/>` (exclude from that configuration only).
-- Honour `<BuildDependency>` in addition to each `.vcxproj`'s own `<ProjectReference>`.
-- **Warn** on any project in the `.slnx` that the generator does not recognise, rather than
-  silently skipping it. A silently-dropped project is the failure mode that hurts most on a
-  future upstream merge.
-- Read configuration names from `<Configurations>` rather than hardcoding them.
+- Honor `<BuildDependency>`, as well as each `.vcxproj` file's own `<ProjectReference>`.
+- **Warn** on any project in the `.slnx` that the generator does not recognize. Do not skip it
+  silently. A silently dropped project is the failure mode that hurts most on a future upstream
+  merge.
+- Read the configuration names from `<Configurations>`. Do not hardcode them.
 
-Note: `Code/Scripts/Reflect/Esoterica.Scripts.Reflect.vcxproj` is an NMAKE wrapper project
-(`Reflect.nmake`), not a real C++ project. The stale script special-cased it by name; keep that
-behaviour but detect it by absence of `ClCompile` entries rather than by name.
+Note that `Code/Scripts/Reflect/Esoterica.Scripts.Reflect.vcxproj` is an NMAKE wrapper project
+(`Reflect.nmake`), not a real C++ project. The stale script special-cased it by name. Keep that
+behavior, but detect it by the absence of `ClCompile` entries instead of by name.
 
-### P0.2 — `.vcxproj` parsing
+### P0.2 - `.vcxproj` parsing
 
-Extract from each project file:
+Extract this from each project file:
 
 | Element | Use |
 |---|---|
 | `<ClCompile Include="..."/>` | source list |
-| `<ClInclude Include="..."/>` | header list — needed for the `REFLECT` rule's dependency set |
+| `<ClInclude Include="..."/>` | header list, needed for the `REFLECT` rule's dependency set |
 | `<ProjectReference Include="..."/>` | link dependency edges |
-| `<ConfigurationType>` | `.so` / `.a` / executable — **read per configuration**, see below |
+| `<ConfigurationType>` | `.so`, `.a`, or executable. **Read it per configuration**, see below. |
 | `<Import Project="..\PropertySheets\X.props"/>` | which external dependencies to link |
 
 **`ConfigurationType` varies by configuration.** `Esoterica.Base` is `DynamicLibrary` in Debug
-and Release but `StaticLibrary` in Shipping, declared in three separate
-`<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='...'">` blocks. The stale script read
-it once and got this wrong. Parse it per-configuration.
+and Release, and `StaticLibrary` in Shipping. Three separate
+`<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='...'">` blocks declare it. The stale
+script read it once and got this wrong. Parse it per configuration.
 
-Line-based parsing is acceptable here (the stale script does it, and the files are
-machine-generated with one element per line), but XML parsing is more robust and costs little.
-Prefer XML.
+Line-based parsing works here, because the files are machine-generated with one element per
+line, and the stale script does it that way. XML parsing is more robust and costs little, so
+prefer XML.
 
-### P0.3 — Platform source filtering
+### P0.3 - Platform source filtering
 
 The rule:
 
 - **Exclude** any source whose stem ends in `_Win32`.
-- **Include** any `*_Linux.cpp` found in the same directory as an excluded `*_Win32.cpp`, plus
-  `*_Linux.cpp` anywhere under a `Platform/` directory. These are never listed in the
-  `.vcxproj`, by design — that is what keeps the project files unmodified.
+- **Include** any `*_Linux.cpp` in the same directory as an excluded `*_Win32.cpp`, plus any
+  `*_Linux.cpp` under a `Platform/` directory. The `.vcxproj` files never list these, by
+  design. That is what keeps the project files unmodified.
 - **Warn loudly** on any source with a platform-looking suffix that is neither `_Win32` nor
-  `_Linux` (e.g. a future `_Mac` or `_Durango`), so a new upstream platform cannot be silently
-  mis-handled.
-- Also exclude `.rc` / `.aps` resource files and anything under a `Win32/` directory
-  (`Code/Applications/Editor/Win32/`, `Code/Applications/Engine/Win32/`), and include the
-  corresponding `Linux/` directories.
+  `_Linux`, such as a future `_Mac` or `_Durango`. A new upstream platform must not slip
+  through.
+- Also exclude `.rc` and `.aps` resource files, and anything under a `Win32/` directory
+  (`Code/Applications/Editor/Win32/`, `Code/Applications/Engine/Win32/`). Include the matching
+  `Linux/` directories.
 
-Implement this as one well-commented function with a table of suffixes. It is the single most
-important piece of upstream-drift insulation in the generator.
+Write this as one well-commented function with a table of suffixes. It is the most important
+piece of upstream-drift insulation in the generator.
 
-### P0.4 — Autogenerated source globbing
+### P0.4 - Autogenerated source globbing
 
-`Esoterica.props` adds these as MSBuild wildcards, so they are absent from the `.vcxproj`:
+`Esoterica.props` adds these as MSBuild wildcards, so the `.vcxproj` files do not list them:
 
 ```
 _Module/_Autogenerated/TypeInfo/*.cpp
 _Module/_Autogenerated/Shaders/*.cpp
 ```
 
-Glob both, per project. Note the directories may not exist before the Reflector has run
-(Phase 2) — handle absence without failing, and make sure the generator can be re-run cheaply
-after reflection to pick up newly generated files.
+Glob both, per project. The directories may not exist before the Reflector has run (Phase 2).
+Handle their absence without failing, and make sure a re-run after reflection is cheap and picks
+up the new files.
 
-Be aware of a case inconsistency in upstream: `Esoterica.props` writes
-`_Module\_Autogenerated\`, `Reflect.nmake` writes `_Module\_AutoGenerated\`, and `.gitignore`
-has `**/_AutoGenerated/*`. On a case-sensitive filesystem these are different directories.
-**Pick whatever the Reflector actually emits** (determine this in Phase 2) and glob
-case-insensitively to be safe.
+Upstream has a case inconsistency here. `Esoterica.props` writes `_Module\_Autogenerated\`,
+`Reflect.nmake` writes `_Module\_AutoGenerated\`, and `.gitignore` has `**/_AutoGenerated/*`. On
+a case-sensitive filesystem those are different directories. **Use whatever the Reflector
+actually emits** (find out in Phase 2), and glob case-insensitively to be safe.
 
-### P0.5 — Compiler and linker flags
+### P0.5 - Compiler and linker flags
 
 Translate `Esoterica.props` and `Esoterica.Win32.props` into clang flags.
 
@@ -140,127 +141,134 @@ Required:
 | `LanguageStandard: stdcpp20` | `-std=c++20` |
 | `LanguageStandard_C: stdc17` | `-std=c17` |
 | `ExceptionHandling: false`, `_HAS_EXCEPTIONS=0` | `-fno-exceptions -D_HAS_EXCEPTIONS=0` |
-| `FloatingPointModel: Precise` | clang default; do **not** pass `-ffast-math` |
+| `FloatingPointModel: Precise` | the clang default. Do **not** pass `-ffast-math`. |
 | `/bigobj` | not needed |
 | `AdditionalIncludeDirectories: $(SolutionDir)Code` | `-ICode` |
-| `$(ProjectName.ToUpper().Replace('.','_'))` | `-DESOTERICA_BASE` etc. — **required** for the export/import switch |
-| `EE_DEBUG=1` / `EE_RELEASE=1` / `EE_SHIPPING=1` | same |
-| `EE_DLL` (Debug + Release only) | `-DEE_DLL` |
-| `NDEBUG`, `NOMINMAX`, `WIN32_LEAN_AND_MEAN`, `_CRT_SECURE_NO_WARNINGS` | `-DNDEBUG` only; the rest are Windows-only |
-| `Optimization: Disabled / MaxSpeed` | `-O0` / `-O2` |
+| `$(ProjectName.ToUpper().Replace('.','_'))` | `-DESOTERICA_BASE` and so on. **Required** for the export and import switch. |
+| `EE_DEBUG=1`, `EE_RELEASE=1`, `EE_SHIPPING=1` | same |
+| `EE_DLL` (Debug and Release only) | `-DEE_DLL` |
+| `NDEBUG`, `NOMINMAX`, `WIN32_LEAN_AND_MEAN`, `_CRT_SECURE_NO_WARNINGS` | `-DNDEBUG` only. The rest are Windows-only. |
+| `Optimization: Disabled` or `MaxSpeed` | `-O0` or `-O2` |
 | `WholeProgramOptimization` (Shipping) | `-flto` |
-| `TreatWarningAsError: true` | `-Werror` — **see the warning note below** |
+| `TreatWarningAsError: true` | `-Werror`. **See the warning note below.** |
 | `DebugInformationFormat: ProgramDatabase` | `-g` |
 | `DynamicLibrary` | `-fPIC -shared`, output `.so` |
 | `StaticLibrary` | `ar rcs`, output `.a` |
 
-Also add, with no MSBuild equivalent:
-- `-fvisibility=hidden` on `.so` targets, so the visibility attribute added in Phase 1 is
-  meaningful.
+Add these too. They have no MSBuild equivalent:
+
+- `-fvisibility=hidden` on `.so` targets, so that the visibility attribute added in Phase 1
+  means something.
 - `-Wl,-rpath,'$ORIGIN'` on executables, so they find sibling `.so` files. This replaces the
-  MSBuild `Copy` targets in `DXC.props` and friends.
-- `-msse4.2 -mavx` — the project's hand-rolled SIMD math assumes these. The stale script had
+  MSBuild `Copy` targets in `DXC.props` and similar sheets.
+- `-msse4.2 -mavx`. The project's hand-rolled SIMD math assumes these. The stale script had
   this right.
 
 **On `-Werror`:** `Esoterica.props` sets `WarningLevel: EnableAllWarnings` with
-`TreatWarningAsError: true` and a long `DisableSpecificWarnings` list of MSVC warning numbers,
-which have no clang equivalents. Do **not** try to translate that list. Start with
-`-Wall -Wextra` and **no** `-Werror`, get a clean-ish build, then decide what to enable. Chasing
-`-Weverything -Werror` parity in Phase 0 will consume the entire phase for no benefit, and
-Conventions rule 3 forbids fixing upstream warnings anyway.
+`TreatWarningAsError: true`, and a long `DisableSpecificWarnings` list of MSVC warning numbers
+that have no clang equivalents. Do **not** translate that list. Start with `-Wall -Wextra` and
+**no** `-Werror`. Get a mostly clean build, then decide what to turn on. Chasing
+`-Weverything -Werror` parity in Phase 0 will eat the whole phase for no gain, and Conventions
+rule 3 forbids fixing upstream warnings anyway.
 
-### P0.6 — Library linking
+### P0.6 - Library linking
 
-Implement the property-sheet → link-flag mapping from
-[03-Dependencies.md § Property sheet → link flag mapping](../03-Dependencies.md#property-sheet--link-flag-mapping).
+Implement the property sheet to link flag mapping from
+[03-Dependencies.md](../03-Dependencies.md#property-sheet-to-link-flag-mapping).
 
-Use `pkg-config` where available (`freetype2`, later `sdl3`); explicit `-l` otherwise. Skip the
-dropped sheets (`AmdAgs`, `WinPixEventRuntime`, `Optick`, `SuperLuminal`, `LivePP`, `NavPower`)
-and, critically, **do not define their `EE_ENABLE_*` macros** — Conventions rule 4.
+Use `pkg-config` where it exists (`freetype2`, and later `sdl3`). Use an explicit `-l`
+otherwise. Skip the dropped sheets (`AmdAgs`, `WinPixEventRuntime`, `Optick`, `SuperLuminal`,
+`LivePP`, `NavPower`). Above all, **do not define their `EE_ENABLE_*` macros**. See Conventions
+rule 4.
 
-### P0.7 — Output layout, configurations, sanitizers
+### P0.7 - Output layout, configurations, sanitizers
 
 ```
 Build/Linux_Debug/  Build/Linux_Release/  Build/Linux_Shipping/
 Build/_Temp/Linux_<Config>/<ProjectName>/
 ```
 
-Mirror the MSBuild layout (`Esoterica.props` uses
-`Build/$(Platform)_$(Configuration)/`) so tooling and habits transfer.
+Mirror the MSBuild layout, which `Esoterica.props` sets as
+`Build/$(Platform)_$(Configuration)/`, so that tooling and habits carry over.
 
-Keep ASan, TSan, and UBSan variants. **Drop MSan** — it needs an instrumented libc++ to produce
-usable output and will otherwise bury you in false positives. Fix the `-fsanitize-address`
-typo (it must be `-fsanitize=address`).
+Keep the ASan, TSan, and UBSan variants. **Drop MSan.** It needs an instrumented libc++ to
+produce usable output, and without one it buries you in false positives. Fix the
+`-fsanitize-address` typo. It must be `-fsanitize=address`.
 
-Object file paths must be derived from a path *relative to the repo root*, not the absolute
-source path — the stale script embeds absolute paths, which breaks the build directory.
+Derive object file paths from a path *relative to the repo root*, not from the absolute source
+path. The stale script embeds absolute paths, which breaks the build directory.
 
-### P0.8 — `compile_commands.json`
+### P0.8 - `compile_commands.json`
 
-Generate via `ninja -t compdb` against the real Linux toolchain, not `clang-cl`. This gives
-working clangd in editors, which materially speeds up every later phase — treat it as required,
-not optional.
+Generate it with `ninja -t compdb` against the real Linux toolchain, not `clang-cl`. This gives
+working clangd in editors, which speeds up every later phase. Treat it as required, not
+optional.
 
-### P0.9 — `DownloadDependencies.sh`
+### P0.9 - `DownloadDependencies.sh`
 
-Per [03-Dependencies.md § DownloadDependencies.sh](../03-Dependencies.md#downloaddependenciessh).
+See
+[03-Dependencies.md, DownloadDependencies.sh](../03-Dependencies.md#downloaddependenciessh).
 
-For this phase, only these are needed — the rest can be deferred to the phase that first
-requires them:
-- **libunwind, libdw** (Phase 1 needs them)
-- **Freetype, SQLite** (system packages, trivial)
+This phase needs only these. Defer the rest to the phase that first needs them:
 
-Defer LLVM (Phase 2), DXC (Phase 4), Vulkan/VMA/SPIRV-Reflect (Phase 5), SDL3 (Phase 6). Build
-the script so dependencies can be requested individually (`./DownloadDependencies.sh llvm`) as
-well as all at once — full builds of LLVM and DXC take tens of minutes each and you do not want
-to pay that in Phase 0.
+- **libunwind, libdw**, which Phase 1 needs
+- **Freetype, SQLite**, which are system packages and easy
 
-Check for required system packages up front and fail with one actionable message listing
-everything missing, rather than failing deep inside a nested build.
+Defer LLVM (Phase 2), DXC (Phase 4), Vulkan, VMA, and SPIRV-Reflect (Phase 5), and SDL3
+(Phase 6). Build the script so that it can fetch one dependency at a time
+(`./DownloadDependencies.sh llvm`) as well as all of them. Full builds of LLVM and DXC take tens
+of minutes each, and you should not pay that in Phase 0.
 
-### P0.10 — `.gitignore`
+Check for the required system packages first, and fail with one message that lists everything
+missing. Do not fail deep inside a nested build.
 
-Add `Build/`. The existing entry is `build/` and Linux filesystems are case-sensitive, so the
-build output directory is currently tracked. Verified with `git check-ignore`.
+### P0.10 - `.gitignore`
+
+Add `Build/`. The existing entry is lowercase `build/`, and Linux filesystems are
+case-sensitive, so git currently tracks the build output directory. Confirmed with
+`git check-ignore`.
 
 ---
 
 ## Acceptance criteria
 
-Mechanically checkable. All must pass.
+Each one is checkable. All must pass.
 
 1. `python3 Code/Scripts/NinjaGen/NinjaGen.py` exits 0 and writes
    `Build/Linux/Esoterica.ninja`.
-2. The generated ninja file contains a compile rule for every `.cpp` in
-   `Esoterica.Base.vcxproj` **except** those matching `*_Win32.cpp`.
-3. `Esoterica.Base`'s compile commands include `-DESOTERICA_BASE`, `-DEE_DLL` (Debug), `-ICode`,
-   `-std=c++20`, `-fno-exceptions`.
-4. `Esoterica.Base` resolves to a `.so` target in Debug/Release and a `.a` target in Shipping.
-5. `compile_commands.json` is produced and `clangd` can resolve `#include "Base/Esoterica.h"`
-   from an arbitrary source file.
-6. Re-running the generator with no changes produces a byte-identical ninja file
-   (determinism — required for the file to be diffable).
-7. `git status --porcelain` shows no modification to any `.vcxproj` or to `Esoterica.slnx`.
+2. The generated ninja file has a compile rule for every `.cpp` in `Esoterica.Base.vcxproj`
+   **except** those matching `*_Win32.cpp`.
+3. The `Esoterica.Base` compile commands include `-DESOTERICA_BASE`, `-DEE_DLL` (Debug),
+   `-ICode`, `-std=c++20`, and `-fno-exceptions`.
+4. `Esoterica.Base` resolves to a `.so` target in Debug and Release, and a `.a` target in
+   Shipping.
+5. The generator writes `compile_commands.json`, and `clangd` can resolve
+   `#include "Base/Esoterica.h"` from any source file.
+6. A re-run with no changes produces a byte-identical ninja file. The output must be
+   deterministic, so that the file diffs cleanly.
+7. `git status --porcelain` shows no change to any `.vcxproj` file, and none to
+   `Esoterica.slnx`.
 8. `git check-ignore Build/foo` succeeds.
 9. **The Windows MSBuild build still succeeds**, unchanged.
 10. `ninja -f Build/Linux/Esoterica.ninja` reaches the compiler and emits compile errors from
-    *missing platform implementations* — not from generator bugs (bad flags, missing include
-    paths, malformed rules). Capture that error output; it is Phase 1's worklist.
+    *missing platform implementations*, not from generator bugs such as bad flags, missing
+    include paths, or malformed rules. Save that error output. It is Phase 1's worklist.
 
 ## Do not
 
 - Write any `_Linux.cpp`. That is Phase 1.
-- Modify any `.vcxproj` or `Esoterica.slnx`.
-- Modify `Code/Applications/BuildGenerator/`. It is dead, leave it.
-- Attempt `-Weverything -Werror` parity with the MSVC warning configuration.
+- Modify any `.vcxproj` file, or `Esoterica.slnx`.
+- Modify `Code/Applications/BuildGenerator/`. It is dead. Leave it.
+- Chase `-Weverything -Werror` parity with the MSVC warning configuration.
 - Add CMake.
-- Introduce Python dependencies beyond the standard library and the vendored
+- Add Python dependencies beyond the standard library and the vendored
   `Code/Scripts/NinjaGen/ninja_syntax.py`.
 
 ## Notes for the next agent
 
-Record in [Progress.md](../Progress.md):
-- The captured compile-error output from criterion 10, or where you saved it.
-- Which `.props` sheets you have mapped and which are still unmapped.
-- Whether `_Autogenerated` or `_AutoGenerated` is the real directory case.
+Record this in [Progress.md](../Progress.md):
+
+- The compile-error output from criterion 10, or where you saved it.
+- Which `.props` sheets you mapped, and which are still unmapped.
+- Whether the real directory is `_Autogenerated` or `_AutoGenerated`.
 - Any `.slnx` or `.vcxproj` construct you had to special-case.
