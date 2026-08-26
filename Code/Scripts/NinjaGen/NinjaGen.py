@@ -2,7 +2,7 @@
 from ninja_syntax import Writer
 from pathlib import Path
 
-import copy, os, re, subprocess, sys
+import copy, os, re, shutil, subprocess, sys
 import xml.etree.ElementTree as ET
 
 
@@ -607,6 +607,118 @@ def project_compile_flags(project, configuration_name, case_map, dir_map):
     return ' '.join(flags)
 
 
+# ---------------------------------------------------------------------------
+# P0.6 - Property sheet to link flag mapping (Docs/Linux/03-Dependencies.md)
+# ---------------------------------------------------------------------------
+#
+# Each property sheet contributes link flags to the projects that import it.
+# A sheet absent from the table contributes nothing; that is deliberate for
+# the dropped sheets (AmdAgs, WinPix, Optick, SuperLuminal, LivePP, NavPower),
+# which are skipped and whose EE_ENABLE_* macros are never defined
+# (Conventions rule 4).
+#
+# pkg-config and llvm-config are queried at generation time and cached per
+# run; both fall back to explicit -l flags from the table when unavailable.
+# Libraries that P0.9 stages into External/ get -L (and, for DXC, -Wl,-rpath)
+# into the External/<Name>/lib layout that 03-Dependencies.md pins for
+# staging.
+
+EXTERNAL_LIB_DIRS = {
+    'dxc.props':                   'External/DirectXShaderCompiler/lib',
+    'gamenetworkingsockets.props': 'External/GameNetworkingSockets/lib',
+    'ixwebsocket.props':           'External/IXWebSocket/lib',
+    'meshoptimizer.props':         'External/MeshOptimizer/lib',
+    'ctt.props':                   'External/ctt/lib',
+}
+
+PKG_CONFIG_CACHE = {}
+
+def pkg_config_libs(package, fallback):
+    if package in PKG_CONFIG_CACHE:
+        return PKG_CONFIG_CACHE[package]
+    flags = None
+    if shutil.which('pkg-config') is not None:
+        exists = subprocess.run([ 'pkg-config', '--exists', package ], capture_output=True)
+        if exists.returncode == 0:
+            libs = subprocess.run([ 'pkg-config', '--libs', package ], capture_output=True, text=True)
+            if libs.returncode == 0 and libs.stdout.strip():
+                flags = ' '.join(libs.stdout.split())
+    if flags is None:
+        note(f'pkg-config has no {package}; using the explicit {fallback} from the dependency table')
+        flags = fallback
+    PKG_CONFIG_CACHE[package] = flags
+    return flags
+
+LLVM_CONFIG_CACHE = {}
+
+def llvm_config_libs():
+    if 'libs' in LLVM_CONFIG_CACHE:
+        return LLVM_CONFIG_CACHE['libs']
+    candidates = [ 'External/LLVM/bin/llvm-config' ]
+    candidates += [ 'llvm-config' ]
+    candidates += [ f'llvm-config-{version}' for version in ( 19, 18, 17 ) ]
+    flags = None
+    for candidate in candidates:
+        if '/' in candidate:
+            if not os.path.isfile(candidate):
+                continue
+            binary = candidate
+        else:
+            binary = shutil.which(candidate)
+            if binary is None:
+                continue
+        result = subprocess.run([ binary, '--libs' ], capture_output=True, text=True)
+        if result.returncode != 0 or not result.stdout.strip():
+            continue
+        if binary != 'llvm-config' and not binary.startswith('External/LLVM'):
+            note(f'using host {binary} for LLVM link flags until External/LLVM is staged (P0.9)')
+        flags = ' '.join(result.stdout.split())
+        break
+    if flags is None:
+        note('no llvm-config found (External/LLVM is staged by P0.9); the Reflector links -lclang only')
+        flags = '-lclang'
+    LLVM_CONFIG_CACHE['libs'] = flags
+    return flags
+
+def sheet_link_flags(sheet_name):
+    # sheet_name is the lowercased basename of a .props file.
+    if sheet_name == 'dxc.props':
+        directory = os.path.abspath(EXTERNAL_LIB_DIRS[sheet_name])
+        return [ f'-L{directory}', '-ldxcompiler', f'-Wl,-rpath,{directory}' ]
+    if sheet_name == 'freetype.props':
+        return pkg_config_libs('freetype2', '-lfreetype').split()
+    if sheet_name == 'gamenetworkingsockets.props':
+        directory = os.path.abspath(EXTERNAL_LIB_DIRS[sheet_name])
+        return [ f'-L{directory}', '-lGameNetworkingSockets', '-lprotobuf', '-lssl', '-lcrypto' ]
+    if sheet_name == 'ixwebsocket.props':
+        directory = os.path.abspath(EXTERNAL_LIB_DIRS[sheet_name])
+        return [ f'-L{directory}', '-lixwebsocket', '-lz', '-lssl', '-lcrypto' ]
+    if sheet_name == 'meshoptimizer.props':
+        directory = os.path.abspath(EXTERNAL_LIB_DIRS[sheet_name])
+        return [ f'-L{directory}', '-lmeshoptimizer' ]
+    if sheet_name == 'ctt.props':
+        # 03-Dependencies.md lists the CTT Linux build as an open question; the
+        # flag is wired anyway so the link line is ready when the library lands.
+        directory = os.path.abspath(EXTERNAL_LIB_DIRS[sheet_name])
+        return [ f'-L{directory}', '-lctt_capi' ]
+    if sheet_name == 'sqlite.props':
+        return [ '-lsqlite3' ]
+    if sheet_name == 'llvm.props':
+        return llvm_config_libs().split()
+    return []
+
+def project_link_flags(project, configuration_name):
+    # Walks the same per-configuration sheet closure as project_compile_flags,
+    # so configuration-scoped imports apply (Esoterica.Base drops
+    # ixWebSocket.props in Shipping) and the dropped sheets contribute nothing.
+    flags = []
+    for sheet_path in project.props_by_configuration.get(configuration_name, []):
+        for flag in sheet_link_flags(os.path.basename(sheet_path).lower()):
+            if flag not in flags:
+                flags.append(flag)
+    return ' '.join(flags)
+
+
 def parse_vcxproj(filename, case_map, configuration_names):
     file_path = Path(filename)
     base_path = str(file_path.parent).replace(os.sep, '/')
@@ -878,6 +990,9 @@ def build_toolchain(build, toolchain, configurations, projects, case_map, dir_ma
         for project in projects:
             object_files = []
             project_flags = project_compile_flags(project, base_configuration_name, case_map, dir_map)
+            # Archives (.a) are never linked, so link libraries only reach the
+            # .so and executable edges below.
+            link_libraries = project_link_flags(project, base_configuration_name)
 
             project_out_path = f'Build/x64_Linux_{toolchain.name}_{configuration.name}/{project.name}'
             project_obj_path = f'{project_out_path}/Obj'
@@ -910,10 +1025,13 @@ def build_toolchain(build, toolchain, configurations, projects, case_map, dir_ma
 
             if project.project_type == 'Lib':
                 if uses_shared_output(toolchain, base_configuration_name, project):
+                    link_flags = shared_link_flags(toolchain)
+                    if link_libraries:
+                        link_flags += f' {link_libraries}'
                     build.build(
                         f'{project_out_path}/{project.name}.so', link_rule, object_files,
                         order_only=order_only or None,
-                        variables={ 'LinkFlags': shared_link_flags(toolchain) })
+                        variables={ 'LinkFlags': link_flags })
                 else:
                     build.build(f'{project_out_path}/{project.name}.a', lib_rule, object_files, order_only=order_only or None)
             elif project.project_type == 'Exe':
@@ -921,6 +1039,8 @@ def build_toolchain(build, toolchain, configurations, projects, case_map, dir_ma
                 # objects; this replaces the MSBuild Copy targets in the
                 # property sheets. $$ is ninja's escape for a literal $.
                 link_flags = '' if toolchain.name == 'WineGCC' else "-Wl,-rpath='$$ORIGIN'"
+                if link_libraries:
+                    link_flags += f' {link_libraries}' if link_flags else link_libraries
                 build.build(
                     f'{project_out_path}/{project.name}', link_rule, object_files,
                     order_only=order_only or None,
