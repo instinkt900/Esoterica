@@ -141,6 +141,22 @@ which matters a lot when auditing a fork.
 
 Never mix an upstream merge with port work in one commit.
 
+## Writing style
+
+All prose — code comments, PR descriptions, Progress.md entries, commit messages — is written in
+plain, simple, concise English.
+
+Agent writing runs wordy by default. Keep it easy to digest instead:
+
+- One idea per sentence. Short sentences.
+- Active voice. "The generator skips the project", not "the project is skipped by the generator".
+- Plain words. "use" not "leverage", "show" not "demonstrate", "fix" not "remediate".
+- Cut filler: hedging, throat-clearing, and restating what the reader already knows.
+- Be specific. Name the file, function, or flag instead of gesturing at it.
+
+The test: a reviewer skimming a PR, or a future session reading Progress.md, gets the point in
+one pass. A paragraph that needs a second read is too long or too twisted — rewrite it.
+
 ## Definition of done
 
 A task is not done until all of these hold:

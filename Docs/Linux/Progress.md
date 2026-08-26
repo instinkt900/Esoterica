@@ -11,11 +11,12 @@ session, read the "Current state" and "In flight" sections first.
 ## Current state
 
 **Phase: 0 (in progress).** P0.1 (`.slnx` parsing) is merged to `main` (PR #1, merge commit
-`956897b`). P0.2–P0.10 not started.
+`956897b`); P0.2 (`.vcxproj` parsing) is in flight on `linux/p0.2-vcxproj-parsing`. P0.3–P0.10
+not started.
 
 | Phase | Status |
 |---|---|
-| 0 — Build System | in progress — P0.1 merged |
+| 0 — Build System | in progress — P0.2 in flight |
 | 1 — Base Platform Layer | not started |
 | 2 — Reflector | not started |
 | 3 — Resource Compiler | not started |
@@ -29,7 +30,27 @@ Windows build status: **unchanged from upstream** (no edits landed yet).
 
 ## In flight
 
-*(nothing)*
+### P0.2 — `.vcxproj` parsing (branch `linux/p0.2-vcxproj-parsing`)
+- Full XML parse layer (`xml.etree.ElementTree`, standard library; vendored `ninja_syntax.py`
+  untouched) replacing the line-based extraction P0.1 left for the 12 built projects:
+  `<ClCompile>` / `<ClInclude>` file items, `<ProjectReference>` edges, **per-configuration**
+  `<ConfigurationType>`, and `<Import>` property sheets with full transitive closure.
+- Special-cased constructs (for the record): every `.vcxproj` and `.props` file is in the
+  `http://schemas.microsoft.com/developer/msbuild/2003` XML namespace (the `.slnx` is not);
+  the same element names inside `<ItemDefinitionGroup>` are per-item compiler settings, not
+  files — item extraction is restricted to `<ItemGroup>`; `$(UserRootDir)` / `$(VCTargetsPath)`
+  imports and `exists()`-guarded user props resolve to nothing by design; an import's sheet
+  scope is its own condition, else the scope it was imported under (sheet imports apply
+  wherever the sheet applies).
+- Upstream divergences the parser reports faithfully, not normalised: Base's Shipping
+  `ImportGroup` omits `ixWebSocket.props` (Debug/Release import it); `Esoterica.props`'
+  inner `ImportGroup` is unconditional, so its seven sheets (Win32, EA, Imgui,
+  SuperLuminal, NavPower, Optick, LivePP) are active in *every* configuration of every
+  project that imports it. All 20 sheets in `Code/PropertySheets/` are reached by at least
+  one project and resolve on disk; their *values* are P0.5's work.
+- Verification: 33/33 parse-fidelity checks pass against hand-read raw values; emitted ninja
+  file byte-identical to P0.1's output (P0.2 changes no emission); no-change re-run
+  byte-identical; exits 0; no `.vcxproj` / `.slnx` modification.
 
 ---
 
@@ -214,6 +235,18 @@ following; recorded so the Phase 1 worklist is complete:
 - `Code/Base/Esoterica.h:73`–74 — uses `va_list` without including `<stdarg.h>`; MSVC
   headers provide it transitively, clang does not. The file is already registered for the
   platform `#elif` at line 55; the missing include would ride along with that edit.
+
+During P0.2 (2026-08-26), property-sheet parsing surfaced per-configuration divergences in
+the upstream project files. The parser reports them faithfully; neither is fixed here:
+
+- `Code/Base/Esoterica.Base.vcxproj` — the Shipping `ImportGroup` omits
+  `ixWebSocket.props` while the Debug and Release groups import it, so the Shipping build
+  gets different include paths for that library on purpose (or by upstream sloppiness).
+  P0.5 must carry the sheet sets per configuration, not collapse them.
+- `Code/PropertySheets/Esoterica.props` — its inner `ImportGroup` (Esoterica.Win32, EA,
+  Imgui, SuperLuminal, NavPower, Optick, LivePP) is unconditional, so all seven sheets'
+  flags apply in every configuration of every importing project, including Debug. P0.5
+  inherits that scope exactly.
 
 ---
 
