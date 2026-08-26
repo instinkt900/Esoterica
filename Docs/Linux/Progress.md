@@ -10,13 +10,13 @@ session, read the "Current state" and "In flight" sections first.
 
 ## Current state
 
-**Phase: 0 (in progress).** P0.1 (`.slnx` parsing) is merged to `main` (PR #1, merge commit
-`956897b`); P0.2 (`.vcxproj` parsing) is in flight on `linux/p0.2-vcxproj-parsing`. P0.3–P0.10
-not started.
+**Phase: 0 (in progress).** P0.1 (`.slnx` parsing) merged (PR #1, merge commit
+`956897b`); P0.2 (`.vcxproj` parsing) merged (PR #2, merge commit `bb2c023`). P0.3–P0.10 not
+started.
 
 | Phase | Status |
 |---|---|
-| 0 — Build System | in progress — P0.2 in flight |
+| 0 — Build System | in progress — P0.2 merged |
 | 1 — Base Platform Layer | not started |
 | 2 — Reflector | not started |
 | 3 — Resource Compiler | not started |
@@ -30,27 +30,7 @@ Windows build status: **unchanged from upstream** (no edits landed yet).
 
 ## In flight
 
-### P0.2 — `.vcxproj` parsing (branch `linux/p0.2-vcxproj-parsing`)
-- Full XML parse layer (`xml.etree.ElementTree`, standard library; vendored `ninja_syntax.py`
-  untouched) replacing the line-based extraction P0.1 left for the 12 built projects:
-  `<ClCompile>` / `<ClInclude>` file items, `<ProjectReference>` edges, **per-configuration**
-  `<ConfigurationType>`, and `<Import>` property sheets with full transitive closure.
-- Special-cased constructs (for the record): every `.vcxproj` and `.props` file is in the
-  `http://schemas.microsoft.com/developer/msbuild/2003` XML namespace (the `.slnx` is not);
-  the same element names inside `<ItemDefinitionGroup>` are per-item compiler settings, not
-  files — item extraction is restricted to `<ItemGroup>`; `$(UserRootDir)` / `$(VCTargetsPath)`
-  imports and `exists()`-guarded user props resolve to nothing by design; an import's sheet
-  scope is its own condition, else the scope it was imported under (sheet imports apply
-  wherever the sheet applies).
-- Upstream divergences the parser reports faithfully, not normalised: Base's Shipping
-  `ImportGroup` omits `ixWebSocket.props` (Debug/Release import it); `Esoterica.props`'
-  inner `ImportGroup` is unconditional, so its seven sheets (Win32, EA, Imgui,
-  SuperLuminal, NavPower, Optick, LivePP) are active in *every* configuration of every
-  project that imports it. All 20 sheets in `Code/PropertySheets/` are reached by at least
-  one project and resolve on disk; their *values* are P0.5's work.
-- Verification: 33/33 parse-fidelity checks pass against hand-read raw values; emitted ninja
-  file byte-identical to P0.1's output (P0.2 changes no emission); no-change re-run
-  byte-identical; exits 0; no `.vcxproj` / `.slnx` modification.
+*(nothing)*
 
 ---
 
@@ -66,6 +46,48 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-26 — P0.2 `.vcxproj` parsing (PR #2)
+- Replaced the line-based extraction P0.1 left in `Code/Scripts/NinjaGen/NinjaGen.py` with full
+  `xml.etree.ElementTree` parsing of the 12 built projects (standard library only; vendored
+  `ninja_syntax.py` untouched). Per
+  [Phase 0 § P0.2](Phases/Phase0-BuildSystem.md#p02--vcxproj-parsing): file items from
+  `<ClCompile>` / `<ClInclude>` in `<ItemGroup>` only (the same element names inside
+  `<ItemDefinitionGroup>` are per-item compiler settings, not files); `<ProjectReference>` →
+  link-dependency edges; `<ConfigurationType>` read **per configuration** from the
+  `$(Configuration)|$(Platform)`-conditioned `<PropertyGroup>` blocks (the stale script read it
+  once — `Esoterica.Base` is DynamicLibrary in Debug/Release, StaticLibrary in Shipping);
+  `<Import>` property sheets resolved case-insensitively (the documented `Navpower.props` →
+  `NavPower.props` landmine is now hit, warned once, and survived) with full transitive closure
+  across sheet imports, scoped per configuration by each `ImportGroup`'s condition;
+  `$(UserRootDir)` / `$(VCTargetsPath)` imports resolve to nothing (tooling, not repo
+  contents) and `exists()`-guarded user props are ignored. Emission is unchanged: the
+  generated ninja file is byte-identical to P0.1's output, and a `.so` / `.a` per
+  configuration is still P0.5's work — a mixed-type project emits as `Lib` until then.
+- Special-cased constructs: every `.vcxproj` / `.props` file declares the MSBuild XML namespace
+  (`http://schemas.microsoft.com/developer/msbuild/2003`); the `.slnx` does not. A sheet
+  import's scope is its own condition, else the scope it was imported under (sheet imports
+  apply wherever the sheet applies).
+- Files added: none.
+- Upstream files edited: `Code/Scripts/NinjaGen/NinjaGen.py` (matches
+  [TouchedFiles.md](TouchedFiles.md#substantive-edits) — second slice of its planned rewrite).
+- Acceptance criteria met: the task spec (all five element extractions; per-configuration
+  `ConfigurationType`; case-insensitive `.props` resolution; XML over line-based); phase 6
+  (re-run byte-identical) and 7 (no `.vcxproj` / `Esoterica.slnx` modification). Partial:
+  1 (exits 0; output directory stays `Build/x64_Linux/...` until P0.7), 9 (the MSBuild build
+  does not consume this script — human to confirm on Windows). Not met: 2, 3, 4, 5, 8, 10 —
+  later P0.x tasks.
+- Verification: 33-point parse-fidelity check passed against values hand-read from the raw
+  files; warning log is one line per known landmine, deterministic across runs.
+- Anything the next agent needs to know: `Project.props_by_configuration` now carries the
+  per-configuration sheet sets for P0.5 to consume; the sheet *values* (`AdditionalIncludeDirectories`,
+  `PreprocessorDefinitions`, `AdditionalDependencies`, `AdditionalOptions`) are P0.5's work.
+  All 20 sheets in `Code/PropertySheets/` are reached by the import graph and resolve on disk.
+  Watch the recorded upstream divergences (see [Upstream issues observed](#upstream-issues-observed)):
+  Base's Shipping group omits `ixWebSocket.props`, and `Esoterica.props`' inner imports are
+  unconditional, so those sheets' flags apply in *every* configuration. PR #2 also merged a
+  "Writing style" rule into `AGENTS.md` (plain, simple, concise English for all prose) — keep
+  comments and PR bodies short.
 
 ### 2026-08-26 — P0.1 `.slnx` parsing (PR #1)
 - Replaced the dead `.sln` regex in `Code/Scripts/NinjaGen/NinjaGen.py` with
