@@ -72,8 +72,19 @@ git checkout main && git pull
 git checkout -b linux/p1.3-threading
 # ... work ...
 git push -u origin linux/p1.3-threading
-gh pr create --fill
+gh pr create --repo instinkt900/Esoterica --base main --fill
 ```
+
+**Always pass `--repo instinkt900/Esoterica` to `gh pr create`.** When `origin` is a fork, `gh`
+defaults the base repository to the **parent**, so a bare `gh pr create` opens the PR against
+`BobbyAnguelov/Esoterica`. It asks first in a terminal and picks the parent silently when it is
+not interactive. That has already happened twice.
+
+This clone is pinned with `gh repo set-default instinkt900/Esoterica`, which writes
+`remote.origin.gh-resolved = base` to `.git/config`. Check it with `gh repo set-default --view`.
+The setting is local to the clone, so a fresh clone needs it again. Pass `--repo` anyway.
+
+Never open a PR against `upstream`. It is a read-only reference.
 
 ### All code changes go through a pull request
 
