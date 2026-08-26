@@ -206,6 +206,148 @@ def collect_sheet_imports(file_path, case_map, chain, result, active_scope=None)
         collect_sheet_imports(resolved, case_map, chain | { resolved }, result, effective_scope)
 
 
+# P0.3 - platform source filtering.
+#
+# The .vcxproj files list Windows sources unconditionally: upstream has no
+# platform split, and this port never edits project files (see
+# TouchedFiles.md, "Esoterica.slnx, all *.vcxproj"). The generator filters
+# each project's file lists to the Linux set instead. A source compiles for
+# Linux unless one of these rules excludes it:
+#
+#   1. stem suffix - <stem>_Win32.* is Windows-only. Its <stem>_Linux.*
+#      twin is never listed in the .vcxproj (that is what keeps the
+#      project files unmodified), so apply_platform_filter() picks it up
+#      from disk after the exclusion pass. A stem ending in another known
+#      platform suffix (platform_stem_suffixes, action 'warn') is excluded
+#      and warned about loudly: a new upstream platform (a future _Mac or
+#      _Durango) must become a visible decision, not a silent surprise in
+#      this build.
+#   2. path - everything under a Win32/ directory (the editor and engine
+#      application entry points and their .rc / .aps resources) is
+#      Windows-only. Linux entry points live in the sibling Linux/
+#      directories, which the addition pass scans.
+#   3. filename - two Windows-only sources carry no platform suffix at all
+#      and are excluded by explicit path (windows_only_sources). A third
+#      entry there means the P0.3 survey missed something: escalate rather
+#      than grow the list (Docs/Linux/Phases/Phase0-BuildSystem.md, P0.3).
+
+# Stem suffix -> action. 'exclude' = Windows-only. 'include' = this port's
+# Linux twin (never in the .vcxproj; added from disk). 'warn' = a platform
+# this port does not support: exclude the file so it cannot quietly land in
+# the Linux build, and warn so the new platform cannot be missed.
+platform_stem_suffixes = {
+    '_Win32':   'exclude',
+    '_Linux':   'include',
+    '_Mac':     'warn',
+    '_Durango': 'warn',
+}
+
+# Windows-only sources with no platform suffix, excluded by repo-relative
+# path compared case-insensitively (the values are lowercase).
+windows_only_sources = {
+    'code/base/render/rhi_direct3d12.cpp',
+    'code/applications/resourceserver/resourceserverapplication.cpp',
+}
+
+# Extensions apply_platform_filter() recognises when adding files it finds on disk.
+linux_source_extensions = ( '.cpp', '.c', '.h', '.hpp', '.inl' )
+
+
+def classify_platform_source(path):
+    """Decide whether one repo-relative source or header path belongs in the
+    Linux build. Returns (compiles, reason), where reason names the rule that
+    decided: 'win32 suffix', 'unsupported platform suffix', 'windows-only
+    filename', 'win32 directory', 'resource file', or 'none' when no rule
+    excluded it."""
+    lowered = path.replace(os.sep, '/').lower()
+    parts = lowered.split('/')
+    stem = parts[-1].rsplit('.', 1)[0]
+
+    for suffix in sorted(platform_stem_suffixes, key=len, reverse=True):
+        if stem.endswith(suffix.lower()):
+            action = platform_stem_suffixes[suffix]
+            if action == 'include':
+                return True, 'none'
+            if action == 'warn':
+                warning(f'{path} ends in {suffix}: that platform is not supported here, so it is excluded from the Linux build')
+                return False, 'unsupported platform suffix'
+            return False, 'win32 suffix'
+
+    if lowered in windows_only_sources:
+        return False, 'windows-only filename'
+
+    if 'win32' in parts[:-1]:
+        return False, 'win32 directory'
+
+    if parts[-1].rsplit('.', 1)[-1] in ( 'rc', 'aps' ):
+        return False, 'resource file'
+
+    return True, 'none'
+
+
+def apply_platform_filter(project):
+    """P0.3: reduce a project's file lists to the Linux set.
+
+    The exclusion pass classifies every listed source and header and drops
+    the Windows-only ones (classify_platform_source). The addition pass then
+    adds the Linux files the .vcxproj never lists: every *_Linux.<ext> file
+    on disk in the directory of an excluded source, in a directory below a
+    Platform/ component of a listed path, and in the Linux/ sibling of a
+    Win32/ directory. Only directories the .vcxproj already points at are
+    scanned; missing directories are skipped silently (the Linux/ app entry
+    point directories do not exist until a later phase creates them)."""
+    source_lists = ( 'cpp_source_files', 'c_source_files', 'header_files' )
+
+    scan_directories = set()
+    excluded = 0
+    for name in source_lists:
+        kept = []
+        for source in getattr(project, name):
+            parts = source.replace(os.sep, '/').split('/')
+            directory = parts[:-1]
+            lowered_directory = [ part.lower() for part in directory ]
+
+            if 'platform' in lowered_directory:
+                scan_directories.add('/'.join(directory))
+            if 'win32' in lowered_directory:
+                for case in ( 'Linux', 'linux' ):  # the on-disk case is unknown until the directory exists
+                    replaced = [ case if part.lower() == 'win32' else part for part in directory ]
+                    scan_directories.add('/'.join(replaced))
+
+            compiles, _ = classify_platform_source(source)
+            if compiles:
+                kept.append(source)
+            else:
+                excluded += 1
+                scan_directories.add('/'.join(directory))
+        setattr(project, name, kept)
+
+    existing = { source for name in source_lists for source in getattr(project, name) }
+    added = 0
+    for directory in sorted(scan_directories):
+        if not os.path.isdir(directory):
+            continue
+        for entry in sorted(os.listdir(directory)):
+            stem, dot, extension = entry.rpartition('.')
+            if not dot or not stem.endswith('_Linux') or f'.{extension}' not in linux_source_extensions:
+                continue
+            path = f'{directory}/{entry}'
+            if path in existing:
+                continue
+            if extension == 'cpp':
+                target = 'cpp_source_files'
+            elif extension == 'c':
+                target = 'c_source_files'
+            else:
+                target = 'header_files'
+            getattr(project, target).append(path)
+            existing.add(path)
+            added += 1
+
+    if excluded or added:
+        note(f'{project.name}: platform filtering excluded {excluded} Windows-only file(s) and added {added} Linux file(s)')
+
+
 def parse_vcxproj(filename, case_map, configuration_names):
     file_path = Path(filename)
     base_path = str(file_path.parent).replace(os.sep, '/')
@@ -378,6 +520,19 @@ def parse_projects(filename, case_map):
         if not project.cpp_source_files and not project.c_source_files:
             note(f'skipping {entry.path} - no ClCompile entries (NMAKE wrapper or non-C++ project)')
             continue
+
+        # P0.3: the .vcxproj lists Windows sources unconditionally; keep only
+        # the Linux set (this also adds the unlisted *_Linux files).
+        apply_platform_filter(project)
+
+        if not project.cpp_source_files and not project.c_source_files:
+            # Every listed translation unit was Windows-only, e.g. the Engine
+            # application, whose sole source is Win32\EngineApplication_Win32.cpp.
+            # The project stays in the graph with its reference and
+            # build-dependency edges intact, so the Linux entry point a later
+            # phase adds needs no graph change; its link edge carries the
+            # project references only until that entry point lands.
+            note(f'{entry.path} lists no Linux sources after platform filtering; emitted with project references only until a Linux entry point lands')
 
         unrecognised = set(project.configuration_types.values()) - recognized_types
         if unrecognised:

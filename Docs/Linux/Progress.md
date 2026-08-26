@@ -11,12 +11,13 @@ session, read the "Current state" and "In flight" sections first.
 ## Current state
 
 **Phase: 0 (in progress).** P0.1 (`.slnx` parsing) merged (PR #1, merge commit
-`956897b`); P0.2 (`.vcxproj` parsing) merged (PR #2, merge commit `bb2c023`). P0.3–P0.10 not
+`956897b`); P0.2 (`.vcxproj` parsing) merged (PR #2, merge commit `bb2c023`); P0.3 (platform
+source filtering) in PR review on branch `linux/p0.3-source-filtering`. P0.4–P0.10 not
 started.
 
 | Phase | Status |
 |---|---|
-| 0 — Build System | in progress — P0.2 merged |
+| 0 — Build System | in progress — P0.3 in PR review |
 | 1 — Base Platform Layer | not started |
 | 2 — Reflector | not started |
 | 3 — Resource Compiler | not started |
@@ -30,7 +31,31 @@ Windows build status: **unchanged from upstream** (no edits landed yet).
 
 ## In flight
 
-*(nothing)*
+### P0.3 — Platform source filtering (PR in review, branch `linux/p0.3-source-filtering`)
+- Added `apply_platform_filter()` to `Code/Scripts/NinjaGen/NinjaGen.py` (+155 lines; the
+  planned P0.5–P0.10 slices are untouched). Per
+  [Phase 0 § P0.3](Phases/Phase0-BuildSystem.md#p03--platform-source-filtering): excludes
+  stems ending `_Win32`, sources under `Win32/` directories, `.rc` / `.aps` files, and the two
+  filename-bounded Windows-only sources (`RHI_Direct3D12.cpp`, `ResourceServerApplication.cpp`);
+  warns loudly on, and excludes, listed sources with other platform suffixes (`_Mac`,
+  `_Durango`); globs unlisted `*_Linux.*` (`.cpp` / `.c` / `.h` / `.hpp` / `.inl`) out of three
+  scan-dir classes — the parent of an excluded source, a `Platform/` directory with a listed
+  source, and the `Linux/` (or `linux/`) sibling of a `Win32/` directory. Each project logs a
+  note with its excluded / added counts.
+- Verified: per-project source sets match a ground-truth recompute from the `.vcxproj`s in all
+  36 toolchain/configuration instances (Base: 134 of 152 listed sources in every instance).
+  The Engine application lists no Linux sources, so it stays in the graph, link rule with
+  project references only, with a generator note until the Phase 1 entry point lands.
+  Re-run is byte-identical (criterion 6); no `.vcxproj` / `.slnx` touched (criterion 7).
+  Mechanisms tested with temporary files, since removed: a `Threading_Linux.cpp` was picked up
+  by the glob, an `EngineApplication_Linux.cpp` under a new `Linux/` sibling by the sibling
+  scan, `_Mac` sources were warned and excluded (classifier unit-tested over 11 cases).
+  Criterion 10 sampled: `ninja` reaches gcc with correct flags; the first failure is the
+  upstream backslash include in `GlobalRegistryBase.h:2`, not a generator defect.
+- Criteria: 2 (Base) and 6 pass; 1 partial (exit 0; the final `Build/Linux/Esoterica.ninja`
+  layout is P0.7's); 9 not runnable here (no MSBuild on this Linux host — the script is not
+  consumed by it; human to confirm on Windows). 3, 4, 5, 8 and the full 10 are later P0.x tasks.
+- On merge: move this entry to Completed work with the PR and merge-commit numbers.
 
 ---
 
