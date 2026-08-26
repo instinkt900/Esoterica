@@ -1,15 +1,15 @@
 # Upstream Merge Discipline
 
-Upstream: `https://github.com/BobbyAnguelov/Esoterica` (branch `main`).
-This fork's `main` carries the Linux work.
+Upstream: `https://github.com/BobbyAnguelov/Esoterica` (branch `main`). This fork's `main`
+carries the Linux work.
 
-This document is the canonical **merge procedure**. For branching strategy and how task work
-reaches `main`, see [/AGENTS.md § Branching](../../AGENTS.md#branching). There is deliberately no
-long-lived `linux` branch — `upstream/main` already serves as the pristine reference, so a second
+This document holds the **merge procedure**. For the branching strategy, and for how task work
+reaches `main`, see [/AGENTS.md, Branching](../../AGENTS.md#branching). There is no long-lived
+`linux` branch, on purpose. `upstream/main` already serves as the clean reference, so a second
 long-lived branch would only add a second drift axis to manage.
 
-Upstream has no releases or version tags — it is a continuously-developed `main`. That means
-there is no "stable point" to sync to; you sync to a commit and record which one.
+Upstream has no releases and no version tags. It is a continuously developed `main`. There is
+therefore no stable point to sync to. You sync to a commit, and you record which one.
 
 ## One-time setup
 
@@ -20,11 +20,11 @@ git fetch upstream
 
 ## Merge cadence
 
-**Merge upstream weekly, or before starting any new phase, whichever comes first.**
+**Merge upstream weekly, or before you start a new phase, whichever comes first.**
 
-This is the single highest-leverage habit in the whole project. The cost of a merge grows
-super-linearly with drift: a week of upstream commits is a routine merge, six months is a
-research project. Do not let the fork drift because a phase is "nearly done".
+This is the highest-leverage habit in the project. Merge cost grows faster than the drift does.
+A week of upstream commits is a routine merge. Six months is a research project. Do not let the
+fork drift because a phase is nearly done.
 
 ## The merge procedure
 
@@ -38,14 +38,14 @@ git log --oneline HEAD..upstream/main
 
 # 3. Check whether upstream touched anything in the registry. This is the whole game.
 git diff --name-only HEAD..upstream/main > /tmp/upstream-changed.txt
-#    Cross-reference /tmp/upstream-changed.txt against TouchedFiles.md.
+#    Compare /tmp/upstream-changed.txt against TouchedFiles.md.
 
 # 4. Merge onto a branch, not directly onto main.
 git checkout main && git pull
 git checkout -b upstream-merge/$( date +%Y-%m-%d )
 git merge upstream/main
 
-# 5. Rebuild both platforms before declaring success.
+# 5. Rebuild both platforms before you call it done.
 #    Windows: msbuild, per README.md
 #    Linux:   python3 Code/Scripts/NinjaGen/NinjaGen.py && ninja -f Build/Linux/Esoterica.ninja
 
@@ -53,28 +53,27 @@ git merge upstream/main
 git push -u origin HEAD && gh pr create --fill
 ```
 
-Step 4 uses a branch because an upstream merge can break either platform, and it reaches `main`
-through a reviewed PR like any other code change — see
-[/AGENTS.md § Branching](../../AGENTS.md#branching).
+Step 4 uses a branch because an upstream merge can break either platform. The merge reaches
+`main` through a reviewed PR, like any other code change. See
+[/AGENTS.md, Branching](../../AGENTS.md#branching).
 
 ### Step 3 is the important one
 
-The registry in [TouchedFiles.md](TouchedFiles.md) exists so that this check is mechanical.
-Because every Linux edit to an upstream file is a 2-line `#elif` addition (Conventions rule 2),
-conflicts are rare and trivially resolved even when upstream does touch the same file —
-you keep both branches.
+The registry in [TouchedFiles.md](TouchedFiles.md) makes this check mechanical. Every Linux edit
+to an upstream file is a 2-line `#elif` addition (Conventions rule 2). Conflicts are therefore
+rare, and easy to resolve even when upstream does touch the same file. You keep both branches.
 
-The genuinely risky cases, which need real attention on every merge:
+These cases carry real risk, and need attention on every merge:
 
-| Upstream change | Consequence | Mitigation |
+| Upstream change | Consequence | What to do |
 |---|---|---|
-| A new `#if _WIN32` guard in a shared file | Linux build breaks with a link error at best, silently wrong behaviour at worst | Grep for new `_WIN32` occurrences after each merge (see below) |
-| A new function added to `RHI.h` | `RHI_Vulkan.cpp` no longer implements the full interface → link error | Link error catches it; implement the new function |
-| A signature change in `RHI.h` | `RHI_Vulkan.cpp` breaks | Compile error catches it |
-| A new `.vcxproj` project added to `.slnx` | Silently absent from the Linux build | Generator should warn on unrecognised projects |
-| A new source file with an unrecognised platform suffix | Silently excluded or wrongly included | Generator should warn on unknown suffixes |
-| A new `External/` dependency | Linux build cannot find it | Update [03-Dependencies.md](03-Dependencies.md) |
-| Upstream renames a `Platform/` directory | Your `_Linux.cpp` is orphaned | Compile error catches it |
+| A new `#if _WIN32` guard in a shared file | The Linux build breaks with a link error, or worse, behaves wrongly and says nothing | Grep for new `_WIN32` matches after each merge. See below. |
+| A new function in `RHI.h` | `RHI_Vulkan.cpp` no longer implements the full interface, so the link fails | The link error catches it. Implement the new function. |
+| A signature change in `RHI.h` | `RHI_Vulkan.cpp` breaks | The compile error catches it. |
+| A new `.vcxproj` project in `.slnx` | The Linux build silently omits it | The generator warns on projects it does not recognize. |
+| A new source file with an unknown platform suffix | The build silently excludes it, or wrongly includes it | The generator warns on unknown suffixes. |
+| A new `External/` dependency | The Linux build cannot find it | Update [03-Dependencies.md](03-Dependencies.md). |
+| Upstream renames a `Platform/` directory | Your `_Linux.cpp` is orphaned | The compile error catches it. |
 
 ### Post-merge audit
 
@@ -94,45 +93,45 @@ sibling, add it, and update the registry.
 Also re-check the invariant that makes the build generator work:
 
 ```bash
-# Should be 0. A non-zero count means upstream started using per-config file exclusion,
+# Should be 0. A non-zero count means upstream started to use per-config file exclusion,
 # which the generator does not model.
 grep -c 'ExcludedFromBuild' Code/*/*.vcxproj Code/*/*/*.vcxproj | grep -v ':0'
 ```
 
 ## Special case: `Code/Scripts/NinjaGen/NinjaGen.py`
 
-This is the one upstream file this port **substantially rewrites** rather than minimally
-edits. That is a deliberate exception:
+This is the one upstream file that the port **rewrites** instead of editing minimally. That is
+a deliberate exception:
 
-- It is a stale, non-functional experiment upstream — it parses the old `.sln` format the repo
-  no longer uses, and emits no link rules or library flags at all. It cannot currently run.
-- It is not part of the shipped build; nothing depends on it.
-- Upstream is unlikely to develop it further, precisely because it is dead.
-- Rewriting it is far cheaper than maintaining a parallel CMake tree that must be hand-synced
-  against `.vcxproj` file lists on every merge.
+- Upstream's copy is a stale, broken experiment. It parses the old `.sln` format that the repo
+  no longer uses, and it emits no link rules and no library flags. It cannot run.
+- It is not part of the shipped build. Nothing depends on it.
+- Upstream is unlikely to develop it further, exactly because it is dead.
+- Rewriting it costs far less than maintaining a parallel CMake tree that someone must sync
+  against the `.vcxproj` file lists on every merge.
 
-Accept that this one file will conflict wholesale if upstream ever revives it, and that
-resolving that conflict means re-reading upstream's version and deciding. Everything else in
-the port stays minimal-diff.
+Accept that this one file will conflict wholesale if upstream ever revives it. Resolving that
+conflict then means reading upstream's version and making a decision. Everything else in the
+port stays a minimal diff.
 
 ## What to do when a merge conflict is not trivial
 
-1. **Do not resolve by deleting the Linux side.** That silently regresses the port.
-2. **Do not resolve by deleting the upstream side.** That silently forks behaviour and the
-   next merge is worse.
-3. Understand what upstream changed and why, then re-apply the Linux intent on top of the new
+1. **Do not resolve by deleting the Linux side.** That regresses the port silently.
+2. **Do not resolve by deleting the upstream side.** That forks behavior silently, and the next
+   merge is worse.
+3. Work out what upstream changed and why. Then re-apply the Linux intent on top of the new
    upstream shape.
-4. Record the resolution in [Progress.md](Progress.md) under "Merge notes" — especially if
-   upstream restructured something the plan assumed.
+4. Record the resolution in [Progress.md](Progress.md) under "Merge notes". This matters most
+   when upstream restructured something the plan assumed.
 
 ## Recording sync points
 
-Append to the table below on every merge. This is the fork's provenance record; without it,
-"why does this file look like that" becomes unanswerable.
+Append to the table below on every merge. This is the fork's provenance record. Without it, "why
+does this file look like that" has no answer.
 
 | Date | Upstream commit | Notes |
 |---|---|---|
-| 2026-08-13 | `6813cf9` | Fork point for the Linux port plan. Survey in [README.md](README.md) reflects this commit. |
+| 2026-08-13 | `6813cf9` | Fork point for the Linux port plan. The survey in [README.md](README.md) reflects this commit. |
 
 ## Merge notes
 
