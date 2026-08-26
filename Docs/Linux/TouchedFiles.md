@@ -85,6 +85,17 @@ Checked during the survey. Recorded so that nobody investigates them again.
 | File | Change | Phase | Status |
 |---|---|---|---|
 | `.gitignore` | Add `Build/`. The existing entry is lowercase `build/`. Linux filesystems are case-sensitive, so git currently does **not** ignore `Build/`, the MSBuild and ninja output directory. Confirmed with `git check-ignore`. | 0 | planned |
+| `.gitignore` | Add `__pycache__/`. Running the build generator writes bytecode next to it. One line appended, nothing modified. | 0 | done |
+
+## New build generator files
+
+Additive, so no upstream conflict is possible. Listed here because they sit in an upstream
+directory, `Code/Scripts/NinjaGen/`, which Conventions rule 7 designates for build tooling.
+
+| New file | Purpose | Phase |
+|---|---|---|
+| `Code/Scripts/NinjaGen/ProjectParser.py` | Reads `Esoterica.slnx` and the `.vcxproj` files into a build model | 0 |
+| `Code/Scripts/NinjaGen/ProjectParser_Test.py` | Checks for the above | 0 |
 
 ## Root-level scripts (new files that mirror the `.bat` equivalents)
 
