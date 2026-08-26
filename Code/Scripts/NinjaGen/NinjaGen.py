@@ -2,7 +2,7 @@
 from ninja_syntax import Writer
 from pathlib import Path
 
-import copy, os, subprocess, sys
+import copy, os, re, subprocess, sys
 import xml.etree.ElementTree as ET
 
 
@@ -80,106 +80,215 @@ class Project:
     def __init__(self, project_name):
         self.name = project_name
         self.project_type = ''
-        self.configuration_types = set()
+        self.configuration_types = {}
         self.c_source_files = []
         self.cpp_source_files = []
         self.header_files = []
         self.project_references = []
         self.build_dependencies = []
         self.excluded_configs = set()
+        self.props_by_configuration = {}
 
-def build_case_map(base_path):
+def build_case_map(repo_root):
     result = {}
-    for directory, _directories, files in os.walk(base_path):
+    for directory, directories, files in os.walk(repo_root):
+        directories[:] = [ directory for directory in directories if directory not in ( '.git', 'Build', 'External' ) ]
         for filename in files:
             current = Path(directory) / filename
             try:
-                relative = current.relative_to(base_path).as_posix()
+                relative = current.relative_to(repo_root).as_posix()
             except ValueError:
                 continue
-            result.setdefault(relative.lower(), str(current))
+            result.setdefault(relative.lower(), relative)
     return result
 
 
-def resolve_project_file(base_path, case_map, relative_source):
-    candidate = relative_source.replace('\\', '/').lstrip('/')
-    direct = base_path / candidate
-    if direct.is_file():
-        return str(direct)
+# A case fixup reported once is reported once: the same mismatched reference reaches
+# the resolver many times (a sheet is imported per configuration, each re-walking the
+# chain), and repeating the warning 36 times says nothing the first occurrence lacks.
+case_fixup_warned = set()
+
+def resolve_repo_file(case_map, candidate):
+    candidate = os.path.normpath(candidate.replace('\\', '/')).replace(os.sep, '/')
+    if os.path.isfile(candidate):
+        return candidate
 
     actual = case_map.get(candidate.lower())
     if actual is not None:
-        warning(f'{direct} does not exist, but {actual} does; using the on-disk case (upstream case inconsistency)')
+        if candidate not in case_fixup_warned:
+            case_fixup_warned.add(candidate)
+            warning(f'{candidate} does not exist, but {actual} does; using the on-disk case (upstream case inconsistency)')
         return actual
 
-    warning(f'{direct} is listed in the project but does not exist on disk; skipping it')
+    warning(f'{candidate} is listed in the project files but does not exist on disk; skipping it')
     return None
 
 
-def parse_vcxproj(filename):
+def resolve_import(base_path, case_map, source):
+    """Resolve a file reference (ClCompile / ClInclude / props Import) to the path that
+    exists on disk. Paths are repo-root-relative and the lookup is case-insensitive;
+    tooling and per-user imports ($(VCTargetsPath) / $(UserRootDir)) are not part of the
+    repo and resolve to None without a warning."""
+    if '$(UserRootDir)' in source or '$(VCTargetsPath)' in source:
+        return None
+
+    if source.startswith('$(SolutionDir)'):
+        candidate = source[len('$(SolutionDir)'):]
+    elif source.startswith('$(ProjectDir)'):
+        candidate = f'{base_path}/{source[len("$(ProjectDir)"):]}'
+    else:
+        candidate = f'{base_path}/{source}'
+
+    return resolve_repo_file(case_map, candidate)
+
+
+# Every .vcxproj and .props file in the repo is in this MSBuild XML namespace; the
+# .slnx is (intentionally) not, so namespace handling lives in the vcxproj layer only.
+MSBUILD_NS = '{http://schemas.microsoft.com/developer/msbuild/2003}'
+
+CONDITION_RE = re.compile(r"^'\$\((\w+)\)\|\$\((\w+)\)'=='(\w+)\|(\w+)'$")
+
+def configuration_name_from_condition(condition):
+    """Map an MSBuild condition like '$(Configuration)|$(Platform)'=='Debug|x64'' to the
+    configuration name it scopes. Anything else (exists(...) guards, other shapes)
+    returns None, meaning 'not configuration-scoped'."""
+    if not condition:
+        return None
+    match = CONDITION_RE.match(condition)
+    if not match:
+        return None
+    configuration_macro, platform_macro, configuration, _platform = match.groups()
+    if configuration_macro != 'Configuration' or platform_macro != 'Platform':
+        return None
+    return configuration
+
+
+def iter_import_scopes(element):
+    """Yield (scope, Import_element) pairs, where scope is the configuration name from an
+    enclosing ImportGroup condition (or the Import's own condition), or None if the
+    import is not configuration-scoped."""
+    if element.tag == MSBUILD_NS + 'ImportGroup':
+        scope = configuration_name_from_condition(element.get('Condition'))
+        for imp in element.findall(MSBUILD_NS + 'Import'):
+            yield scope, imp
+    elif element.tag == MSBUILD_NS + 'Import':
+        yield configuration_name_from_condition(element.get('Condition')), element
+    else:
+        for child in element:
+            yield from iter_import_scopes(child)
+
+
+def collect_sheet_imports(file_path, case_map, chain, result, active_scope=None):
+    """Follow the <Import> chain of a property sheet, appending (scope, resolved_path)
+    pairs to result. An import's effective scope is its own condition, or the scope it
+    was imported under (MSBuild semantics: a sheet's imports apply wherever the sheet
+    applies). 'chain' is the set of sheets on the current import path, used only to
+    break import cycles; the same sheet may legitimately be imported from several
+    places (different configuration groups included), so there is no global
+    deduplication here - per-configuration deduplication happens at materialisation."""
+    try:
+        tree = ET.parse(file_path)
+    except ET.ParseError as error:
+        warning(f'cannot parse {file_path}: {error}')
+        return
+
+    base_path = str(Path(file_path).parent).replace(os.sep, '/')
+    for scope, imp in iter_import_scopes(tree.getroot()):
+        source = imp.get('Project')
+        if not source:
+            warning(f'empty <Import> Project in {file_path}')
+            continue
+        resolved = resolve_import(base_path, case_map, source)
+        if resolved is None or resolved in chain:
+            continue
+        effective_scope = scope if scope else active_scope
+        result.append((effective_scope, resolved))
+        collect_sheet_imports(resolved, case_map, chain | { resolved }, result, effective_scope)
+
+
+def parse_vcxproj(filename, case_map, configuration_names):
     file_path = Path(filename)
-    base_path = file_path.parent
+    base_path = str(file_path.parent).replace(os.sep, '/')
 
     result = Project(file_path.stem)
-    case_map = build_case_map(base_path)
 
-    with open(filename) as f:
-        for line in f.readlines():
-            line = line.strip()
+    tree = ET.parse(filename)
+    root = tree.getroot()
 
-            if line.startswith('<ClCompile Include='):
-                index0 = line.find('"') + 1
-                index1 = line.rfind('"')
+    # File items live in <ItemGroup>; the same element names inside
+    # <ItemDefinitionGroup> are per-item compiler settings, not files.
+    for item_group in root.findall(MSBUILD_NS + 'ItemGroup'):
+        for item in item_group.findall(MSBUILD_NS + 'ClCompile'):
+            include = item.get('Include')
+            if not include:
+                warning(f'empty <ClCompile> Include in {filename}')
+                continue
+            resolved = resolve_import(base_path, case_map, include)
+            if resolved is None:
+                continue
+            if include.endswith('.cpp'):
+                result.cpp_source_files.append(resolved)
+            elif include.endswith('.c'):
+                result.c_source_files.append(resolved)
+            else:
+                warning(f'unexpected ClCompile source {include} in {filename}')
 
-                source_file = line[index0:index1].replace('\\', '/');
+        for item in item_group.findall(MSBUILD_NS + 'ClInclude'):
+            include = item.get('Include')
+            if not include:
+                warning(f'empty <ClInclude> Include in {filename}')
+                continue
+            resolved = resolve_import(base_path, case_map, include)
+            if resolved is None:
+                continue
+            if include.endswith('.h') or include.endswith('.hpp') or include.endswith('.inl'):
+                result.header_files.append(resolved)
+            else:
+                warning(f'unexpected ClInclude header {include} in {filename}')
 
-                resolved_file = resolve_project_file(base_path, case_map, source_file)
-                if resolved_file is None:
-                    continue
+        for item in item_group.findall(MSBUILD_NS + 'ProjectReference'):
+            include = item.get('Include')
+            if not include:
+                warning(f'empty <ProjectReference> Include in {filename}')
+                continue
+            result.project_references.append(Path(include.replace('\\', '/')).stem)
 
-                if source_file.endswith('.cpp'):
-                    result.cpp_source_files.append(resolved_file)
-                elif source_file.endswith('.c'):
-                    result.c_source_files.append(resolved_file)
-                else:
-                    print(f'Unknown file {filename} {source_file}')
+    for element in root.iter(MSBUILD_NS + 'PropertyGroup'):
+        configuration_name = configuration_name_from_condition(element.get('Condition'))
+        if configuration_name is None:
+            continue
+        configuration_type = element.find(MSBUILD_NS + 'ConfigurationType')
+        if configuration_type is not None and configuration_type.text:
+            result.configuration_types[configuration_name] = configuration_type.text.strip()
 
-            if line.startswith('<ClInclude Include='):
-                index0 = line.find('"') + 1
-                index1 = line.rfind('"')
+    import_pairs = []
+    for scope, imp in iter_import_scopes(root):
+        source = imp.get('Project')
+        if not source:
+            warning(f'empty <Import> Project in {filename}')
+            continue
+        resolved = resolve_import(base_path, case_map, source)
+        if resolved is None:
+            continue
+        import_pairs.append((scope, resolved))
+        collect_sheet_imports(resolved, case_map, { resolved }, import_pairs, scope)
 
-                source_file = line[index0:index1].replace('\\', '/');
+    for configuration_name in configuration_names:
+        sheets = { path for scope, path in import_pairs if scope is None or scope == configuration_name }
+        result.props_by_configuration[configuration_name] = sorted(sheets)
 
-                resolved_file = resolve_project_file(base_path, case_map, source_file)
-                if resolved_file is None:
-                    continue
+    types = set(result.configuration_types.values())
+    if types <= { 'Application' } and types:
+        result.project_type = 'Exe'
+    elif types <= { 'DynamicLibrary', 'StaticLibrary' } and types:
+        # Mixed per-configuration types (Esoterica.Base is DynamicLibrary in Debug/Release,
+        # StaticLibrary in Shipping) still build as a library until P0.5 splits the output.
+        result.project_type = 'Lib'
+    elif not types:
+        result.project_type = ''
+    else:
+        result.project_type = None
 
-                if source_file.endswith('.h') or source_file.endswith('.hpp') or source_file.endswith('.inl'):
-                    result.header_files.append(resolved_file)
-                else:
-                    print(f'Unknown file {filename} {source_file}')
-
-            if line.startswith('<ProjectReference Include="'):
-                index0 = line.find('"') + 1
-                index1 = line.rfind('"')
-
-                reference_file = line[index0:index1].replace('\\', '/');
-                reference_project = str(Path(reference_file).stem)
-
-                result.project_references.append(reference_project)
-
-            if line.startswith('<ConfigurationType>'):
-                index0 = line.find('>') + 1
-                index1 = line.rfind('<')
-
-                project_type = line[index0:index1]
-                result.configuration_types.add(project_type)
-                if project_type == 'StaticLibrary' or project_type == 'DynamicLibrary':
-                    result.project_type = 'Lib'
-                elif project_type == 'Application':
-                    result.project_type = 'Exe'
-                else:
-                    result.project_type = None
     return result
 
 class SlnxProject:
@@ -248,7 +357,7 @@ def parse_slnx(filename):
     return configuration_names, entries
 
 
-def parse_projects(filename):
+def parse_projects(filename, case_map):
     configuration_names, entries = parse_slnx(filename)
 
     recognized_types = { 'Application', 'DynamicLibrary', 'StaticLibrary', 'Makefile' }
@@ -262,7 +371,7 @@ def parse_projects(filename):
             note(f'skipping {entry.path} - <Build Project="false"/> in the solution')
             continue
 
-        project = parse_vcxproj(entry.path)
+        project = parse_vcxproj(entry.path, case_map, configuration_names)
         project.build_dependencies = entry.build_dependencies
         project.excluded_configs = entry.excluded_configs
 
@@ -270,7 +379,7 @@ def parse_projects(filename):
             note(f'skipping {entry.path} - no ClCompile entries (NMAKE wrapper or non-C++ project)')
             continue
 
-        unrecognised = project.configuration_types - recognized_types
+        unrecognised = set(project.configuration_types.values()) - recognized_types
         if unrecognised:
             warning(f'{entry.path} uses ConfigurationType {sorted(unrecognised)}; the generator does not recognise it, skipping')
             continue
@@ -358,7 +467,8 @@ all_toolchains = [
 esoterica_flags = '-ICode/Base/ThirdParty/EA/EABase/include/Common -ICode/Base/ThirdParty/EA/EASTL/Include -ICode/Base/ThirdParty/imgui -IExternal/Optick/include'
 esoterica_flags_msvc = esoterica_flags.replace('-I', '/I')
 
-configuration_names, all_projects = parse_projects('Esoterica.slnx')
+case_map = build_case_map('.')
+configuration_names, all_projects = parse_projects('Esoterica.slnx', case_map)
 
 configuration_flags_by_name = {
     'Debug':    (f'{esoterica_flags} -Wall -O0 -ICode -DEE_DEBUG=1',             ''),
