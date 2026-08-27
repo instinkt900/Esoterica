@@ -11,6 +11,9 @@ namespace EE
     class SystemRegistry;
     class EntityWorldUpdateContext;
     class EntityComponent;
+    // Used by CreateAdditionalRequiredComponents below. MSVC finds it through delayed lookup;
+    // standard C++ needs the declaration visible at that point.
+    class Entity;
 
     namespace EntityModel
     {

@@ -77,6 +77,14 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
 | `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`, with an `#else` including `<immintrin.h>`. The MSVC header is where `_tzcnt_u64` and `_lzcnt_u64` come from on Windows; clang has them in `<immintrin.h>`. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
 
+## Phase 3 - Resource Compiler
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Engine/Entity/EntitySystem.h` | Forward-declare `class Entity;`. It is used in the inline body of `CreateAdditionalRequiredComponents` and never declared. MSVC's delayed lookup finds it; standard C++ needs it visible. 1 line added. | 3 | done |
+| `Code/Base/Resource/ResourcePtr.h` | Add `TResourcePtr<T>::operator=( ResourceID const& )`. Assigning a `ResourceID` was ambiguous: it converts to `ResourcePtr`, which then matches both the existing `operator=` and the implicit copy assignment reached through the converting constructor. An exact match removes the choice, with no behaviour change. | 3 | done |
+| `Code/Engine/Debug/Widgets/SystemLogWidget.cpp` | `SomeChildrenChecked = -1` to `uint64_t( -1 )`. The enum has a `uint64_t` underlying type, so `-1` narrows, which MSVC accepts and standard C++ does not. Same bits. | 3 | done |
+
 ## Phase 2 - Reflector
 
 | File | Change | Phase | Status |
