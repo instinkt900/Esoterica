@@ -84,6 +84,12 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Engine/Entity/EntitySystem.h` | Forward-declare `class Entity;`. It is used in the inline body of `CreateAdditionalRequiredComponents` and never declared. MSVC's delayed lookup finds it; standard C++ needs it visible. 1 line added. | 3 | done |
 | `Code/Base/Resource/ResourcePtr.h` | Add `TResourcePtr<T>::operator=( ResourceID const& )`. Assigning a `ResourceID` was ambiguous: it converts to `ResourcePtr`, which then matches both the existing `operator=` and the implicit copy assignment reached through the converting constructor. An exact match removes the choice, with no behaviour change. | 3 | done |
 | `Code/Engine/Debug/Widgets/SystemLogWidget.cpp` | `SomeChildrenChecked = -1` to `uint64_t( -1 )`. The enum has a `uint64_t` underlying type, so `-1` narrows, which MSVC accepts and standard C++ does not. Same bits. | 3 | done |
+| `Code/Engine/Physics/Components/Component_PhysicsShape.h` | Forward-declare `class PhysicsWorld;`. Only `friend class PhysicsWorld;` declarations introduce the name elsewhere, and a friend declaration does not make a name findable by ordinary lookup. Fixed 5 files at once. | 3 | done |
+| `Code/Engine/Entity/EntityMap.h` | `#include "Entity.h"`. A template member dereferences `Entity*` in a non-dependent expression, so clang needs the complete type at the point of definition; MSVC defers to instantiation. No include cycle: `Entity.h` does not include `EntityMap.h`. | 3 | done |
+| `Code/Engine/Render/Imgui/ImguiRenderer.cpp` | Two sites: `T alignas( 32 ) x;` to `alignas( 32 ) T x;`. `alignas` is a declaration specifier and belongs before the type. MSVC accepts either order. | 3 | done |
+| `Code/Engine/Entity/EntityInitializationContext.h` | Forward-declare `class EntityMap;` inside `namespace EE::EntityModel`. `InitializationContext` says `friend EntityMap;`, and unqualified lookup escaped to the `class EntityMap;` in namespace `EE` at the top of the file - a phantom, since the real class is `EE::EntityModel::EntityMap`. The friendship applied to a class nobody defines. | 3 | done |
+| `Code/Engine/Render/Device/DeviceRenderView.cpp` | `"base/Render/RHI.h"` to `"Base/Render/RHI.h"`. Case mismatch. | 3 | done |
+| `Code/Engine/**`, `Code/EngineTools/**` (6 files) | `<eastl/...>` to `<EASTL/...>`. Case mismatches; the directory is `EASTL`. | 3 | done |
 
 ## Phase 2 - Reflector
 

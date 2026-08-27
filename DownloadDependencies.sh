@@ -58,6 +58,12 @@ requirements_llvm()
     require_command xz xz-utils
 }
 
+requirements_meshoptimizer()
+{
+    require_command cmake cmake
+    require_command ninja ninja-build
+}
+
 requirements_ixwebsocket()
 {
     require_command cmake cmake
@@ -176,6 +182,44 @@ fetch_llvm()
     info "LLVM $( "${target}/bin/llvm-config" --version ) installed"
 }
 
+# MeshOptimizer. Engine and EngineTools use it for mesh simplification and vertex cache
+# optimisation. MeshOptimizer.props points at External/MeshOptimizer/src for headers and
+# External/MeshOptimizer/lib for the library, so the layout here matches that rather than
+# CMake's default install prefix.
+MESHOPT_REPO="https://github.com/zeux/meshoptimizer.git"
+# v1.2, not something older. Engine calls meshopt_buildMeshletsSpatial and
+# meshopt_computePositionExponent, neither of which exists before v0.24.
+MESHOPT_TAG="v1.2"
+
+fetch_meshoptimizer()
+{
+    local target="${EXTERNAL_DIR}/MeshOptimizer"
+
+    if [[ -f "${target}/src/meshoptimizer.h" && -f "${target}/lib/libmeshoptimizer.a" ]]
+    then
+        info "MeshOptimizer already present"
+        return
+    fi
+
+    info "fetching MeshOptimizer ${MESHOPT_TAG}"
+    rm -rf "${target}.src"
+    git clone -q --depth 1 --branch "${MESHOPT_TAG}" "${MESHOPT_REPO}" "${target}.src"
+
+    info "building MeshOptimizer"
+    cmake -S "${target}.src" -B "${target}.src/build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DMESHOPT_BUILD_DEMO=OFF
+    cmake --build "${target}.src/build" --parallel "${BUILD_JOBS}"
+
+    mkdir -p "${target}/src" "${target}/lib"
+    cp "${target}.src"/src/*.h "${target}/src/"
+    find "${target}.src/build" -name 'libmeshoptimizer.a' -exec cp {} "${target}/lib/" \;
+
+    rm -rf "${target}.src"
+    info "MeshOptimizer installed"
+}
+
 # ixWebSocket. Base/Network uses it for the resource server connection.
 IXWEBSOCKET_REPO="https://github.com/machinezone/IXWebSocket.git"
 # v12.0.1, not something older. Base/Network/Servers/NetworkServer_WebSockets.cpp constructs
@@ -248,7 +292,7 @@ fetch_gamenetworkingsockets()
 
 #-------------------------------------------------------------------------
 
-ALL_DEPENDENCIES=( optick ixwebsocket gamenetworkingsockets llvm )
+ALL_DEPENDENCIES=( optick meshoptimizer ixwebsocket gamenetworkingsockets llvm )
 
 list_dependencies()
 {
@@ -258,6 +302,7 @@ list_dependencies()
         local status="not fetched"
         case "${name}" in
             optick)                 [[ -f "${EXTERNAL_DIR}/Optick/include/optick.h" ]] && status="ready" ;;
+            meshoptimizer)          [[ -f "${EXTERNAL_DIR}/MeshOptimizer/lib/libmeshoptimizer.a" ]] && status="ready" ;;
             ixwebsocket)            [[ -f "${EXTERNAL_DIR}/ixwebsocket/include/ixwebsocket/IXWebSocket.h" ]] && status="ready" ;;
             gamenetworkingsockets)  [[ -f "${EXTERNAL_DIR}/GameNetworkingSockets/include/GameNetworkingSockets/steam/steamnetworkingsockets.h" ]] && status="ready" ;;
             llvm)                   [[ -f "${EXTERNAL_DIR}/LLVM/bin/llvm-config" ]] && status="ready ($( "${EXTERNAL_DIR}/LLVM/bin/llvm-config" --version ))" ;;
@@ -287,6 +332,7 @@ main()
     do
         case "${name}" in
             optick)                 fetch_optick ;;
+            meshoptimizer)          fetch_meshoptimizer ;;
             ixwebsocket)            fetch_ixwebsocket ;;
             gamenetworkingsockets)  fetch_gamenetworkingsockets ;;
             llvm)                   fetch_llvm ;;
