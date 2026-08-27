@@ -1,7 +1,3 @@
-// Phase 4 reverses this. Shader reflection needs DXC, which the Linux build does not have yet:
-// this header includes d3d12shader.h and dxcapi.h. Wrapped whole rather than split, so undoing
-// it is deleting two lines. See Docs/Linux/Phases/Phase4-ShaderPipeline.md.
-#ifdef _WIN32
 #include "ShaderReflection_ShaderCompiler.h"
 #include "Applications/Reflector/ReflectedProject.h"
 
@@ -18,10 +14,27 @@ namespace EE::Reflection
     #define DXC_ARG_DEFINE( X ) L"-D", X
     #define DXC_ARG_EMBED_DEBUG L"-Qembed_debug"
 
+    // -Qembed_debug and -Fd name a DXIL debug blob, which the SPIR-V back end has no concept of.
+    // Passing them anyway makes libdxcompiler segfault inside its own SPIR-V code generation
+    // rather than reporting an unknown argument.
+    #if _WIN32
     #define COMMON_DXC_ARGUMENTS_DEBUG( filename ) DXC_ARG_DEBUG, DXC_ARG_EMBED_DEBUG, DXC_ARG_DEBUG_NAME( filename.c_str() ), DXC_ARG_DEFINE( L"EE_DEVELOPMENT_TOOLS" )
+    #else
+    #define COMMON_DXC_ARGUMENTS_DEBUG( filename ) DXC_ARG_DEFINE( L"EE_DEVELOPMENT_TOOLS" )
+    #endif
+
+    // Windows targets DXIL, which is DXC's default. Linux targets Vulkan, so DXC emits SPIR-V
+    // instead. Same compiler, same HLSL, different back end; see
+    // Docs/Linux/Phases/Phase4-ShaderPipeline.md.
+    #if _WIN32
+    #define DXC_ARG_TARGET_BACKEND
+    #else
+    #define DXC_ARG_TARGET_BACKEND L"-spirv", L"-fspv-target-env=vulkan1.3",
+    #endif
 
     #define COMMON_DXC_ARGUMENTS( filename, sourceDir, codeDir )\
             COMMON_DXC_ARGUMENTS_DEBUG( filename ),\
+            DXC_ARG_TARGET_BACKEND\
             DXC_ARG_HLSL_VERSION_2021,\
             DXC_ARG_WARNINGS_ARE_ERRORS,\
             DXC_ARG_OPTIMIZATION_LEVEL3,\
@@ -418,4 +431,3 @@ namespace EE::Reflection
         }
     }
 }
-#endif

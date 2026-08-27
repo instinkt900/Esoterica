@@ -65,22 +65,15 @@ ESOTERICA_INCLUDE_DIRECTORIES = (
     # though no .vcxproj names the sheet. Base/Profiling.h includes <optick.h> unconditionally.
     'External/Optick/include',
 
-    # These two are the Linux stand-in for the Windows SDK.
+    # The Linux stand-in for the Windows SDK.
     #
-    # The Reflector includes <dxcapi.h> and <d3d12shader.h> but imports neither DXC.props nor
-    # anything else that would supply them: on Windows both ship with the Windows SDK and are on
-    # the compiler's default search path. There is no such default here, so the paths are global
-    # rather than attached to a property sheet, which is what makes them reachable from every
-    # project the way the SDK is.
+    # The Reflector includes <dxcapi.h> but imports neither DXC.props nor anything else that
+    # would supply it: on Windows it ships with the Windows SDK and is on the compiler's default
+    # search path. There is no such default here, so the path is global rather than attached to
+    # a property sheet, which is what makes it reachable the way the SDK is.
     #
     # The DXC *library* stays on DXC.props, where the .vcxproj files actually declare it.
     'External/DirectXShaderCompiler/inc/dxc',
-    'External/DirectX-Headers/include/directx',
-    # d3dcommon.h includes "rpc.h", which does not exist off Windows. Only that one file is
-    # taken from DirectX-Headers' stubs: putting the whole wsl/stubs directory on the path makes
-    # its COM shims collide with DXC's own WinAdapter.h, turning one missing header into twenty
-    # redefinition errors. DownloadDependencies.sh isolates it into linux-shims.
-    'External/DirectX-Headers/include/linux-shims',
 )
 
 # EA.props: EASTL_USER_CONFIG_HEADER=$(EE_EASTL_USER_CONFIG_HEADER), whose value already
