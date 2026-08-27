@@ -17,7 +17,7 @@ Status values: `planned` · `done` · `not needed` (checked, and confirmed unnec
 |---|---|
 | Files needing a 2-line `#elif` or `\|\|` addition | 7 |
 | Files needing a whole-body guard wrap (2 lines) | 1 |
-| Files needing a real edit | 3 |
+| Files needing a real edit | 5 |
 | Files confirmed to need **no** change | 3 |
 | **New** files added (no upstream conflict possible) | ~40 |
 
@@ -34,6 +34,8 @@ nothing and guarantees conflicts.
 | `Code/Scripts/NinjaGen/NinjaGen.py` | Large rewrite. A special case, see [01-UpstreamMerges.md](01-UpstreamMerges.md#special-case-codescriptsninjagenninjagenpy). | 0 | planned |
 | `Code/EngineTools/FileSystem/FileSystemWatcher.h` | Line 15: change `#if _WIN32` to `#if _WIN32 \|\| defined( __linux__ )`. One line modified. The private members already use platform-neutral types (`void*`, `uint8_t*`, `unsigned long`), so they need no change. See the note below. | 3 | planned |
 | `Code/EngineTools/FileSystem/FileSystemWatcher.cpp` | Wrap the unguarded `<windows.h>` include block (lines 8-16) in `#ifdef _WIN32`. The rest of the file already sits inside the `#if _WIN32` that starts at line 18. | 3 | planned |
+| `Code/Base/Utils/GlobalRegistryBase.h` | Line 2: `#include "Base\Esoterica.h"` to `#include "Base/Esoterica.h"`. One character. clang does not treat `\` as a path separator in an include, so on Linux the header is simply not found. MSVC accepts `/`, so Windows is unaffected. | 0 | done |
+| `Code/Base/Input/InputDevices/InputDevice_Controller.cpp` | Line 2: `#include "Base\Math\Vector.h"` to `#include "Base/Math/Vector.h"`. Same reason as above. | 0 | done |
 
 ## Two-line guard additions
 
@@ -86,6 +88,7 @@ Checked during the survey. Recorded so that nobody investigates them again.
 |---|---|---|---|
 | `.gitignore` | Add `Build/`. The existing entry is lowercase `build/`. Linux filesystems are case-sensitive, so git currently does **not** ignore `Build/`, the MSBuild and ninja output directory. Confirmed with `git check-ignore`. | 0 | planned |
 | `.gitignore` | Add `__pycache__/`. Running the build generator writes bytecode next to it. One line appended, nothing modified. | 0 | done |
+| `.gitignore` | Add `Build/`, `compile_commands.json`, `.ninja_deps`, `.ninja_log`. The ninja build writes all four, and none were ignored. Appended, nothing modified. | 0 | done |
 
 ## New build generator files
 
@@ -96,7 +99,8 @@ directory, `Code/Scripts/NinjaGen/`, which Conventions rule 7 designates for bui
 |---|---|---|
 | `Code/Scripts/NinjaGen/SyncUpstream.py` | Reads `Esoterica.slnx` and the `.vcxproj` files. Writes and checks `UpstreamProjects.txt` | 0 |
 | `Code/Scripts/NinjaGen/SourceLists.py` | The three-list format, and the build model built from it | 0 |
-| `Code/Scripts/NinjaGen/SourceLists_Test.py` | Checks for both of the above | 0 |
+| `Code/Scripts/NinjaGen/Toolchain.py` | Property sheet and compiler flag translation | 0 |
+| `Code/Scripts/NinjaGen/Checks.py` | The few checks a green build would not catch | 0 |
 | `Code/Scripts/NinjaGen/UpstreamProjects.txt` | Generated snapshot of the Visual Studio projects. Never hand-edited | 0 |
 | `Code/Scripts/NinjaGen/Exclusions.txt` | Upstream sources the Linux build drops | 0 |
 | `Code/Scripts/NinjaGen/LinuxSources.txt` | Sources this fork adds | 0 |
