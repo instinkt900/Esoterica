@@ -90,6 +90,8 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Engine/Entity/EntityInitializationContext.h` | Forward-declare `class EntityMap;` inside `namespace EE::EntityModel`. `InitializationContext` says `friend EntityMap;`, and unqualified lookup escaped to the `class EntityMap;` in namespace `EE` at the top of the file - a phantom, since the real class is `EE::EntityModel::EntityMap`. The friendship applied to a class nobody defines. | 3 | done |
 | `Code/Engine/Render/Device/DeviceRenderView.cpp` | `"base/Render/RHI.h"` to `"Base/Render/RHI.h"`. Case mismatch. | 3 | done |
 | `Code/Engine/**`, `Code/EngineTools/**` (6 files) | `<eastl/...>` to `<EASTL/...>`. Case mismatches; the directory is `EASTL`. | 3 | done |
+| `Code/Base/Types/Path.h` | `TPath::IsParentOf` called `potentialChild.size()` and `potentialChild.m_path[i]`. `TPath` has neither: the accessor is `Size()` and the member is `m_elements`. The function has evidently never been instantiated, so MSVC never looked inside it. Fixing it cleared 96 of EngineTools' 110 errors. | 3 | done |
+| `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. 552 lines of COM `IFileDialog`. New sibling `SystemDialogs_Linux.cpp` provides the symbols. | 3 | done |
 
 ## Phase 4 (brought forward) - Shader pipeline
 
