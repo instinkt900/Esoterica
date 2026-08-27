@@ -10,12 +10,13 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 0 (in progress).** P0.1 to P0.4 are done. The build has a source model, in three text
-files under `Code/Scripts/NinjaGen/`. It does not write a ninja file yet. P0.5 to P0.8 do that.
+**Phase: 0 (in progress).** P0.1 to P0.8 and P0.10 are done. `ninja` builds Linux targets and
+reaches the compiler. It does not compile yet, which is the expected end state for Phase 0. Only
+P0.9, `DownloadDependencies.sh`, is left.
 
 | Phase | Status |
 |---|---|
-| 0 - Build System | in progress (P0.1-P0.4 done, P0.5-P0.10 open) |
+| 0 - Build System | in progress (P0.1-P0.8 and P0.10 done, P0.9 open) |
 | 1 - Base Platform Layer | not started |
 | 2 - Reflector | not started |
 | 3 - Resource Compiler | not started |
@@ -29,13 +30,10 @@ Windows build status: **unchanged from upstream** (no edits landed yet).
 
 ## In flight
 
-**P0.5 to P0.8** - flags, library linking, output layout, `compile_commands.json`. This is the
-work that makes `ninja -f Build/Linux/Esoterica.ninja` run, and it meets most of the Phase 0
-acceptance criteria. `NinjaGen.py` is still the stale upstream script until then. It must call
-`SyncUpstream.py` in check mode first and stop on a non-zero exit.
+**P0.9** - `DownloadDependencies.sh`. Independent of the generator. Phase 0 needs only libunwind,
+libdw, Freetype and SQLite; the rest defer to the phase that first needs them.
 
-**P0.9 and P0.10** - `DownloadDependencies.sh` and the `.gitignore` fix. Independent of the
-generator, so they can go in parallel.
+After that, Phase 0 is done and **Phase 1** starts on the worklist below.
 
 ---
 
@@ -51,6 +49,100 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-27 - P0.5-P0.8, P0.10 Ninja emitter, flags, linking
+
+`python3 Code/Scripts/NinjaGen/NinjaGen.py` writes `Build/Linux/Esoterica.ninja` and
+`compile_commands.json`. `ninja -f Build/Linux/Esoterica.ninja` then reaches the compiler.
+**Nothing links, and only one translation unit compiles.** That is the expected end state for
+Phase 0, and the error output is Phase 1's worklist. See below.
+
+- **P0.5 flags.** `Toolchain.py` translates `Esoterica.props`. `-std=c++20`, `-std=c17`,
+  `-fno-exceptions`, `-msse4.2 -mavx`, `-g`, `-fPIC`, `-O0` or `-O2`, `-flto` in Shipping,
+  `-fvisibility=hidden` on shared libraries. `-Wall -Wextra` and **no `-Werror`**, per the phase
+  document. `NOMINMAX`, `WIN32_LEAN_AND_MEAN` and `_CRT_SECURE_NO_WARNINGS` are dropped;
+  `NDEBUG` is kept in every configuration, because upstream conditions it on `$(Platform)`, not
+  on `$(Configuration)`.
+- **P0.6 linking.** All 14 imported property sheets are mapped. `pkg-config` for Freetype,
+  plain `-l` otherwise, `llvm-config` for LLVM. The six dropped sheets are named in the table
+  with no flags, so they are recognised rather than forgotten, and **none contributes an
+  `EE_ENABLE_*` define** (Conventions rule 4).
+- **P0.7 layout.** `Build/Linux_<Config>/` for binaries, `Build/_Temp/Linux_<Config>/<Project>/`
+  for objects, derived from the repo-relative source path. Nine configurations: the three from
+  the `.slnx`, plus ASan, TSan and UBSan on Debug and Release. MSan is dropped.
+- **P0.8 `compile_commands.json`.** Generated with `ninja -t compdb` against the Debug rules
+  only, using the real Linux toolchain. 603 entries.
+- **P0.10 `.gitignore`.** Added `Build/`, `compile_commands.json`, `.ninja_deps`, `.ninja_log`.
+  None of the four was ignored: the existing entry is lowercase `build/`.
+
+Files added:
+
+- `Code/Scripts/NinjaGen/Toolchain.py` - the property sheet and flag translation.
+- `Code/Scripts/NinjaGen/Checks.py` - 20 checks, exits 0. See the decision below on
+  what belongs there.
+
+`Code/Scripts/NinjaGen/NinjaGen.py` is rewritten. It is the one upstream file this port replaces
+wholesale; see [01-UpstreamMerges.md](01-UpstreamMerges.md).
+
+**Upstream files edited, beyond `NinjaGen.py`:** two, both one character, both registered in
+[TouchedFiles.md](TouchedFiles.md).
+
+| File | Change |
+|---|---|
+| `Code/Base/Utils/GlobalRegistryBase.h` | `#include "Base\Esoterica.h"` to `"Base/Esoterica.h"` |
+| `Code/Base/Input/InputDevices/InputDevice_Controller.cpp` | `#include "Base\Math\Vector.h"` to `"Base/Math/Vector.h"` |
+
+clang does not treat `\` as a path separator inside an include, so on Linux neither header was
+found. The first accounted for 43 not-found errors in `Esoterica.Base` on its own. MSVC accepts
+`/`, so Windows is unaffected. This needed escalation, because neither file was in
+the registry.
+
+Acceptance criteria met: **1, 2, 3, 4, 5, 6, 7, 8, 9, 11.** Not met: **10**, the Windows MSBuild
+build, which has not been run. There is no Windows machine on this side.
+
+## The Phase 1 worklist
+
+From `ninja -f Build/Linux/Esoterica.ninja Build/Linux_Debug/libEsoterica.Base.so`. 132
+translation units attempted, 131 failed, 1 compiled clean
+(`Code/Base/ThirdParty/mpack/mpack.c`).
+
+**No error is a generator fault.** There are no missing include paths, no bad flags, and no
+malformed rules. Every one traces to a platform implementation that does not exist yet, and each
+already has a row in [TouchedFiles.md](TouchedFiles.md).
+
+| Errors | Message | Root cause | Fix |
+|---|---|---|---|
+| 1451 | `'__declspec' attributes are not enabled` | `EE_BASE_API` and friends expand to `__declspec(dllexport)` | The six `_Module/API.h` files need their `__attribute__(( visibility( "default" ) ))` branch |
+| 502 | `unknown type name 'size_t'` | `Esoterica.h:55` includes `Platform/Platform_Win32.h` under `#if _WIN32` and has no `#elif` | `Platform_Linux.h`, and the 2-line guard addition |
+| 254 | `unknown type name 'va_list'` | as above | as above |
+| 199 | `use of undeclared identifier 'EE_DEBUG_BREAK'` | defined in `Platform_Win32.h` | `Platform_Linux.h` must define it |
+
+The macros clang names in its expansion notes, in order: `EE_BASE_API` (1473), `EE_TRACE_HALT` (107),
+`EE_UNIMPLEMENTED_FUNCTION` (106), `EE_ASSERT` (92), then the vendored `EASTL_ATOMIC_*` (88),
+`PUGIXML_API` and `PUGIXML_CLASS` (32), and `ENKI_ASSERT` (9). The vendored ones key off
+`_MSC_VER` inside `Code/**/ThirdParty/`, which Conventions rule 5 puts out of bounds; fix them
+with a `-D` in the generator, not by editing the source.
+
+Do **not** add `-fdeclspec` to make these go away. It hides the `_Module/API.h` work rather than
+doing it.
+
+What the next session needs to know:
+
+- **`NinjaGen.py` runs `SyncUpstream.py` in check mode first and stops on a non-zero exit.**
+  There is deliberately no flag to skip it.
+- **The generator reports problems but does not fail on them.** 11 against this tree, all
+  expected: `External/RenderDoc` and `llvm-config` are deferred dependencies, and
+  `Esoterica.Applications.Engine` has no sources until Phase 6.
+- **`clang/AST/Ast.h` is not found** when building the Reflector. That is Phase 2's LLVM
+  dependency, and note the casing: the real header is `clang/AST/AST.h`, so this may be another
+  case mismatch. Check when LLVM is installed.
+- Sanitizer builds exist for Debug and Release only. `Build/Linux_Debug_ASan/` and so on.
+- **A whole-tree `ninja` run gets killed on a small machine.** `ninja -n` walks all 588 Debug
+  edges and the graph is valid, but a real build at the default `-j8` on 7 GB of RAM dies partway
+  with no ninja summary line, which looks like the OOM killer. clang holds a lot of memory per
+  translation unit at `-O0` with `-g`. Use `-j2` or `-j4` on a small machine. This is an
+  environment limit, not a generator problem: `Esoterica.Base` on its own completes reliably and
+  is what Phase 1 targets.
 
 ### 2026-08-27 - P0.1-P0.4 Source lists and the upstream sync tool
 
@@ -82,7 +174,7 @@ Files added:
 - `Code/Scripts/NinjaGen/SourceLists.py` - the list format and the build model.
   `python3 Code/Scripts/NinjaGen/SourceLists.py` prints the model and reports problems.
 - `Code/Scripts/NinjaGen/SyncUpstream.py` - the only reader of the Visual Studio projects.
-- `Code/Scripts/NinjaGen/SourceLists_Test.py` - 42 checks, no test framework, exits 0.
+- `Code/Scripts/NinjaGen/Checks.py` - the generator's checks. No test framework.
 - The three list files above.
 
 Upstream files edited: **none.** `NinjaGen.py` is untouched and still stale. P0.5 rewrites it.
@@ -125,6 +217,58 @@ the reasoning, not just the outcome.
 **Rationale:** ...
 **Alternatives rejected:** ...
 -->
+
+### 2026-08-27 - The build is the test. Check only what a green build would hide
+
+**Context:** The first cut of the generator carried 520 lines of checks against 1441 lines of
+generator, 27% of the Python. Most of it re-checked things the build proves anyway: that a rule
+passes `-std=c++20`, that `Esoterica.Base` resolves to a `.so`, that link order is topological,
+that ninja parses the file.
+
+**Decision:** One `Code/Scripts/NinjaGen/Checks.py`, 192 lines, 20 checks. **Add a check only
+when the failure would leave a green build behind.** Everything else is the compiler's job.
+
+What that leaves:
+
+| Check | Why the build cannot catch it |
+|---|---|
+| Sync drift detection | The whole safety mechanism of the three-list design. It fails silently until an upstream merge, months later. |
+| Determinism of the ninja file | Building twice never reveals a non-deterministic build file. Acceptance criterion 6. |
+| Stale exclusion globs | A glob that stopped matching silently readmits a file. |
+| Glob semantics | A wrong glob silently includes or excludes sources, and the build may still succeed. |
+| Property sheet coverage | An unmapped sheet surfaces much later as a link error naming nothing useful. |
+| No `.vcxproj` modified | The prime directive. Nothing about a successful build says the project files are untouched. |
+| `-ffast-math` never appears | It changes float behaviour without failing anything. |
+
+**Rationale:** A compile error is louder, more specific and cheaper than any assertion that
+duplicates it. Time spent asserting what the compiler already tells you is time not spent
+getting Linux to build, which is the actual goal.
+
+**Alternatives rejected:** Full coverage of the generator, which is what the first cut drifted
+towards. No checks at all, which would drop the drift detection that makes the three-list design
+safe in the first place.
+
+### 2026-08-27 - Sanitizers on Debug and Release, never on Shipping
+
+**Context:** The stale upstream generator built ASan, MSan and TSan variants of all three
+configurations.
+**Decision:** ASan, TSan and UBSan on Debug and Release. None on Shipping. MSan is dropped
+entirely.
+**Rationale:** Shipping is the `-flto` configuration. Instrumenting it measures a binary nobody
+ships and takes far longer to build. MSan needs an instrumented libc++ to give usable output,
+and without one it buries the reader in false positives from the standard library.
+**Alternatives rejected:** Sanitizing every configuration, which triples the size of the ninja
+file to describe builds nobody runs.
+
+### 2026-08-27 - One compile rule per project and configuration
+
+**Context:** Compiler flags vary by project and by configuration, and ninja has no scoping
+between the two.
+**Decision:** Emit a `cc_<Project>_<Config>` and `cxx_<Project>_<Config>` rule with the flags
+baked into the command, so each build edge is a single line.
+**Rationale:** The alternative is a per-edge variable, which adds an indented line to every one
+of the 5300 edges and roughly doubles the file. 234 rules cost nothing to parse.
+**Alternatives rejected:** One rule per configuration with per-edge flag variables.
 
 ### 2026-08-27 - Three source lists, not a source list derived from the `.vcxproj` files live
 
