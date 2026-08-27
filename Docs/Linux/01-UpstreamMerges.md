@@ -70,8 +70,9 @@ These cases carry real risk, and need attention on every merge:
 | A new `#if _WIN32` guard in a shared file | The Linux build breaks with a link error, or worse, behaves wrongly and says nothing | Grep for new `_WIN32` matches after each merge. See below. |
 | A new function in `RHI.h` | `RHI_Vulkan.cpp` no longer implements the full interface, so the link fails | The link error catches it. Implement the new function. |
 | A signature change in `RHI.h` | `RHI_Vulkan.cpp` breaks | The compile error catches it. |
-| A new `.vcxproj` project in `.slnx` | The Linux build silently omits it | The generator warns on projects it does not recognize. |
-| A new source file with an unknown platform suffix | The build silently excludes it, or wrongly includes it | The generator warns on unknown suffixes. |
+| A new `.vcxproj` project in `.slnx` | The Linux build silently omits it | `SyncUpstream.py` fails until the project is synced into `UpstreamProjects.txt`. |
+| A new source file, of any name | The build silently excludes it, or wrongly includes it | `SyncUpstream.py` fails until it is synced, and the sync diff names it. Decide then whether it needs an entry in `Exclusions.txt`. |
+| Upstream deletes or renames a source you excluded | A stale glob in `Exclusions.txt` quietly stops doing its job | `SourceLists.py` reports any exclusion glob that matches nothing. |
 | A new `External/` dependency | The Linux build cannot find it | Update [03-Dependencies.md](03-Dependencies.md). |
 | Upstream renames a `Platform/` directory | Your `_Linux.cpp` is orphaned | The compile error catches it. |
 
@@ -90,11 +91,28 @@ git diff HEAD@{1} --unified=0 -- 'Code/**' \
 Any hit means a shared file grew a Windows-only path. Decide whether Linux needs an `#elif`
 sibling, add it, and update the registry.
 
-Also re-check the invariant that makes the build generator work:
+Then resync the source list. This is the step that decides what the Linux build compiles, so
+read the diff rather than skimming it:
+
+```bash
+python3 Code/Scripts/NinjaGen/SyncUpstream.py --update
+git diff Code/Scripts/NinjaGen/UpstreamProjects.txt
+```
+
+Every added `src` line is a new source that the Linux build will now compile. For each one,
+decide whether it belongs in `Exclusions.txt`. Every removed line is a source upstream dropped;
+check that no glob in `Exclusions.txt` existed only for it.
+
+```bash
+# Reports any exclusion glob that no longer matches anything.
+python3 Code/Scripts/NinjaGen/SourceLists.py
+```
+
+Also re-check the invariant that makes the sync work:
 
 ```bash
 # Should be 0. A non-zero count means upstream started to use per-config file exclusion,
-# which the generator does not model.
+# which the sync does not model.
 grep -c 'ExcludedFromBuild' Code/*/*.vcxproj Code/*/*/*.vcxproj | grep -v ':0'
 ```
 
@@ -107,8 +125,8 @@ a deliberate exception:
   no longer uses, and it emits no link rules and no library flags. It cannot run.
 - It is not part of the shipped build. Nothing depends on it.
 - Upstream is unlikely to develop it further, exactly because it is dead.
-- Rewriting it costs far less than maintaining a parallel CMake tree that someone must sync
-  against the `.vcxproj` file lists on every merge.
+- Rewriting it costs far less than maintaining a parallel CMake tree, which would duplicate the
+  `.vcxproj` file lists with nothing checking the two against each other.
 
 Accept that this one file will conflict wholesale if upstream ever revives it. Resolving that
 conflict then means reading upstream's version and making a decision. Everything else in the

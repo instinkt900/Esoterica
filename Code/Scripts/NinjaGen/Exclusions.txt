@@ -1,0 +1,40 @@
+# Upstream sources the Linux build drops.
+#
+# Hand-maintained. One glob or path per line, matched against the repo-relative path.
+# '#' starts a comment.
+#
+#   **/     zero or more leading directories
+#   **      anything, including '/'
+#   *       anything except '/'
+#
+# A pattern that matches nothing is reported as a problem, because it is usually a leftover
+# from an upstream rename. Keep this file honest: every line here should be doing work.
+#
+# Say *why* a file is excluded. The next person to read an upstream merge diff needs it.
+
+#-------------------------------------------------------------------------
+# Windows platform implementations
+#-------------------------------------------------------------------------
+
+# Upstream puts platform code in <System>/Platform/<System>_Win32.cpp. Each of these gets a
+# _Linux sibling, listed in LinuxSources.txt. See Docs/Linux/00-Conventions.md rule 1.
+**/*_Win32.cpp
+
+# Application entry points live in a Win32/ directory rather than taking a suffix. The glob
+# above already covers today's files; this one catches an unsuffixed file added to those
+# directories later.
+**/Win32/**
+
+#-------------------------------------------------------------------------
+# Direct3D 12
+#-------------------------------------------------------------------------
+
+# The whole Direct3D 12 backend, 6084 lines. It carries no platform suffix and no #if _WIN32
+# guard, so nothing but this line keeps it out of a Linux build. RHI.h is API-agnostic, so the
+# Vulkan backend is a sibling file rather than a change to the interface.
+# Phase 5 adds it. See Docs/Linux/Phases/Phase5-VulkanRHI.md.
+Code/Base/Render/RHI_Direct3D12.cpp
+
+# AMD's Direct3D 12 memory allocator, vendored by upstream. The Vulkan equivalent is VMA, which
+# arrives as an External/ dependency in Phase 5 rather than a vendored source.
+Code/Base/ThirdParty/D3D12MemoryAllocator/**

@@ -1,0 +1,800 @@
+# GENERATED FILE - DO NOT EDIT BY HAND.
+#
+# Regenerate with:   python3 Code/Scripts/NinjaGen/SyncUpstream.py --update
+# Check it is current: python3 Code/Scripts/NinjaGen/SyncUpstream.py
+#
+# This is the Linux build's snapshot of the Visual Studio projects: every source upstream
+# builds, plus the per-configuration facts the generator needs. The build reads this file
+# instead of parsing XML, so a new upstream source cannot enter the build unreviewed.
+#
+# Hand edits belong in the other two lists:
+#   Exclusions.txt    upstream sources the Linux build drops
+#   LinuxSources.txt  sources this fork adds
+#
+# Source paths are relative to each project's directory, and are the real on-disk spelling.
+# Some .vcxproj entries disagree with the case on disk, which Windows ignores and Linux does
+# not, so the sync corrects them here once rather than at every build.
+
+configurations Debug Release Shipping
+platform x64
+
+project Esoterica.Applications.BuildGenerator
+  file Code/Applications/BuildGenerator/Esoterica.Applications.BuildGenerator.vcxproj
+  type Debug Executable
+  type Release Executable
+  type Shipping Executable
+  skip Shipping
+  sheet Debug Esoterica
+  sheet Release Esoterica
+  sheet Shipping Esoterica
+  src BuildGeneratorApplication.cpp
+
+project Esoterica.Applications.Editor
+  file Code/Applications/Editor/Esoterica.Applications.Editor.vcxproj
+  type Debug Executable
+  type Release Executable
+  type Shipping Executable
+  skip Shipping
+  ref Esoterica.Engine.Tools
+  ref Esoterica.Engine.Runtime
+  ref Esoterica.Game.Tools
+  ref Esoterica.Game.Runtime
+  ref Esoterica.Base
+  sheet Debug Esoterica
+  sheet Release Esoterica
+  sheet Shipping Esoterica
+  src EditorTool_GamePreviewer.cpp
+  src EditorUI.cpp
+  src Win32/EditorApplication_Win32.cpp
+
+project Esoterica.Applications.Engine
+  file Code/Applications/Engine/Esoterica.Applications.Engine.vcxproj
+  type Debug Executable
+  type Release Executable
+  type Shipping Executable
+  ref Esoterica.Engine.Runtime
+  ref Esoterica.Game.Runtime
+  ref Esoterica.Base
+  sheet Debug Esoterica MeshOptimizer
+  sheet Release Esoterica MeshOptimizer
+  sheet Shipping Esoterica MeshOptimizer
+  src Win32/EngineApplication_Win32.cpp
+
+project Esoterica.Applications.Reflector
+  file Code/Applications/Reflector/Esoterica.Applications.Reflector.vcxproj
+  type Debug Executable
+  type Release Executable
+  type Shipping Executable
+  skip Shipping
+  ref Esoterica.Base
+  sheet Debug Esoterica LLVM
+  sheet Release Esoterica LLVM
+  sheet Shipping Esoterica LLVM
+  src ReflectedHeader.cpp
+  src ReflectedMacro.cpp
+  src ReflectedProject.cpp
+  src ReflectedShader.cpp
+  src Reflector.cpp
+  src ReflectorApplication.cpp
+  src ReflectorSettings.cpp
+  src ShaderReflection/ShaderReflection_CodeGenerator.cpp
+  src ShaderReflection/ShaderReflection_ShaderCompiler.cpp
+  src ShaderReflection/ShaderReflection_ShaderInputReflector.cpp
+  src ShaderReflection/ShaderReflection_ShaderParser.cpp
+  src TypeReflection/Clang/ClangParser.cpp
+  src TypeReflection/Clang/ClangParserContext.cpp
+  src TypeReflection/Clang/ClangUtils.cpp
+  src TypeReflection/Clang/ClangVisitors_Enum.cpp
+  src TypeReflection/Clang/ClangVisitors_Macro.cpp
+  src TypeReflection/Clang/ClangVisitors_Structure.cpp
+  src TypeReflection/Clang/ClangVisitors_TranslationUnit.cpp
+  src TypeReflection/TypeReflection_CodeGenerator.cpp
+  src TypeReflection/TypeReflection_ReflectedDataFileType.cpp
+  src TypeReflection/TypeReflection_ReflectedProperty.cpp
+  src TypeReflection/TypeReflection_ReflectedResourceType.cpp
+  src TypeReflection/TypeReflection_ReflectedType.cpp
+  src TypeReflection/TypeReflection_ReflectionDatabase.cpp
+
+project Esoterica.Applications.ResourceCompiler
+  file Code/Applications/ResourceCompiler/Esoterica.Applications.ResourceCompiler.vcxproj
+  type Debug Executable
+  type Release Executable
+  type Shipping Executable
+  skip Shipping
+  ref Esoterica.Engine.Tools
+  ref Esoterica.Engine.Runtime
+  ref Esoterica.Game.Tools
+  ref Esoterica.Game.Runtime
+  ref Esoterica.Base
+  sheet Debug Esoterica
+  sheet Release Esoterica
+  sheet Shipping Esoterica
+  src ResourceCompilerApplication.cpp
+
+project Esoterica.Applications.ResourceServer
+  file Code/Applications/ResourceServer/Esoterica.Applications.ResourceServer.vcxproj
+  type Debug Executable
+  type Release Executable
+  type Shipping Executable
+  skip Shipping
+  ref Esoterica.Engine.Tools
+  ref Esoterica.Engine.Runtime
+  ref Esoterica.Game.Tools
+  ref Esoterica.Game.Runtime
+  ref Esoterica.Base
+  sheet Debug Esoterica SQLite
+  sheet Release Esoterica SQLite
+  sheet Shipping Esoterica LivePP SQLite
+  src ResourceServer.cpp
+  src ResourceServerApplication.cpp
+  src ResourceServerContext.cpp
+  src ResourceServerRequest.cpp
+  src ResourceServerUI.cpp
+  src ResourceServerWorker.cpp
+
+project Esoterica.Applications.Tester
+  file Code/Applications/Tester/Esoterica.Applications.Tester.vcxproj
+  type Debug Executable
+  type Release Executable
+  type Shipping Executable
+  skip Shipping
+  ref Esoterica.Base
+  ref Esoterica.Engine.Tools
+  ref Esoterica.Engine.Runtime
+  ref Esoterica.Game.Tools
+  ref Esoterica.Game.Runtime
+  sheet Debug Esoterica
+  sheet Release Esoterica
+  sheet Shipping Esoterica
+  src Main.cpp
+
+project Esoterica.Base
+  file Code/Base/Esoterica.Base.vcxproj
+  type Debug SharedLibrary
+  type Release SharedLibrary
+  type Shipping StaticLibrary
+  sheet Debug Esoterica GameNetworkingSockets FreeType DXC RenderDoc AmdAgs WinPixEventRuntime ixWebSocket
+  sheet Release Esoterica GameNetworkingSockets FreeType DXC RenderDoc AmdAgs WinPixEventRuntime ixWebSocket
+  sheet Shipping Esoterica GameNetworkingSockets FreeType DXC RenderDoc AmdAgs WinPixEventRuntime
+  src Application/ApplicationGlobalState.cpp
+  src Application/Module.cpp
+  src Application/Platform/Application_Win32.cpp
+  src Drawing/DebugDrawing.cpp
+  src Drawing/DebugDrawingCommands.cpp
+  src Drawing/DebugDrawingSystem.cpp
+  src Encoding/Embed.cpp
+  src Encoding/Encoding.cpp
+  src FileSystem/DataFileExtension.cpp
+  src FileSystem/DataPath.cpp
+  src FileSystem/FileStreams.cpp
+  src FileSystem/FileSystem.cpp
+  src FileSystem/FileSystemPath.cpp
+  src FileSystem/FileSystemUtils.cpp
+  src FileSystem/IDataFile.cpp
+  src FileSystem/Platform/FileSystemPath_Win32.cpp
+  src FileSystem/Platform/FileSystem_Win32.cpp
+  src Fonts/Font_MaterialDesignIcons.cpp
+  src Fonts/Font_RobotoMono_Regular.cpp
+  src Fonts/Font_Roboto_Bold.cpp
+  src Fonts/Font_Roboto_BoldItalic.cpp
+  src Fonts/Font_Roboto_Italic.cpp
+  src Fonts/Font_Roboto_Regular.cpp
+  src Imgui/ImguiCurveEditor.cpp
+  src Imgui/ImguiFont.cpp
+  src Imgui/ImguiStyle.cpp
+  src Imgui/ImguiSystem.cpp
+  src Imgui/ImguiTextureID.cpp
+  src Imgui/ImguiX.cpp
+  src Imgui/ImguiXNotifications.cpp
+  src Imgui/Platform/ImguiPlatform_Win32.cpp
+  src Imgui/Platform/ImguiX_Win32.cpp
+  src Input/Input.cpp
+  src Input/InputDevice.cpp
+  src Input/InputDevices/InputDevice_Controller.cpp
+  src Input/InputDevices/InputDevice_KeyboardMouse.cpp
+  src Input/InputDevices/Platform/InputDevice_KeyboardMouse_Win32.cpp
+  src Input/InputDevices/Platform/InputDevice_XboxController_Win32.cpp
+  src Input/InputSystem.cpp
+  src Logging/Log.cpp
+  src Logging/LogCategory.cpp
+  src Logging/Platform/SystemLog_Win32.cpp
+  src Logging/SystemLog.cpp
+  src Math/AABBTree.cpp
+  src Math/BlendWeight.cpp
+  src Math/BoundingVolumes.cpp
+  src Math/Curves.cpp
+  src Math/Easing.cpp
+  src Math/FloatCurve.cpp
+  src Math/Intersection.cpp
+  src Math/Math.cpp
+  src Math/MathRandom.cpp
+  src Math/MathUtils.cpp
+  src Math/Matrix.cpp
+  src Math/Plane.cpp
+  src Math/PointSet.cpp
+  src Math/Quaternion.cpp
+  src Math/Rectangle.cpp
+  src Math/Transform.cpp
+  src Math/Vector.cpp
+  src Math/ViewVolume.cpp
+  src Math/line.cpp
+  src Memory/Memory.cpp
+  src Network/Clients/NetworkClient.cpp
+  src Network/Clients/NetworkClient_GNS.cpp
+  src Network/Clients/NetworkClient_WebSockets.cpp
+  src Network/NetworkMessage.cpp
+  src Network/NetworkSystem.cpp
+  src Network/Servers/NetworkServer.cpp
+  src Network/Servers/NetworkServer_GNS.cpp
+  src Network/Servers/NetworkServer_WebSockets.cpp
+  src Platform/Platform.cpp
+  src Platform/PlatformUtils_Win32.cpp
+  src Platform/Platform_Win32.cpp
+  src Profiling.cpp
+  src Render/HandleAllocator.cpp
+  src Render/RHI_Direct3D12.cpp
+  src Render/RenderWindow.cpp
+  src Resource/ResourceID.cpp
+  src Resource/ResourceLoader.cpp
+  src Resource/ResourceProviders/ResourceProvider_Network.cpp
+  src Resource/ResourceProviders/ResourceProvider_Package.cpp
+  src Resource/ResourceRecord.cpp
+  src Resource/ResourceRequest.cpp
+  src Resource/ResourceSystem.cpp
+  src Resource/Settings/Settings_Resource.cpp
+  src Serialization/BinarySerialization.cpp
+  src Serialization/TypeSerialization.cpp
+  src Serialization/XmlSerialization.cpp
+  src Settings/IniFile.cpp
+  src Settings/Settings.cpp
+  src Settings/SettingsRegistry.cpp
+  src Systems.cpp
+  src ThirdParty/D3D12MemoryAllocator/Common.cpp
+  src ThirdParty/D3D12MemoryAllocator/D3D12MemAlloc.cpp
+  src ThirdParty/EA/EASTL/Source/allocator_eastl.cpp
+  src ThirdParty/EA/EASTL/Source/assert.cpp
+  src ThirdParty/EA/EASTL/Source/atomic.cpp
+  src ThirdParty/EA/EASTL/Source/fixed_pool.cpp
+  src ThirdParty/EA/EASTL/Source/hashtable.cpp
+  src ThirdParty/EA/EASTL/Source/intrusive_list.cpp
+  src ThirdParty/EA/EASTL/Source/numeric_limits.cpp
+  src ThirdParty/EA/EASTL/Source/red_black_tree.cpp
+  src ThirdParty/EA/EASTL/Source/string.cpp
+  src ThirdParty/EA/EASTL/Source/thread_support.cpp
+  src ThirdParty/EA/eastl_Esoterica.cpp
+  src ThirdParty/EnkiTS/TaskScheduler.cpp
+  src ThirdParty/imgui/imgui.cpp
+  src ThirdParty/imgui/imgui_demo.cpp
+  src ThirdParty/imgui/imgui_draw.cpp
+  src ThirdParty/imgui/imgui_tables.cpp
+  src ThirdParty/imgui/imgui_widgets.cpp
+  src ThirdParty/imgui/misc/freetype/imgui_freetype.cpp
+  src ThirdParty/implot/implot.cpp
+  src ThirdParty/implot/implot_demo.cpp
+  src ThirdParty/implot/implot_items.cpp
+  src ThirdParty/mpack/mpack.c
+  src ThirdParty/mpack/mpack_esoterica.cpp
+  src ThirdParty/pugixml/src/pugixml.cpp
+  src ThirdParty/rpmalloc/rpmalloc.c
+  src ThirdParty/stb/stb_Esoterica.cpp
+  src Threading/Platform/Threading_Win32.cpp
+  src Threading/TaskSystem.cpp
+  src Threading/Threading.cpp
+  src Time/Time.cpp
+  src Time/TimeStamp.cpp
+  src TypeSystem/CoreTypeConversions.cpp
+  src TypeSystem/CoreTypeIDs.cpp
+  src TypeSystem/EnumInfo.cpp
+  src TypeSystem/PropertyMetadata.cpp
+  src TypeSystem/PropertyPath.cpp
+  src TypeSystem/TypeDescriptors.cpp
+  src TypeSystem/TypeInfo.cpp
+  src TypeSystem/TypeInstance.cpp
+  src TypeSystem/TypeRegistry.cpp
+  src Types/Color.cpp
+  src Types/Percentage.cpp
+  src Types/Platform/Types_Win32.cpp
+  src Types/Severity.cpp
+  src Types/StringID.cpp
+  src Types/StringUtils.cpp
+  src Types/UUID.cpp
+  src Utils/StringKeyValueParser.cpp
+  src Utils/StringTokenizer.cpp
+  src Utils/TopologicalSort.cpp
+  src Utils/TreeLayout.cpp
+  src _Module/BaseModule.cpp
+
+project Esoterica.Engine.Runtime
+  file Code/Engine/Esoterica.Engine.Runtime.vcxproj
+  type Debug SharedLibrary
+  type Release SharedLibrary
+  type Shipping StaticLibrary
+  ref Esoterica.Base
+  sheet Debug Esoterica Box3D MeshOptimizer
+  sheet Release Esoterica Box3D MeshOptimizer
+  sheet Shipping Esoterica Box3D MeshOptimizer
+  src Animation/AnimationBlender.cpp
+  src Animation/AnimationBoneMask.cpp
+  src Animation/AnimationClip.cpp
+  src Animation/AnimationEvent.cpp
+  src Animation/AnimationFloatChannels.cpp
+  src Animation/AnimationFrameTime.cpp
+  src Animation/AnimationPose.cpp
+  src Animation/AnimationRootMotion.cpp
+  src Animation/AnimationSkeleton.cpp
+  src Animation/AnimationSyncTrack.cpp
+  src Animation/AnimationTarget.cpp
+  src Animation/Components/Component_AnimationClipPlayer.cpp
+  src Animation/Components/Component_AnimationGraph.cpp
+  src Animation/Debug/DebugView_Animation.cpp
+  src Animation/Events/AnimationEvent_Foot.cpp
+  src Animation/Events/AnimationEvent_Transition.cpp
+  src Animation/Events/AnimationEvent_Warp.cpp
+  src Animation/Graph/Animation_RuntimeGraph_Context.cpp
+  src Animation/Graph/Animation_RuntimeGraph_Controller.cpp
+  src Animation/Graph/Animation_RuntimeGraph_Instance.cpp
+  src Animation/Graph/Animation_RuntimeGraph_Node.cpp
+  src Animation/Graph/Animation_RuntimeGraph_Recording.cpp
+  src Animation/Graph/Animation_RuntimeGraph_RootMotionDebugger.cpp
+  src Animation/Graph/Animation_RuntimeGraph_SampledEvents.cpp
+  src Animation/Graph/Animation_RuntimeGraph_TimingInfo.cpp
+  src Animation/Graph/Animation_RuntimeGraph_ValueTypes.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_AnimationClip.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Blend1D.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Blend2D.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_BoneMasks.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Bools.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_CachedValues.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_ConstValues.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Events.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_ExternalPose.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Floats.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_FootIK.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_IDs.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Layers.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_OrientationWarp.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Parameters.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Passthrough.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Pose.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_PoweredRagdoll.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_ReferencedGraph.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_RootMotionOverride.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Scale.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Selector.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_SimulatedRagdoll.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_SpeedScale.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_State.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_StateConditions.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_StateMachine.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_TargetSelector.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_TargetWarp.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Targets.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_TimeControlledAnimationClip.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Transition.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_TwoBoneIK.cpp
+  src Animation/Graph/Nodes/Animation_RuntimeGraphNode_Vectors.cpp
+  src Animation/IK/TwoBoneIK.cpp
+  src Animation/ResourceLoaders/ResourceLoader_AnimationClip.cpp
+  src Animation/ResourceLoaders/ResourceLoader_AnimationGraph.cpp
+  src Animation/ResourceLoaders/ResourceLoader_AnimationSkeleton.cpp
+  src Animation/Systems/EntitySystem_Animation.cpp
+  src Animation/Systems/WorldSystem_Animation.cpp
+  src Animation/TaskSystem/Animation_BoneMaskPool.cpp
+  src Animation/TaskSystem/Animation_BoneMaskTask.cpp
+  src Animation/TaskSystem/Animation_PoseTask.cpp
+  src Animation/TaskSystem/Animation_TaskPosePool.cpp
+  src Animation/TaskSystem/Animation_TaskSerializer.cpp
+  src Animation/TaskSystem/Animation_TaskSystem.cpp
+  src Animation/TaskSystem/Tasks/Animation_Task_Blend.cpp
+  src Animation/TaskSystem/Tasks/Animation_Task_CachedPose.cpp
+  src Animation/TaskSystem/Tasks/Animation_Task_DefaultPose.cpp
+  src Animation/TaskSystem/Tasks/Animation_Task_FootIK.cpp
+  src Animation/TaskSystem/Tasks/Animation_Task_Ragdoll.cpp
+  src Animation/TaskSystem/Tasks/Animation_Task_Sample.cpp
+  src Animation/TaskSystem/Tasks/Animation_Task_Scale.cpp
+  src Animation/TaskSystem/Tasks/Animation_Task_TwoBoneIK.cpp
+  src Camera/CameraMath.cpp
+  src Camera/Components/Component_Camera.cpp
+  src Camera/Components/Component_ToolsCamera.cpp
+  src Camera/Debug/DebugView_Camera.cpp
+  src Camera/Systems/WorldSystem_Camera.cpp
+  src Debug/DebugView.cpp
+  src Debug/Widgets/FrameLimiterWidget.cpp
+  src Debug/Widgets/MemoryTrackerWidget.cpp
+  src Debug/Widgets/PerformanceStatsWidget.cpp
+  src Debug/Widgets/SystemLogWidget.cpp
+  src Engine.cpp
+  src Entity/Debug/DebugView_EntityWorld.cpp
+  src Entity/Entity.cpp
+  src Entity/EntityComponent.cpp
+  src Entity/EntityDescriptors.cpp
+  src Entity/EntityIDs.cpp
+  src Entity/EntityLog.cpp
+  src Entity/EntityMap.cpp
+  src Entity/EntitySpatialComponent.cpp
+  src Entity/EntityWorld.cpp
+  src Entity/EntityWorldManager.cpp
+  src Entity/EntityWorldUpdateContext.cpp
+  src Entity/ResourceLoaders/ResourceLoader_EntityCollection.cpp
+  src Entity/Systems/WorldSystem_EntityCollectionSpawner.cpp
+  src Hitbox/Components/Component_Hitbox.cpp
+  src Hitbox/Hitbox_Definition.cpp
+  src Hitbox/Hitbox_Instance.cpp
+  src Hitbox/ResourceLoaders/ResourceLoader_Hitbox.cpp
+  src Imgui/Gizmos/ImguiGizmo_Base.cpp
+  src Imgui/Gizmos/ImguiGizmo_Rotate.cpp
+  src Imgui/Gizmos/ImguiGizmo_Scale.cpp
+  src Imgui/Gizmos/ImguiGizmo_Translate.cpp
+  src Imgui/ImguiGizmo.cpp
+  src Imgui/ImguiOrientationGuide.cpp
+  src Input/Components/Component_GameInput.cpp
+  src Input/Debug/DebugView_Input.cpp
+  src Input/GameInput.cpp
+  src Input/GameInputUpdaters.cpp
+  src Input/Systems/WorldSystem_GameInput.cpp
+  src Navmesh/Debug/DebugView_Navmesh.cpp
+  src Navmesh/NavmeshData.cpp
+  src Navmesh/NavmeshPath.cpp
+  src Navmesh/Navpower.cpp
+  src Navmesh/ResourceLoaders/ResourceLoader_Navmesh.cpp
+  src Navmesh/Settings/ViewportSettings_Navmesh.cpp
+  src Navmesh/Systems/WorldSystem_Navmesh.cpp
+  src Physics/Components/Component_PhysicsBox.cpp
+  src Physics/Components/Component_PhysicsCapsule.cpp
+  src Physics/Components/Component_PhysicsCollisionMesh.cpp
+  src Physics/Components/Component_PhysicsShape.cpp
+  src Physics/Components/Component_PhysicsSphere.cpp
+  src Physics/Debug/DebugView_Physics.cpp
+  src Physics/Physics.cpp
+  src Physics/PhysicsCollisionMesh.cpp
+  src Physics/PhysicsMaterial.cpp
+  src Physics/PhysicsTypes.cpp
+  src Physics/PhysicsWorld.cpp
+  src Physics/Ragdoll/PhysicsRagdoll_Definition.cpp
+  src Physics/Ragdoll/PhysicsRagdoll_Instance.cpp
+  src Physics/ResourceLoaders/ResourceLoader_PhysicsCollisionMesh.cpp
+  src Physics/ResourceLoaders/ResourceLoader_PhysicsMaterialDatabase.cpp
+  src Physics/ResourceLoaders/ResourceLoader_PhysicsRagdoll.cpp
+  src Physics/Settings/ViewportSettings_Physics.cpp
+  src Physics/Systems/WorldSystem_Physics.cpp
+  src Render/Components/Component_Lights.cpp
+  src Render/Components/Component_RenderMesh.cpp
+  src Render/Components/Component_SkeletalMesh.cpp
+  src Render/Components/Component_StaticMesh.cpp
+  src Render/DebugMesh/DebugMesh.cpp
+  src Render/DebugMesh/DebugMeshRegistry.cpp
+  src Render/Device/DeviceAppendBuffer.cpp
+  src Render/Device/DeviceRenderView.cpp
+  src Render/Device/DeviceRenderWorld.cpp
+  src Render/Device/DeviceResourceState.cpp
+  src Render/Device/SpatialHash.cpp
+  src Render/Imgui/ImguiImageCache.cpp
+  src Render/Imgui/ImguiRenderer.cpp
+  src Render/RenderGeometry.cpp
+  src Render/RenderGeometryBuilder.cpp
+  src Render/RenderMaterialShaderClusterCapacity.cpp
+  src Render/RenderMesh.cpp
+  src Render/RenderPasses/RenderPass_CascadedShadow.cpp
+  src Render/RenderPasses/RenderPass_DebugDraw.cpp
+  src Render/RenderPasses/RenderPass_DepthDownsample.cpp
+  src Render/RenderPasses/RenderPass_ForwardShading.cpp
+  src Render/RenderPasses/RenderPass_GTAO.cpp
+  src Render/RenderPasses/RenderPass_GlobalEnvironmentMap.cpp
+  src Render/RenderPasses/RenderPass_PostProcess.cpp
+  src Render/RenderPasses/RenderPass_SMAA.cpp
+  src Render/RenderProxies.cpp
+  src Render/RenderSystem.cpp
+  src Render/RenderViewport.cpp
+  src Render/Renderer_ForwardShading.cpp
+  src Render/ResourceLoaders/ResourceLoader_RenderMaterial.cpp
+  src Render/ResourceLoaders/ResourceLoader_RenderMesh.cpp
+  src Render/ResourceLoaders/ResourceLoader_RenderTexture.cpp
+  src Render/Settings/ViewportSettings_Render.cpp
+  src Render/Shaders/EngineShader.cpp
+  src Render/Systems/WorldSystem_Render.cpp
+  src Resource/Debug/DebugView_Resource.cpp
+  src ThirdParty/box3d/src/aabb.c
+  src ThirdParty/box3d/src/arena_allocator.c
+  src ThirdParty/box3d/src/bitset.c
+  src ThirdParty/box3d/src/block_allocator.c
+  src ThirdParty/box3d/src/body.c
+  src ThirdParty/box3d/src/broad_phase.c
+  src ThirdParty/box3d/src/capsule.c
+  src ThirdParty/box3d/src/compound.c
+  src ThirdParty/box3d/src/constraint_graph.c
+  src ThirdParty/box3d/src/contact.c
+  src ThirdParty/box3d/src/contact_solver.c
+  src ThirdParty/box3d/src/convex_manifold.c
+  src ThirdParty/box3d/src/core.c
+  src ThirdParty/box3d/src/distance.c
+  src ThirdParty/box3d/src/distance_joint.c
+  src ThirdParty/box3d/src/dynamic_tree.c
+  src ThirdParty/box3d/src/height_field.c
+  src ThirdParty/box3d/src/hull.c
+  src ThirdParty/box3d/src/id_pool.c
+  src ThirdParty/box3d/src/island.c
+  src ThirdParty/box3d/src/joint.c
+  src ThirdParty/box3d/src/manifold.c
+  src ThirdParty/box3d/src/math_functions.c
+  src ThirdParty/box3d/src/mesh.c
+  src ThirdParty/box3d/src/mesh_contact.c
+  src ThirdParty/box3d/src/motor_joint.c
+  src ThirdParty/box3d/src/mover.c
+  src ThirdParty/box3d/src/name_cache.c
+  src ThirdParty/box3d/src/parallel_for.c
+  src ThirdParty/box3d/src/parallel_joint.c
+  src ThirdParty/box3d/src/physics_world.c
+  src ThirdParty/box3d/src/prismatic_joint.c
+  src ThirdParty/box3d/src/recording.c
+  src ThirdParty/box3d/src/recording_replay.c
+  src ThirdParty/box3d/src/revolute_joint.c
+  src ThirdParty/box3d/src/scheduler.c
+  src ThirdParty/box3d/src/sensor.c
+  src ThirdParty/box3d/src/shape.c
+  src ThirdParty/box3d/src/simd.c
+  src ThirdParty/box3d/src/solver.c
+  src ThirdParty/box3d/src/solver_set.c
+  src ThirdParty/box3d/src/sphere.c
+  src ThirdParty/box3d/src/spherical_joint.c
+  src ThirdParty/box3d/src/table.c
+  src ThirdParty/box3d/src/timer.c
+  src ThirdParty/box3d/src/triangle_manifold.c
+  src ThirdParty/box3d/src/types.c
+  src ThirdParty/box3d/src/weld_joint.c
+  src ThirdParty/box3d/src/wheel_joint.c
+  src ThirdParty/box3d/src/world_snapshot.c
+  src ThirdParty/meshoptimizer/meshoptimizer_esoterica.cpp
+  src ToolsUI/EngineDebugUI.cpp
+  src Viewport/Viewport.cpp
+  src Viewport/ViewportPicking.cpp
+  src Volumes/Components/Component_Volumes.cpp
+  src _Module/EngineModule.cpp
+
+project Esoterica.Engine.Tools
+  file Code/EngineTools/Esoterica.Engine.Tools.vcxproj
+  type Debug SharedLibrary
+  type Release SharedLibrary
+  type Shipping SharedLibrary
+  skip Shipping
+  ref Esoterica.Engine.Runtime
+  ref Esoterica.Base
+  sheet Debug Esoterica MeshOptimizer CTT SQLite Box3D
+  sheet Release Esoterica MeshOptimizer CTT SQLite Box3D
+  sheet Shipping Esoterica MeshOptimizer CTT SQLite Box3D
+  src Animation/AnimationClipBrowser.cpp
+  src Animation/Events/AnimationEventTimeline.cpp
+  src Animation/Events/AnimationEventTracks.cpp
+  src Animation/ResourceCompilers/ResourceCompiler_AnimationClip.cpp
+  src Animation/ResourceCompilers/ResourceCompiler_AnimationGraph.cpp
+  src Animation/ResourceCompilers/ResourceCompiler_AnimationSkeleton.cpp
+  src Animation/ResourceDescriptors/ResourceDescriptor_AnimationClip.cpp
+  src Animation/ResourceDescriptors/ResourceDescriptor_AnimationGraph.cpp
+  src Animation/ResourceDescriptors/ResourceDescriptor_AnimationSkeleton.cpp
+  src Animation/ResourceEditors/ResourceEditor_AnimationClip.cpp
+  src Animation/ResourceEditors/ResourceEditor_AnimationGraph.cpp
+  src Animation/ResourceEditors/ResourceEditor_Skeleton.cpp
+  src Animation/ResourceOptionProviders/ResourcePickerOptionProvider_AnimationGraphDefinition.cpp
+  src Animation/ToolsGraph/Animation_ToolsGraph_Compilation.cpp
+  src Animation/ToolsGraph/Animation_ToolsGraph_Definition.cpp
+  src Animation/ToolsGraph/Animation_ToolsGraph_UserContext.cpp
+  src Animation/ToolsGraph/Animation_ToolsGraph_Variations.cpp
+  src Animation/ToolsGraph/Graphs/Animation_ToolsGraph_FlowGraph.cpp
+  src Animation/ToolsGraph/Graphs/Animation_ToolsGraph_StateMachineGraph.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_AnimationClip.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Blend1D.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Blend2D.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_BoneMasks.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Bools.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_CachedValues.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_ConstValues.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_EntryStates.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Events.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_ExternalGraph.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_ExternalPose.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Floats.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_FootIK.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_GlobalTransitions.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_IDs.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_InternalGraph.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Layers.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_OrientationWarp.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Parameters.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Pose.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Ragdolls.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Result.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_RootMotionOverride.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Scale.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Selector.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_SpeedScale.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_State.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_StateConditions.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_StateMachine.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_TargetSelector.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_TargetWarp.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Targets.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_TimeControlledAnimationClip.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Transition.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_TwoBoneIK.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_VariationData.cpp
+  src Animation/ToolsGraph/Nodes/Animation_ToolsGraphNode_Vectors.cpp
+  src Core/DataFileUtils.cpp
+  src Core/DialogManager.cpp
+  src Core/EditorTool.cpp
+  src Core/SystemDialogs.cpp
+  src Core/Test/Component_SerializationTest.cpp
+  src Core/Test/UITest.cpp
+  src Core/Tools/EditorTool_MemoryTracker.cpp
+  src Core/Tools/EditorTool_SystemLog.cpp
+  src Core/Tools/EditorTool_SystemSettings.cpp
+  src Core/ToolsContext.cpp
+  src Core/UndoStack.cpp
+  src Entity/EntityEditor/EntityEditor_Context.cpp
+  src Entity/EntityEditor/EntityEditor_Dialogs.cpp
+  src Entity/EntityEditor/EntityEditor_EntityInspector.cpp
+  src Entity/EntityEditor/EntityEditor_EntityItem.cpp
+  src Entity/EntityEditor/EntityEditor_Outliner.cpp
+  src Entity/EntityEditor/EntityEditor_UndoableAction.cpp
+  src Entity/EntityEditor/EntityEditor_Utils.cpp
+  src Entity/EntitySerializationTools.cpp
+  src Entity/ResourceCompilers/ResourceCompiler_EntityCollection.cpp
+  src Entity/ResourceCompilers/ResourceCompiler_Map.cpp
+  src Entity/ResourceDescriptors/ResourceDescriptor_EntityCollection.cpp
+  src Entity/ResourceDescriptors/ResourceDescriptor_EntityMap.cpp
+  src Entity/ResourceEditors/ResourceEditor_EntityCollectionEditor.cpp
+  src FileSystem/FileRegistry.cpp
+  src FileSystem/FileSystemWatcher.cpp
+  src Game/ResourceCompilers/ResourceCompiler_Hitbox.cpp
+  src Game/ResourceDescriptors/ResourceDescriptor_Hitbox.cpp
+  src Game/ResourceEditors/ResourceEditor_Hitbox.cpp
+  src Import/Formats/DDS.cpp
+  src Import/Formats/FBX.cpp
+  src Import/Formats/GLTF.cpp
+  src Import/ImportedAnimation.cpp
+  src Import/ImportedImage.cpp
+  src Import/ImportedMesh.cpp
+  src Import/ImportedSkeleton.cpp
+  src Import/Importer.cpp
+  src Import/RawFileInspector.cpp
+  src MapEditor/EditModes/MapEditorMode_DevTools.cpp
+  src MapEditor/EditModes/MapEditorMode_Navigation.cpp
+  src MapEditor/EditModes/MapEditorMode_Physics.cpp
+  src MapEditor/MapEditor.cpp
+  src MapEditor/MapEditorMode.cpp
+  src Navmesh/NavmeshBuildData.cpp
+  src Navmesh/NavmeshBuilder.cpp
+  src Navmesh/ResourceCompilers/ResourceCompiler_Navmesh.cpp
+  src NodeGraph/NodeGraph_BaseGraph.cpp
+  src NodeGraph/NodeGraph_Comment.cpp
+  src NodeGraph/NodeGraph_FlowGraph.cpp
+  src NodeGraph/NodeGraph_StateMachineGraph.cpp
+  src NodeGraph/NodeGraph_UserContext.cpp
+  src NodeGraph/NodeGraph_View.cpp
+  src Physics/PropertyGrid/PropertyGrid_CollisionSettings.cpp
+  src Physics/PropertyGrid/PropertyGrid_Component_PhysicsCollision.cpp
+  src Physics/ResourceCompilers/ResourceCompiler_PhysicsCollisionMesh.cpp
+  src Physics/ResourceCompilers/ResourceCompiler_PhysicsMaterialDatabase.cpp
+  src Physics/ResourceCompilers/ResourceCompiler_PhysicsRagdoll.cpp
+  src Physics/ResourceDescriptors/ResourceDescriptor_PhysicsRagdoll.cpp
+  src Physics/ResourceEditors/ResourceEditor_PhysicsCollisionMesh.cpp
+  src Physics/ResourceEditors/ResourceEditor_Ragdoll.cpp
+  src PropertyGrid/PropertyGrid.cpp
+  src PropertyGrid/PropertyGridEditor.cpp
+  src PropertyGrid/PropertyGridTypeEditingRules.cpp
+  src Render/BulkUpdateOperations/BulkUpdateOperation_Render.cpp
+  src Render/PropertyGrid/PropertyGrid_Mesh.cpp
+  src Render/PropertyGrid/PropertyGrid_SubmeshSettings.cpp
+  src Render/ResourceCompilers/ResourceCompiler_RenderMaterial.cpp
+  src Render/ResourceCompilers/ResourceCompiler_RenderMesh.cpp
+  src Render/ResourceCompilers/ResourceCompiler_RenderTexture.cpp
+  src Render/ResourceDescriptors/ResourceDescriptor_RenderMaterial.cpp
+  src Render/ResourceDescriptors/ResourceDescriptor_RenderMesh.cpp
+  src Render/ResourceDescriptors/ResourceDescriptor_RenderTexture.cpp
+  src Render/ResourceEditors/ResourceEditor_Material.cpp
+  src Render/ResourceEditors/ResourceEditor_Mesh.cpp
+  src Render/ResourceEditors/ResourceEditor_Texture.cpp
+  src Resource/Dialogs/EditorDialog_DataFileCreator.cpp
+  src Resource/Dialogs/EditorDialog_FileSystemAction.cpp
+  src Resource/Dialogs/EditorDialog_OpenResource.cpp
+  src Resource/ResourceCompilationDatabase.cpp
+  src Resource/ResourceCompiler.cpp
+  src Resource/ResourceCompilerContext.cpp
+  src Resource/ResourceCompilerRegistry.cpp
+  src Resource/ResourceImportSettings.cpp
+  src Resource/Tools/EditorTool_ResourceBrowser.cpp
+  src Resource/Tools/EditorTool_ResourceBulkUpdate.cpp
+  src Resource/Tools/EditorTool_ResourceDependencyViewer.cpp
+  src Resource/Tools/EditorTool_ResourceImporter.cpp
+  src Resource/Tools/EditorTool_ResourceSystem.cpp
+  src ThirdParty/delabella/delabella.cpp
+  src ThirdParty/tinyexr/tinyexr_Esoterica.cpp
+  src ThirdParty/ufbx/ufbx.c
+  src Timeline/Timeline.cpp
+  src Timeline/TimelineEditor.cpp
+  src Widgets/Pickers/DataPathPicker.cpp
+  src Widgets/Pickers/ResourcePickers.cpp
+  src Widgets/Pickers/TypeInfoPicker.cpp
+  src Widgets/TreeListView.cpp
+  src _Module/EngineToolsModule.cpp
+
+project Esoterica.Game.Runtime
+  file Code/Game/Esoterica.Game.Runtime.vcxproj
+  type Debug SharedLibrary
+  type Release SharedLibrary
+  type Shipping StaticLibrary
+  ref Esoterica.Engine.Runtime
+  ref Esoterica.Base
+  sheet Debug Esoterica
+  sheet Release Esoterica
+  sheet Shipping Esoterica
+  src Animation/GraphNodes/Animation_RuntimeGraphNode_AimIK.cpp
+  src Animation/Tasks/Animation_Task_AimIK.cpp
+  src Base/Components/Component_Character.cpp
+  src Base/Debug/DebugView_Character.cpp
+  src Damage/Components/Component_Damage.cpp
+  src Damage/Components/Component_Health.cpp
+  src Damage/Systems/WorldSystem_Damage.cpp
+  src GameFlow/Systems/WorldSystem_GameFlow.cpp
+  src NPC/Animation/NPCAnimationController.cpp
+  src NPC/Behavior/Actions/BehaviorAction_Death.cpp
+  src NPC/Behavior/Actions/BehaviorAction_Idle.cpp
+  src NPC/Behavior/Actions/BehaviorAction_MoveTo.cpp
+  src NPC/Behavior/Behavior.cpp
+  src NPC/Behavior/BehaviorContext.cpp
+  src NPC/Behavior/BehaviorSelector.cpp
+  src NPC/Behavior/Behaviors/Behavior_Death.cpp
+  src NPC/Behavior/Behaviors/Behavior_HackMove.cpp
+  src NPC/Behavior/Behaviors/Behavior_Wander.cpp
+  src NPC/Debug/DebugView_NPC.cpp
+  src NPC/Systems/EntitySystem_NPC.cpp
+  src Player/Animation/PlayerAnimationController.cpp
+  src Player/Components/Component_PlayerCamera.cpp
+  src Player/Components/Component_PlayerTargeting.cpp
+  src Player/Debug/DebugView_Player.cpp
+  src Player/Debug/DebugView_PlayerHUD.cpp
+  src Player/PlayerGameState.cpp
+  src Player/PlayerInputState.cpp
+  src Player/StateMachine/Actions/PlayerAction_Dodge.cpp
+  src Player/StateMachine/Actions/PlayerAction_Falling.cpp
+  src Player/StateMachine/Actions/PlayerAction_Ghost.cpp
+  src Player/StateMachine/Actions/PlayerAction_Interact.cpp
+  src Player/StateMachine/Actions/PlayerAction_Jump.cpp
+  src Player/StateMachine/Actions/PlayerAction_Move.cpp
+  src Player/StateMachine/Actions/PlayerAction_Slide.cpp
+  src Player/StateMachine/OverlayActions/PlayerOverlayAction_MeleeAttack.cpp
+  src Player/StateMachine/OverlayActions/PlayerOverlayAction_TimeDilation.cpp
+  src Player/StateMachine/OverlayActions/PlayerOverlayAction_Weapon.cpp
+  src Player/StateMachine/PlayerActionContext.cpp
+  src Player/StateMachine/PlayerActionStateMachine.cpp
+  src Player/Systems/EntitySystem_Player.cpp
+  src Player/Systems/WorldSystem_PlayerTargetingSystem.cpp
+  src ToolsUI/GameDebugUI.cpp
+  src _Module/GameModule.cpp
+
+project Esoterica.Game.Tools
+  file Code/GameTools/Esoterica.Game.Tools.vcxproj
+  type Debug SharedLibrary
+  type Release SharedLibrary
+  type Shipping SharedLibrary
+  skip Shipping
+  ref Esoterica.Engine.Tools
+  ref Esoterica.Engine.Runtime
+  ref Esoterica.Game.Runtime
+  ref Esoterica.Base
+  sheet Debug Esoterica
+  sheet Release Esoterica
+  sheet Shipping Esoterica
+  src Animation/ToolsGraphNodes/Animation_ToolsGraphNode_AimIK.cpp
+  src _Module/GameToolsModule.cpp
+
+project Esoterica.Scripts.Reflect
+  file Code/Scripts/Reflect/Esoterica.Scripts.Reflect.vcxproj
+  type Debug NMake
+  type Release NMake
+  type Shipping NMake
+  skip Debug
+  skip Release
+  skip Shipping
+  sheet Debug Esoterica
+  sheet Release Esoterica
+  sheet Shipping Esoterica
