@@ -71,8 +71,12 @@ COMMON_COMPILER_FLAGS = (
     '-fno-exceptions',          # ExceptionHandling: false
     '-g',                       # DebugInformationFormat: ProgramDatabase
     '-fPIC',                    # every target may end up inside a .so
-    '-msse4.2',                 # the hand-rolled SIMD math assumes both of these
+    '-msse4.2',                 # the hand-rolled SIMD math assumes these
     '-mavx',
+    # Memory.cpp calls _mm256_stream_load_si256 unconditionally, so AVX2 is already the real
+    # hardware floor on Windows too. MSVC lets any intrinsic through whatever /arch says;
+    # clang gates each one, so the baseline has to be stated.
+    '-mavx2',
     # HandleAllocator uses _tzcnt_u64 and _lzcnt_u64. MSVC exposes them unconditionally; clang
     # gates each behind its own instruction set flag.
     '-mbmi',
