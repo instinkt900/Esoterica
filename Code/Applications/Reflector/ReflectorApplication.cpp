@@ -2,9 +2,11 @@
 #include "Base/Application/ApplicationGlobalState.h"
 #include "Base/Utils/CommandLineParser.h"
 
+#if _WIN32
 #include <windows.h>
-#include <locale>
 #include <consoleapi2.h>
+#endif
+#include <locale>
 
 //-------------------------------------------------------------------------
 

@@ -51,6 +51,13 @@ require_header()
 # What each dependency needs, beyond git.
 requirements_optick()      { :; }
 
+requirements_llvm()
+{
+    require_command curl curl
+    require_command tar tar
+    require_command xz xz-utils
+}
+
 requirements_ixwebsocket()
 {
     require_command cmake cmake
@@ -132,6 +139,43 @@ fetch_optick()
     rm -rf "${target}.src"
 }
 
+# LLVM and libclang. The Reflector parses the codebase's headers with them.
+#
+# Version 21.1.8, and the pin matters. LLVM.props records no version at all - it just points at
+# External/LLVM, which the prebuilt Windows External.zip fills - so the version is inferred from
+# the library list it links: LLVMFrontendDirective and LLVMDebugInfoDWARFLowLevel both first
+# appear in LLVM 21, and 21.1.8 is the last 21.x release. Clang's C++ AST API is not stable
+# across major versions, and ClangUtils.h uses it directly, so a mismatch shows up as obscure
+# compile errors rather than a clear diagnostic.
+#
+# The official prebuilt release is used rather than a source build: it is the same artifact the
+# LLVM project ships, it is pinned, and it takes minutes rather than hours. A distro
+# libclang-dev is deliberately not used - Ubuntu 24.04 offers 18, three major versions adrift.
+LLVM_VERSION="21.1.8"
+LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/LLVM-${LLVM_VERSION}-Linux-X64.tar.xz"
+
+fetch_llvm()
+{
+    local target="${EXTERNAL_DIR}/LLVM"
+
+    if [[ -f "${target}/bin/llvm-config" ]]
+    then
+        info "LLVM already present ($( "${target}/bin/llvm-config" --version ))"
+        return
+    fi
+
+    info "fetching LLVM ${LLVM_VERSION} (this is a large download)"
+    rm -rf "${target}" "${target}.tar.xz"
+    curl -fL --no-progress-meter -o "${target}.tar.xz" "${LLVM_URL}"
+
+    info "extracting LLVM"
+    mkdir -p "${target}"
+    tar -xJf "${target}.tar.xz" -C "${target}" --strip-components=1
+    rm -f "${target}.tar.xz"
+
+    info "LLVM $( "${target}/bin/llvm-config" --version ) installed"
+}
+
 # ixWebSocket. Base/Network uses it for the resource server connection.
 IXWEBSOCKET_REPO="https://github.com/machinezone/IXWebSocket.git"
 # v12.0.1, not something older. Base/Network/Servers/NetworkServer_WebSockets.cpp constructs
@@ -204,7 +248,7 @@ fetch_gamenetworkingsockets()
 
 #-------------------------------------------------------------------------
 
-ALL_DEPENDENCIES=( optick ixwebsocket gamenetworkingsockets )
+ALL_DEPENDENCIES=( optick ixwebsocket gamenetworkingsockets llvm )
 
 list_dependencies()
 {
@@ -216,6 +260,7 @@ list_dependencies()
             optick)                 [[ -f "${EXTERNAL_DIR}/Optick/include/optick.h" ]] && status="ready" ;;
             ixwebsocket)            [[ -f "${EXTERNAL_DIR}/ixwebsocket/include/ixwebsocket/IXWebSocket.h" ]] && status="ready" ;;
             gamenetworkingsockets)  [[ -f "${EXTERNAL_DIR}/GameNetworkingSockets/include/GameNetworkingSockets/steam/steamnetworkingsockets.h" ]] && status="ready" ;;
+            llvm)                   [[ -f "${EXTERNAL_DIR}/LLVM/bin/llvm-config" ]] && status="ready ($( "${EXTERNAL_DIR}/LLVM/bin/llvm-config" --version ))" ;;
         esac
         printf '%-24s %s\n' "${name}" "${status}"
     done
@@ -244,6 +289,7 @@ main()
             optick)                 fetch_optick ;;
             ixwebsocket)            fetch_ixwebsocket ;;
             gamenetworkingsockets)  fetch_gamenetworkingsockets ;;
+            llvm)                   fetch_llvm ;;
             *)                      fail "unknown dependency \"${name}\". Try --list." ;;
         esac
     done

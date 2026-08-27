@@ -77,6 +77,14 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
 | `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`, with an `#else` including `<immintrin.h>`. The MSVC header is where `_tzcnt_u64` and `_lzcnt_u64` come from on Windows; clang has them in `<immintrin.h>`. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
 
+## Phase 2 - Reflector
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Applications/Reflector/ReflectorApplication.cpp` | Wrap `<windows.h>` and `<consoleapi2.h>` in `#if _WIN32`. Neither is used: the file calls no Windows API. Guarded rather than deleted, per Conventions rule 3. | 2 | done |
+| `Code/Applications/Reflector/TypeReflection/Clang/ClangParser.cpp` | `#elif defined( __linux__ )` for `PlatformUtils_Linux.h`, and an `#if _WIN32` / `#else` around the single `Platform::Win32::GetShortPath` call. `GetShortPath` works around `MAX_PATH`; the Linux version returns its input unchanged. | 2 | done |
+| `Code/Applications/Reflector/Reflector.cpp` | Guard the `ShaderReflection_ShaderCompiler.h` include, and add a `#if !_WIN32` early return at the top of `ReflectShaders`. **Phase 4 reverses this.** | 2 | done |
+
 ## Whole-body guard wrap
 
 Use "wrap, do not split" to make an unguarded Windows-only translation unit inert on Linux. Add
@@ -86,6 +94,8 @@ the same interface.
 
 | File | Change | Phase | Status |
 |---|---|---|---|
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.h` | Wrap the body in `#ifdef _WIN32`. It includes `d3d12shader.h` and `dxcapi.h`, and it is the **only** shader reflection header that needs DXC. **Phase 4 reverses this.** | 2 | done |
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.cpp` | As above. | 2 | done |
 | `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. It is 552 lines of COM `IFileDialog` code, with an unguarded `<windows.h>` and `<shobjidl.h>` include at line 5. New sibling: `SystemDialogs_Linux.cpp`. | 7 | planned |
 
 ## Confirmed to need no change

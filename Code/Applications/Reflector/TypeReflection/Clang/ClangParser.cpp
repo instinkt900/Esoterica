@@ -2,7 +2,11 @@
 #include "ClangVisitors_TranslationUnit.h"
 #include "Applications/Reflector/TypeReflection/TypeReflection_ReflectionDatabase.h"
 #include "Base/Time/Timers.h"
+#if _WIN32
 #include "Base/Platform/PlatformUtils_Win32.h"
+#elif defined( __linux__ )
+#include "Base/Platform/PlatformUtils_Linux.h"
+#endif
 #include "Base/FileSystem/FileSystemUtils.h"
 #include <fstream>
 
@@ -72,7 +76,11 @@ namespace EE::Reflection
         for ( auto i = 0; i < g_numIncludePaths; i++ )
         {
             String const fullPath = m_context.m_solutionDirectoryPath.GetString() + g_includePaths[i];
+            #if _WIN32
             String const shortPath = Platform::Win32::GetShortPath( fullPath );
+            #else
+            String const shortPath = Platform::Linux::GetShortPath( fullPath );
+            #endif
             fullIncludePaths.push_back( "-I" + shortPath );
             clangArgs.push_back( fullIncludePaths.back().c_str() );
 

@@ -1,3 +1,7 @@
+// Phase 4 reverses this. Shader reflection needs DXC, which the Linux build does not have yet:
+// this header includes d3d12shader.h and dxcapi.h. Wrapped whole rather than split, so undoing
+// it is deleting two lines. See Docs/Linux/Phases/Phase4-ShaderPipeline.md.
+#ifdef _WIN32
 #include "ShaderReflection_ShaderCompiler.h"
 #include "Applications/Reflector/ReflectedProject.h"
 
@@ -414,3 +418,4 @@ namespace EE::Reflection
         }
     }
 }
+#endif
