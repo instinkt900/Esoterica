@@ -33,6 +33,11 @@
 # excluding the .cpp drops only the Windows implementation. Sibling: SystemDialogs_Linux.cpp.
 Code/EngineTools/Core/SystemDialogs.cpp
 
+# ReadDirectoryChangesW. Upstream already guards the namespace body with #if _WIN32, but the
+# <windows.h> include above it is unguarded, so the file still has to be dropped rather than
+# left to compile to nothing. Sibling: FileSystemWatcher_Linux.cpp, on inotify.
+Code/EngineTools/FileSystem/FileSystemWatcher.cpp
+
 #-------------------------------------------------------------------------
 # Direct3D 12
 #-------------------------------------------------------------------------
