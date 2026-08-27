@@ -43,19 +43,23 @@ Each of these files already has a platform guard. Add a sibling branch, and noth
 
 | File | Line | Existing | Add | Phase | Status |
 |---|---|---|---|---|---|
-| `Code/Base/Esoterica.h` | 55 | `#if _WIN32` includes `Platform/Platform_Win32.h` | `#elif defined( __linux__ )` includes `Platform/Platform_Linux.h` | 1 | planned |
-| `Code/Base/Math/Math.h` | 12 | `#if _WIN32` includes `Platform/Math_Win32.h` | `#elif defined( __linux__ )` includes `Platform/Math_Linux.h` | 1 | planned |
+| `Code/Base/Esoterica.h` | 55 | `#if _WIN32` includes `Platform/Platform_Win32.h` | `#elif defined( __linux__ )` includes `Platform/Platform_Linux.h` | 1 | **done** (2 added, 0 modified) |
+| `Code/Base/Math/Math.h` | 12 | `#if _WIN32` includes `Platform/Math_Win32.h` | `#elif defined( __linux__ )` includes `Platform/Math_Linux.h` | 1 | **done** (2 added, 0 modified) |
 | `Code/Base/Settings/IniFile.cpp` | 4 | `#if defined(_MSC_VER)` wraps the `#pragma warning` pair **and** the `mINI/ini.h` include | An `#else` branch that includes `ini.h` without the MSVC pragmas. Without it the include never happens on clang, and the file fails to compile. | 1 | planned |
 | `Code/Base/Imgui/ImguiSystem.cpp` | 12 | `#if _WIN32` includes `imgui_freetype.h` | `#if _WIN32 \|\| defined( __linux__ )`. Linux uses Freetype too. | 6 | planned |
-| `Code/Base/_Module/API.h` | 5 | `__declspec(dllexport)` and `dllimport` | An `#elif` branch that uses `__attribute__(( visibility( "default" ) ))` | 1 | planned |
-| `Code/Engine/_Module/API.h` | - | as above | as above | 1 | planned |
-| `Code/EngineTools/_Module/API.h` | - | as above | as above | 1 | planned |
-| `Code/Game/_Module/API.h` | - | as above | as above | 1 | planned |
-| `Code/GameTools/_Module/API.h` | - | as above | as above | 1 | planned |
-| `Code/Applications/Tester/_Module/API.h` | - | as above | as above | 1 | planned |
+| `Code/Base/_Module/API.h` | 5 | `__declspec(dllexport)` and `dllimport` | A `#if defined( __linux__ )` branch using `__attribute__(( visibility( "default" ) ))`, placed first so the existing `#if`/`#ifdef` becomes an `#elif`. 2 added, 1 modified. | 1 | **done** |
+| `Code/Engine/_Module/API.h` | - | as above | as above | 1 | **done** |
+| `Code/EngineTools/_Module/API.h` | - | as above | as above | 1 | **done** |
+| `Code/Game/_Module/API.h` | - | as above | as above | 1 | **done** |
+| `Code/GameTools/_Module/API.h` | - | as above | as above | 1 | **done** |
+| ~~`Code/Applications/Tester/_Module/API.h`~~ | - | - | **No change needed.** The file is one line, `#pragma once`, and declares no export macro. The survey assumed six API.h files; there are five. | 1 | **not needed** |
 
-*(The six `API.h` files get separate rows because each is an independent edit. They are one
-logical change, so land them in one commit.)*
+*(The `API.h` files get separate rows because each is an independent edit. They are one logical
+change, so land them in one commit. Note that only **five** need changing, not six.)*
+
+**On the ELF import case.** The plan expected separate export and import branches. ELF needs
+only one: `visibility( "default" )` on an imported declaration is correct and harmless, so a
+single `#if defined( __linux__ )` branch covers both and keeps the diff to 2 added, 1 modified.
 
 ## Whole-body guard wrap
 

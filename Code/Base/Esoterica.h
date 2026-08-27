@@ -54,6 +54,8 @@ namespace EE::Platform
 
 #if _WIN32
 #include "Platform/Platform_Win32.h"
+#elif defined( __linux__ )
+#include "Platform/Platform_Linux.h"
 #endif
 
 //-------------------------------------------------------------------------

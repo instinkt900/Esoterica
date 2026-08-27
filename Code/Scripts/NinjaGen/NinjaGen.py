@@ -134,11 +134,17 @@ def project_compile_flags( repo_root, project, configuration, problems ):
     flags += list( Toolchain.COMMON_COMPILER_FLAGS )
     flags += list( configuration.compiler_flags )
 
-    # -fvisibility=hidden only means something once _Module/API.h grows its
-    # __attribute__(( visibility( "default" ) )) branch, which is Phase 1. Setting it now means
-    # the export surface is correct as soon as that lands.
-    if project.get_project_type( configuration.base_name ) == SourceLists.PROJECT_TYPE_SHARED_LIBRARY:
-        flags.append( '-fvisibility=hidden' )
+    # No -fvisibility=hidden. It looks right, and it is wrong here.
+    #
+    # The export macros this codebase uses are a Windows DLL mechanism. _Module/API.h now has a
+    # visibility( "default" ) branch for Linux, but the vendored imgui and EASTL headers define
+    # IMGUI_API and EASTL_API as __declspec, which clang parses and then ignores on ELF. Under
+    # -fvisibility=hidden those symbols would be hidden, and Engine and EngineTools would fail
+    # to link against them. Code/**/ThirdParty cannot be edited (Conventions rule 5).
+    #
+    # Default visibility for everything is the ordinary ELF behaviour, and it is what the
+    # dllexport model approximates on Windows. Phase 5 or 7 can revisit this if .so load time
+    # ever matters.
 
     return flags
 
