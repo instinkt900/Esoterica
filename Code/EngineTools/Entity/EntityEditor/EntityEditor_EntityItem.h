@@ -6,6 +6,14 @@
 
 //-------------------------------------------------------------------------
 
+namespace EE
+{
+    // EntityWorld is used as a pointer here but never declared: MSVC's delayed lookup finds it
+    // through some other translation unit's includes. Forward-declared rather than including
+    // EntityWorld.h, which would pull the whole engine world into a tools header.
+    class EntityWorld;
+}
+
 namespace EE::EntityModel
 {
     class EntityEditorItem
