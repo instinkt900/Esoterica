@@ -5,6 +5,8 @@
 #include "Base/ThirdParty/concurrentqueue/concurrentqueue.h"
 #include <mutex>
 #include <shared_mutex>
+#include <thread>
+#include <condition_variable>
 
 //-------------------------------------------------------------------------
 
