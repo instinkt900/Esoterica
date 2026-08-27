@@ -19,6 +19,13 @@ namespace EE
 
 namespace EE::EntityModel
 {
+    // The `friend EntityMap;` below has to name EE::EntityModel::EntityMap. Without this
+    // declaration, unqualified lookup escapes to the `class EntityMap;` in namespace EE at the
+    // top of this file, which is a phantom: the real class lives here, in EE::EntityModel. The
+    // friendship then applies to a class nobody defines, and EntityMap's accesses to the
+    // private members below are rejected. MSVC resolves it to the right class regardless.
+    class EntityMap;
+
     struct EntityComponentPair
     {
         EntityComponentPair() = default;

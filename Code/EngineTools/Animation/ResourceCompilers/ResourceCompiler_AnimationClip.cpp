@@ -14,7 +14,7 @@
 #include "Base/Time/Timers.h"
 #include "Base/Math/MathRandom.h"
 #include "Base/TypeSystem/TypeDescriptors.h"
-#include <eastl/sort.h>
+#include <EASTL/sort.h>
 
 //-------------------------------------------------------------------------
 

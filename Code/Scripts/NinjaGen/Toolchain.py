@@ -227,8 +227,12 @@ SHEETS = {
 
     'FreeType':              Sheet( pkg_config = 'freetype2' ),
     'SQLite':                Sheet( libraries = ( 'sqlite3', ) ),
-    'MeshOptimizer':         Sheet( libraries = ( 'meshoptimizer', ),
-                                    requires_path = 'External/meshoptimizer',
+    # MeshOptimizer.props points at src/ for headers and lib/ for the library, rather than a
+    # conventional include/ prefix. DownloadDependencies.sh lays it out to match.
+    'MeshOptimizer':         Sheet( include_directories = ( 'External/MeshOptimizer/src', ),
+                                    library_directories = ( 'External/MeshOptimizer/lib', ),
+                                    libraries = ( 'meshoptimizer', ),
+                                    requires_path = 'External/MeshOptimizer',
                                     deferred_to_phase = 'Phase 3' ),
     # The install puts headers under include/GameNetworkingSockets/steam, and the engine writes
     # #include <steam/...>, so the search path is one level deeper than the install prefix.

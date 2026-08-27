@@ -2,6 +2,7 @@
 
 #include "Engine/_Module/API.h"
 #include "EntityDescriptors.h"
+#include "Entity.h"
 #include "Base/Types/Event.h"
 #include "Base/Threading/Threading.h"
 #include "Base/Resource/ResourcePtr.h"

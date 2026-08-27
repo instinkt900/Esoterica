@@ -9,6 +9,11 @@
 
 namespace EE::Physics
 {
+    // Only `friend class PhysicsWorld;` declarations introduce this name elsewhere, and a friend
+    // declaration does not make a name findable by ordinary lookup. MSVC allows the member
+    // below to name it anyway; standard C++ does not. Used as a pointer only, never defined.
+    class PhysicsWorld;
+
     //-------------------------------------------------------------------------
     // Base class for all physics shape components
     //-------------------------------------------------------------------------

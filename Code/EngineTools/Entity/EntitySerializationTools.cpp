@@ -7,7 +7,7 @@
 #include "Base/TypeSystem/TypeRegistry.h"
 #include "Base/FileSystem/FileSystem.h"
 
-#include <eastl/sort.h>
+#include <EASTL/sort.h>
 
 using namespace EE::Serialization;
 
