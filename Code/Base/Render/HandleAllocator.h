@@ -2,7 +2,9 @@
 
 #include "Base/Types/Arrays.h"
 #include "Base/Math/Math.h"
+#if _WIN32
 #include <intrin.h>
+#endif
 
 //-------------------------------------------------------------------------
 

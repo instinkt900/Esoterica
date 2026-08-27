@@ -6,6 +6,10 @@
 
 namespace EE
 {
+    template<typename T> class TResourcePtr;
+
+    //-------------------------------------------------------------------------
+
     namespace Resource
     {
         //-------------------------------------------------------------------------
@@ -99,6 +103,12 @@ namespace EE
                 return m_pResourceRecord->GetCompilationLog();
             }
             #endif
+
+            // TResourcePtr's copy and move constructors take a ResourcePtr const& or &&, and
+            // touch m_resourceID and m_pResourceRecord through it. Standard C++ only lets a
+            // derived class reach a protected member through an object of its own type, so it
+            // needs to be a friend. MSVC allows the access without this.
+            template<typename T> friend class EE::TResourcePtr;
 
         protected:
 

@@ -36,6 +36,9 @@ nothing and guarantees conflicts.
 | `Code/EngineTools/FileSystem/FileSystemWatcher.cpp` | Wrap the unguarded `<windows.h>` include block (lines 8-16) in `#ifdef _WIN32`. The rest of the file already sits inside the `#if _WIN32` that starts at line 18. | 3 | planned |
 | `Code/Base/Utils/GlobalRegistryBase.h` | Line 2: `#include "Base\Esoterica.h"` to `#include "Base/Esoterica.h"`. One character. clang does not treat `\` as a path separator in an include, so on Linux the header is simply not found. MSVC accepts `/`, so Windows is unaffected. | 0 | done |
 | `Code/Base/Input/InputDevices/InputDevice_Controller.cpp` | Line 2: `#include "Base\Math\Vector.h"` to `#include "Base/Math/Vector.h"`. Same reason as above. | 0 | done |
+| `Code/Base/Types/Color.h` | Hoist `struct ByteColor` out of the anonymous union that holds it. A named type may not be declared inside an anonymous union in standard C++; MSVC allows it as an extension. Layout, member names and Windows behaviour are unchanged. | 1 | done |
+| `Code/Base/TypeSystem/TypeInstance.h` | One line: `template<typename T> friend class TTypeInstance;`. `TTypeInstance`'s copy constructor reads `m_pInstance` through a `TypeInstance const&`, and standard C++ only allows a derived class to reach a protected member through an object of its own type. MSVC permits it without the friend. | 1 | done |
+| `Code/Base/Resource/ResourcePtr.h` | A forward declaration of `EE::TResourcePtr` at `EE` scope, plus `template<typename T> friend class EE::TResourcePtr;`. Same protected-access rule as above. The qualification matters: `TResourcePtr` lives in `EE`, not in `EE::Resource`. | 1 | done |
 
 ## Two-line guard additions
 
@@ -60,6 +63,16 @@ change, so land them in one commit. Note that only **five** need changing, not s
 **On the ELF import case.** The plan expected separate export and import branches. ELF needs
 only one: `visibility( "default" )` on an imported declaration is correct and harmless, so a
 single `#if defined( __linux__ )` branch covers both and keeps the diff to 2 added, 1 modified.
+
+## Missing includes that MSVC supplies transitively
+
+MSVC's standard headers pull in more than they promise, so this codebase relies on includes it
+never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modified**.
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
+| `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`. The header is MSVC-only, and this file uses nothing from it. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
 
 ## Whole-body guard wrap
 

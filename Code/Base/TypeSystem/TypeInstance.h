@@ -127,6 +127,12 @@ namespace EE
         // Destroy the currently set instance
         void DestroyInstance();
 
+        // TTypeInstance's copy and move constructors take a TypeInstance const&, and read
+        // m_pInstance through it. Standard C++ only lets a derived class reach a protected
+        // member through an object of its own type, so it needs to be a friend. MSVC allows the
+        // access without this.
+        template<typename T> friend class TTypeInstance;
+
     protected:
 
         IReflectedType* m_pInstance = nullptr;
