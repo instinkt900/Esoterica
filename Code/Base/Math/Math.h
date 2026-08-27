@@ -11,6 +11,8 @@
 
 #if _WIN32
 #include "Platform/Math_Win32.h"
+#elif defined( __linux__ )
+#include "Platform/Math_Linux.h"
 #endif
 
 // General Math Functions
