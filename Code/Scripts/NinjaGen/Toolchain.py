@@ -65,6 +65,13 @@ COMMON_COMPILER_FLAGS = (
     '-mavx',
     '-Wall',
     '-Wextra',
+    # The vendored imgui and EASTL define their export macros as __declspec(dllexport) under
+    # `#if EE_DLL`, and Code/**/ThirdParty is out of bounds (Conventions rule 5). -fdeclspec
+    # makes clang parse the attribute and ignore it, which is the generator-side fix that rule
+    # points to. It fires -Wignored-attributes hundreds of times from those headers, so the
+    # warning is off; nothing first-party uses __declspec.
+    '-fdeclspec',
+    '-Wno-ignored-attributes',
     # Esoterica.props sets TreatWarningAsError with EnableAllWarnings and a long list of
     # disabled MSVC warning numbers that have no clang equivalent. Phase 0 deliberately does not
     # translate that list, and does not pass -Werror. Conventions rule 3 forbids fixing upstream
