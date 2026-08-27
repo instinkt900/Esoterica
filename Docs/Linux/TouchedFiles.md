@@ -21,9 +21,9 @@ Status values: `planned` · `done` · `not needed` (checked, and confirmed unnec
 | Files confirmed to need **no** change | 3 |
 | **New** files added (no upstream conflict possible) | ~40 |
 
-The `.vcxproj` files and `Esoterica.slnx` need **no change at all**. The build generator finds
-`*_Linux.cpp` files by globbing the directory next to each `*_Win32.cpp`. Do not add Linux
-sources to the Visual Studio projects. It gains nothing and guarantees conflicts.
+The `.vcxproj` files and `Esoterica.slnx` need **no change at all**. Linux sources are listed in
+`Code/Scripts/NinjaGen/LinuxSources.txt`. Do not add them to the Visual Studio projects. It gains
+nothing and guarantees conflicts.
 
 ---
 
@@ -77,7 +77,7 @@ Checked during the survey. Recorded so that nobody investigates them again.
 | `Code/Base/Profiling.cpp` | Both `#if _WIN32` guards (lines 8 and 36) are already there. `OpenProfiler()` becomes a no-op on Linux, which is correct because this port drops Optick. |
 | `Code/Base/FileSystem/FileSystemPath.h` | This header declares `s_pathDelimiter`, and the platform `.cpp` defines it. The Linux `.cpp` defines `'/'`, and this header stays untouched. It is the model example of the intended pattern. |
 | `Code/Base/Render/RHI.h` | Contains no Direct3D types. The Vulkan backend is a new sibling `.cpp`. **Do not modify this header.** |
-| `Esoterica.slnx`, all `*.vcxproj` | The generator globs `*_Linux.cpp` from disk. No project-file changes. |
+| `Esoterica.slnx`, all `*.vcxproj` | The Linux sources live in `LinuxSources.txt`, and `SyncUpstream.py` only reads these files. No project-file changes. |
 | `Data/**` | `DataPath` hardcodes `'/'`, separate from the filesystem delimiter. Compiled data is portable. |
 
 ## Repository configuration
@@ -85,6 +85,21 @@ Checked during the survey. Recorded so that nobody investigates them again.
 | File | Change | Phase | Status |
 |---|---|---|---|
 | `.gitignore` | Add `Build/`. The existing entry is lowercase `build/`. Linux filesystems are case-sensitive, so git currently does **not** ignore `Build/`, the MSBuild and ninja output directory. Confirmed with `git check-ignore`. | 0 | planned |
+| `.gitignore` | Add `__pycache__/`. Running the build generator writes bytecode next to it. One line appended, nothing modified. | 0 | done |
+
+## New build generator files
+
+Additive, so no upstream conflict is possible. Listed here because they sit in an upstream
+directory, `Code/Scripts/NinjaGen/`, which Conventions rule 7 designates for build tooling.
+
+| New file | Purpose | Phase |
+|---|---|---|
+| `Code/Scripts/NinjaGen/SyncUpstream.py` | Reads `Esoterica.slnx` and the `.vcxproj` files. Writes and checks `UpstreamProjects.txt` | 0 |
+| `Code/Scripts/NinjaGen/SourceLists.py` | The three-list format, and the build model built from it | 0 |
+| `Code/Scripts/NinjaGen/SourceLists_Test.py` | Checks for both of the above | 0 |
+| `Code/Scripts/NinjaGen/UpstreamProjects.txt` | Generated snapshot of the Visual Studio projects. Never hand-edited | 0 |
+| `Code/Scripts/NinjaGen/Exclusions.txt` | Upstream sources the Linux build drops | 0 |
+| `Code/Scripts/NinjaGen/LinuxSources.txt` | Sources this fork adds | 0 |
 
 ## Root-level scripts (new files that mirror the `.bat` equivalents)
 
