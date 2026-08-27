@@ -73,7 +73,7 @@ namespace EE::Animation
         virtual SyncTrack const& GetSyncTrack() const override { return m_blendedSyncTrack; }
 
         #if EE_DEVELOPMENT_TOOLS
-        inline void GetDebugInfo( int16_t& outSourceIdx0, int16_t& outSourceIdx1, float& outBlendweight ) const;
+        void GetDebugInfo( int16_t& outSourceIdx0, int16_t& outSourceIdx1, float& outBlendweight ) const;
         #endif
 
     protected:

@@ -68,6 +68,33 @@ EE_FORCE_INLINE int strncpy_s( char ( &destination )[N], char const* pSource, si
     return strncpy_s( destination, N, pSource, count );
 }
 
+// MSVC's strcpy_s truncates nothing - it fails if the source does not fit. Mirror that, since
+// callers rely on the destination being untouched rather than silently cut short.
+EE_FORCE_INLINE int strcpy_s( char* pDestination, size_t destinationSize, char const* pSource )
+{
+    if ( pDestination == nullptr || pSource == nullptr || destinationSize == 0 )
+    {
+        return 22; // EINVAL, which is what the MSVC version returns
+    }
+
+    size_t const sourceLength = strlen( pSource );
+    if ( sourceLength >= destinationSize )
+    {
+        pDestination[0] = 0;
+        return 34; // ERANGE, which is what the MSVC version returns
+    }
+
+    memcpy( pDestination, pSource, sourceLength + 1 );
+    return 0;
+}
+
+// MSVC provides a template overload that deduces the size of a fixed array destination.
+template<size_t N>
+EE_FORCE_INLINE int strcpy_s( char ( &destination )[N], char const* pSource )
+{
+    return strcpy_s( destination, N, pSource );
+}
+
 EE_FORCE_INLINE int vsprintf_s( char* pBuffer, size_t bufferSize, char const* pFormat, va_list args )
 {
     return vsnprintf( pBuffer, bufferSize, pFormat, args );

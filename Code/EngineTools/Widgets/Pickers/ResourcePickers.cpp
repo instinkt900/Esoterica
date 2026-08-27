@@ -6,6 +6,9 @@
 #include "Base/Imgui/ImguiX.h"
 #include "Base/TypeSystem/TypeRegistry.h"
 #include "Base/Platform/PlatformUtils_Win32.h"
+#if defined( __linux__ )
+#include "Base/Platform/PlatformUtils_Linux.h"
+#endif
 #include "Base/TypeSystem/DataFileInfo.h"
 #include "Base/TypeSystem/ResourceInfo.h"
 #include "EASTL/sort.h"

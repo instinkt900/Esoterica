@@ -8,6 +8,9 @@
 #include "Base/TypeSystem/DataFileInfo.h"
 #include "Base/TypeSystem/ResourceInfo.h"
 #include "Base/Platform/PlatformUtils_Win32.h"
+#if defined( __linux__ )
+#include "Base/Platform/PlatformUtils_Linux.h"
+#endif
 #include <EASTL/sort.h>
 #include "EngineTools/Resource/Dialogs/EditorDialog_FileSystemAction.h"
 

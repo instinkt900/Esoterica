@@ -397,10 +397,10 @@ namespace EE::Animation
         inline void EndRootMotionDebuggerUpdate( Transform const& endWorldTransform ) { EE_ASSERT( m_isStandaloneGraphInstance ); m_graphContext.m_pRootMotionDebugger->EndCharacterUpdate( endWorldTransform ); }
 
         // Get the task system debug mode
-        inline TaskSystemDebugMode GetTaskSystemDebugMode() const;
+        TaskSystemDebugMode GetTaskSystemDebugMode() const;
 
         // Set the task system debug mode
-        inline void SetTaskSystemDebugMode( TaskSystemDebugMode mode );
+        void SetTaskSystemDebugMode( TaskSystemDebugMode mode );
 
         // Get the debug world transform that the task system used to execute
         Transform GetTaskSystemDebugWorldTransform();

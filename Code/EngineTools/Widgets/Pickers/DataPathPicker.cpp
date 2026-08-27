@@ -3,6 +3,9 @@
 #include "EngineTools/Core/SystemDialogs.h"
 #include "Base/Imgui/ImguiX.h"
 #include "Base/Platform/PlatformUtils_Win32.h"
+#if defined( __linux__ )
+#include "Base/Platform/PlatformUtils_Linux.h"
+#endif
 #include "Base/Resource/ResourceID.h"
 
 //-------------------------------------------------------------------------

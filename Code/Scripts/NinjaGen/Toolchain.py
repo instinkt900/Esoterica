@@ -252,9 +252,15 @@ SHEETS = {
     'ixWebSocket':           Sheet( include_directories = ( 'External/ixwebsocket/include', ),
                                     library_directories = ( 'External/ixwebsocket/lib', ),
                                     libraries = ( 'ixwebsocket', 'z', 'ssl', 'crypto' ) ),
-    'CTT':                   Sheet( libraries = ( 'ctt_capi', ),
-                                    requires_path = 'External/CTT',
-                                    deferred_to_phase = 'Phase 3' ),
+    # ctt is an open-source Rust crate with C bindings, not the closed Windows blob the layout
+    # suggests. The prebuilt External.zip ships only ctt_capi.dll, so DownloadDependencies.sh
+    # builds ctt-c-api 0.5.0 from crates.io instead - same library, same version, same ctt.h.
+    # Lower-case "ctt", to match CTT.props and the directory the Windows zip extracts. The path
+    # was spelled "External/CTT" before, which happens to work on Windows and never on Linux.
+    'CTT':                   Sheet( include_directories = ( 'External/ctt/include', ),
+                                    library_directories = ( 'External/ctt/lib', ),
+                                    libraries = ( 'ctt_capi', ),
+                                    requires_path = 'External/ctt' ),
     # DXC.props points at External/DirectXShaderCompiler with inc/ and lib/x64/.
     #
     # Two include paths, not one. The Linux tarball nests its headers under inc/dxc, and

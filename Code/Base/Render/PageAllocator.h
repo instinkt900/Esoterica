@@ -107,7 +107,11 @@ namespace EE::Render
             //-------------------------------------------------------------------------
             Handle result = {};
             result.m_handle = handle;
-            result.m_data = TArrayView( m_memoryPool.GetData() + handle.m_offset, numItems );
+            // TArrayView<T>, not TArrayView. Class template argument deduction through the alias
+            // makes clang build eastl::span's implicit deduction guides with the alias's fixed
+            // extent, and span(T (&)[N]) -> span<T, N> then forms an array of size_t( -1 )
+            // elements, which is an error. m_data is TArrayView<T> anyway, so nothing is deduced.
+            result.m_data = TArrayView<T>( m_memoryPool.GetData() + handle.m_offset, numItems );
 
             if constexpr ( !std::is_trivially_constructible_v<T> )
             {
