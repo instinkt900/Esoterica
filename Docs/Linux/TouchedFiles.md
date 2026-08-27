@@ -32,8 +32,8 @@ nothing and guarantees conflicts.
 | File | Change | Phase | Status |
 |---|---|---|---|
 | `Code/Scripts/NinjaGen/NinjaGen.py` | Large rewrite. A special case, see [01-UpstreamMerges.md](01-UpstreamMerges.md#special-case-codescriptsninjagenninjagenpy). | 0 | planned |
-| `Code/EngineTools/FileSystem/FileSystemWatcher.h` | Line 15: change `#if _WIN32` to `#if _WIN32 \|\| defined( __linux__ )`. One line modified. The private members already use platform-neutral types (`void*`, `uint8_t*`, `unsigned long`), so they need no change. See the note below. | 3 | planned |
-| `Code/EngineTools/FileSystem/FileSystemWatcher.cpp` | Wrap the unguarded `<windows.h>` include block (lines 8-16) in `#ifdef _WIN32`. The rest of the file already sits inside the `#if _WIN32` that starts at line 18. | 3 | planned |
+| `Code/EngineTools/FileSystem/FileSystemWatcher.h` | Line 15: change `#if _WIN32` to `#if _WIN32 \|\| defined( __linux__ )`. One line modified. **Needed in Phase 2, not Phase 3:** the Reflector parses every project header in one translation unit, so a Windows-gated `Watcher` class breaks reflection for all of EngineTools. | 2 (was planned for 3) | done |
+| `Code/EngineTools/FileSystem/FileSystemWatcher.cpp` | Wrap the unguarded Windows preamble and `<windows.h>` include in `#ifdef _WIN32`. The rest of the file already sits inside an `#if _WIN32`. The implementation is still Windows-only; Phase 3 writes the inotify one. | 2 (was planned for 3) | done |
 | `Code/Base/Utils/GlobalRegistryBase.h` | Line 2: `#include "Base\Esoterica.h"` to `#include "Base/Esoterica.h"`. One character. clang does not treat `\` as a path separator in an include, so on Linux the header is simply not found. MSVC accepts `/`, so Windows is unaffected. | 0 | done |
 | `Code/Base/Input/InputDevices/InputDevice_Controller.cpp` | Line 2: `#include "Base\Math\Vector.h"` to `#include "Base/Math/Vector.h"`. Same reason as above. | 0 | done |
 | `Code/Base/Types/Color.h` | Hoist `struct ByteColor` out of the anonymous union that holds it. A named type may not be declared inside an anonymous union in standard C++; MSVC allows it as an extension. Layout, member names and Windows behaviour are unchanged. | 1 | done |
@@ -77,6 +77,22 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
 | `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`, with an `#else` including `<immintrin.h>`. The MSVC header is where `_tzcnt_u64` and `_lzcnt_u64` come from on Windows; clang has them in `<immintrin.h>`. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
 
+## Phase 2 - Reflector
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Applications/Reflector/ReflectorApplication.cpp` | Wrap `<windows.h>` and `<consoleapi2.h>` in `#if _WIN32`. Neither is used: the file calls no Windows API. Guarded rather than deleted, per Conventions rule 3. | 2 | done |
+| `Code/Applications/Reflector/TypeReflection/Clang/ClangParser.cpp` | `#elif defined( __linux__ )` for `PlatformUtils_Linux.h`, and an `#if _WIN32` / `#else` around the single `Platform::Win32::GetShortPath` call. `GetShortPath` works around `MAX_PATH`; the Linux version returns its input unchanged. | 2 | done |
+| `Code/Applications/Reflector/Reflector.cpp` | Guard the `ShaderReflection_ShaderCompiler.h` include; `#if !_WIN32` early return at the top of `ReflectShaders` (**Phase 4 reverses this**); `system( "cls" )` to `clear`; normalise MSBuild backslashes in header and dependency paths; resolve header path case. | 2 | done |
+| `Code/Applications/Reflector/Reflector.cpp` (2) | `IsUnderToolsPath` searched for a hardcoded `"\\EngineTools\\"`, so on Linux no header was ever classified as tools-only. It now builds the search string from `FileSystem::Path::s_pathDelimiter`. Without this, every tools header was parsed in the no-dev-tools pass and failed on `ImGuiX` types that only exist when `EE_DEVELOPMENT_TOOLS` is set. | 2 | done |
+| `Code/Applications/Reflector/ReflectorSettings.h` | Spell the five path constants per platform (`g_codeFolderPath`, `g_buildFolderPath`, `g_buildTempFolderPath`, `g_runtimeEngineProjectPath`, `g_toolsEngineProjectPath`). A backslash is a separator on Windows and an ordinary filename character here, so the Reflector was creating a directory literally named `Build\_Temp\`. | 2 | done |
+| `Code/Applications/Reflector/TypeReflection/Clang/ClangUtils.h` | `<clang/AST/Ast.h>` to `<clang/AST/AST.h>`. Case mismatch; the real header is `AST.h`. | 2 | done |
+| `Code/Applications/Reflector/TypeReflection/Clang/ClangUtils.cpp` | Add `BuiltinType::ULong` and `Long` cases, guarded to non-Windows. Windows is LLP64 so `uint64_t` is `unsigned long long`; Linux is LP64 where it is `unsigned long`, and without these every 64-bit property failed to resolve. | 2 | done |
+| `Code/Applications/Reflector/TypeReflection/Clang/ClangVisitors_TranslationUnit.cpp` | `"Clangvisitors_Structure.h"` to `"ClangVisitors_Structure.h"`. Case mismatch. | 2 | done |
+| `Code/Applications/Reflector/TypeReflection/TypeReflection_CodeGenerator.cpp` | `<eastl/sort.h>` to `<EASTL/sort.h>`. Case mismatch. | 2 | done |
+| `Code/Base/Utils/CommandLineParser.h` | Forward-declare `operator<<( std::ostream&, String const& )` above the template that uses it. The definition is at the bottom of the file, and two-phase lookup cannot reach it: `String` is an eastl type, so ADL searches `eastl`, not `EE`. | 2 | done |
+| `Code/EngineTools/Resource/ResourceCompilerContext.h` | Forward-declare `class Compiler;`. Only a `friend class Compiler;` declares it today, and a friend declaration does not make a name findable by ordinary lookup. | 2 | done |
+
 ## Whole-body guard wrap
 
 Use "wrap, do not split" to make an unguarded Windows-only translation unit inert on Linux. Add
@@ -86,6 +102,8 @@ the same interface.
 
 | File | Change | Phase | Status |
 |---|---|---|---|
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.h` | Wrap the body in `#ifdef _WIN32`. It includes `d3d12shader.h` and `dxcapi.h`, and it is the **only** shader reflection header that needs DXC. **Phase 4 reverses this.** | 2 | done |
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.cpp` | As above. | 2 | done |
 | `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. It is 552 lines of COM `IFileDialog` code, with an unguarded `<windows.h>` and `<shobjidl.h>` include at line 5. New sibling: `SystemDialogs_Linux.cpp`. | 7 | planned |
 
 ## Confirmed to need no change

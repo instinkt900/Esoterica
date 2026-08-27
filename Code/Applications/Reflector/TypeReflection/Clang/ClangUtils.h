@@ -2,7 +2,7 @@
 
 #pragma warning( disable : 4714 4267 4244 4512 4800 4389 4146 4291 4324 4458 4141 4459 4245 4624 4996 4805 4275 4702 )
 
-#include <clang/AST/Ast.h>
+#include <clang/AST/AST.h>
 #include <clang/AST/Type.h>
 #include <clang-c/Index.h>
 

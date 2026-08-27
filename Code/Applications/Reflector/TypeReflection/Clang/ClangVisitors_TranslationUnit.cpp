@@ -1,7 +1,7 @@
 #include "ClangVisitors_TranslationUnit.h"
 #include "ClangVisitors_Macro.h"
 #include "ClangVisitors_Enum.h"
-#include "Clangvisitors_Structure.h"
+#include "ClangVisitors_Structure.h"
 #include "Base/Types/ScopedValue.h"
 
 //-------------------------------------------------------------------------

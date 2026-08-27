@@ -100,6 +100,23 @@ namespace EE::ClangUtils
                 qualifiedName = "int64_t";
                 break;
 
+                #if !_WIN32
+                // Windows is LLP64, so uint64_t is `unsigned long long` and the two cases above
+                // catch it. Linux is LP64, where `long` is 64 bits and uint64_t resolves to
+                // `unsigned long` instead. Without these the Reflector reports
+                // "Cannot resolve property typename (uint64_t)" for every 64-bit member.
+                //
+                // Deliberately not shared with the cases above: on Windows `long` is 32 bits,
+                // and mapping it to int64_t there would be wrong.
+                case clang::BuiltinType::ULong:
+                qualifiedName = "uint64_t";
+                break;
+
+                case clang::BuiltinType::Long:
+                qualifiedName = "int64_t";
+                break;
+                #endif
+
                 case clang::BuiltinType::Float:
                 qualifiedName = "float";
                 break;

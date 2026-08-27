@@ -1,8 +1,16 @@
 #include "ClangParser.h"
+#include <EASTL/algorithm.h>
+#if !_WIN32
+#include <dirent.h>
+#endif
 #include "ClangVisitors_TranslationUnit.h"
 #include "Applications/Reflector/TypeReflection/TypeReflection_ReflectionDatabase.h"
 #include "Base/Time/Timers.h"
+#if _WIN32
 #include "Base/Platform/PlatformUtils_Win32.h"
+#elif defined( __linux__ )
+#include "Base/Platform/PlatformUtils_Linux.h"
+#endif
 #include "Base/FileSystem/FileSystemUtils.h"
 #include <fstream>
 
@@ -71,8 +79,27 @@ namespace EE::Reflection
         TInlineVector<char const*, 10> clangArgs;
         for ( auto i = 0; i < g_numIncludePaths; i++ )
         {
-            String const fullPath = m_context.m_solutionDirectoryPath.GetString() + g_includePaths[i];
+            String fullPath = m_context.m_solutionDirectoryPath.GetString() + g_includePaths[i];
+
+            #if !_WIN32
+            // g_includePaths is written with Windows separators, and two of its entries have
+            // the wrong case for a case-sensitive filesystem ("EABase\include\common" against
+            // EABase/include/Common, and "EASTL\include" against EASTL/Include). Normalise the
+            // separators, then recover the real case from disk.
+            eastl::replace( fullPath.begin(), fullPath.end(), '\\', '/' );
+
+            String correctlyCasedPath;
+            if ( FileSystem::Path::GetCorrectCaseForPath( fullPath.c_str(), correctlyCasedPath ) )
+            {
+                fullPath = correctlyCasedPath;
+            }
+            #endif
+
+            #if _WIN32
             String const shortPath = Platform::Win32::GetShortPath( fullPath );
+            #else
+            String const shortPath = Platform::Linux::GetShortPath( fullPath );
+            #endif
             fullIncludePaths.push_back( "-I" + shortPath );
             clangArgs.push_back( fullIncludePaths.back().c_str() );
 
@@ -83,6 +110,43 @@ namespace EE::Reflection
             }
         }
 
+        #if !_WIN32
+        // libclang normally locates its own builtin headers - stddef.h, stdarg.h and the rest -
+        // relative to the clang executable. The Reflector links libclang directly, so there is
+        // no executable to derive it from and the resource directory has to be given.
+        //
+        // On Windows this does not arise: the MSVC toolchain headers are found through the
+        // registry and the environment instead.
+        String resourceDirArg;
+        {
+            String const clangLibraryRoot = m_context.m_solutionDirectoryPath.GetString() + "External/LLVM/lib/clang";
+
+            // One versioned directory lives here, and its name changes with the pinned LLVM, so
+            // it is discovered rather than written down.
+            if ( DIR* pDirectory = opendir( clangLibraryRoot.c_str() ) )
+            {
+                while ( dirent const* pEntry = readdir( pDirectory ) )
+                {
+                    if ( pEntry->d_name[0] != '.' )
+                    {
+                        resourceDirArg = "-resource-dir=" + clangLibraryRoot + "/" + pEntry->d_name;
+                        break;
+                    }
+                }
+
+                closedir( pDirectory );
+            }
+
+            if ( resourceDirArg.empty() )
+            {
+                m_context.LogError( "Could not find clang's resource directory under %s", clangLibraryRoot.c_str() );
+                return false;
+            }
+
+            clangArgs.push_back( resourceDirArg.c_str() );
+        }
+        #endif
+
         clangArgs.push_back( "-x" );
         clangArgs.push_back( "c++" );
         clangArgs.push_back( "-std=c++20" );
@@ -92,8 +156,17 @@ namespace EE::Reflection
         clangArgs.push_back( "-Wno-multichar" );
         clangArgs.push_back( "-Wno-deprecated-builtins" );
         clangArgs.push_back( "-fparse-all-comments" );
+        #if _WIN32
+        // MSVC emulation, so libclang can parse the Windows toolchain headers and the
+        // __declspec that _Module/API.h expands to there.
+        //
+        // Off on Linux, and it has to be: -fms-compatibility makes clang behave enough like
+        // MSVC to break glibc's headers, which show up as "__STRICT_ANSI__ seems to have been
+        // undefined" followed by char16_t and char32_t going undeclared. Nothing needs it here,
+        // because API.h takes its visibility( "default" ) branch on this platform.
         clangArgs.push_back( "-fms-extensions" );
         clangArgs.push_back( "-fms-compatibility" );
+        #endif
         clangArgs.push_back( "-Wno-unknown-warning-option" );
         clangArgs.push_back( "-Wno-return-type-c-linkage" );
         clangArgs.push_back( "-Wno-gnu-folding-constant" );
