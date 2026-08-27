@@ -48,7 +48,7 @@ in parallel, the phase doc says so.
 
 | Phase | Deliverable | Rough cost |
 |---|---|---|
-| [0 - Build System](Phases/Phase0-BuildSystem.md) | `ninja` builds a Linux target from the existing `.vcxproj` files | 2-3 weeks |
+| [0 - Build System](Phases/Phase0-BuildSystem.md) | `ninja` builds a Linux target from source lists synced off the `.vcxproj` files | 2-3 weeks |
 | [1 - Base Platform Layer](Phases/Phase1-BasePlatform.md) | `Esoterica.Base` compiles and links on Linux, headless | 2-3 weeks |
 | [2 - Reflector](Phases/Phase2-Reflector.md) | Reflection codegen runs on Linux | 1-2 weeks |
 | [3 - Resource Compiler](Phases/Phase3-ResourceCompiler.md) | Game data compiles on Linux | 2-3 weeks |
@@ -78,9 +78,14 @@ Findings from the first survey of the codebase (2026-08-13, at commit `6813cf9`)
 - **The imgui Win32 backend is a vendored copy of upstream `imgui_impl_win32.cpp`.** Upstream
   `imgui_impl_sdl3.cpp` is therefore close to a drop-in replacement, not a rewrite.
 - **The `.vcxproj` files list every source explicitly** (Base 147, Engine 236, EngineTools 155
-  `ClCompile` entries) with **no `ExcludedFromBuild` entries**. This is what makes a
-  vcxproj-derived build generator work: when upstream adds or moves a source file, the Linux
-  side needs no change.
+  `ClCompile` entries) with **no `ExcludedFromBuild` entries**. That makes them a good
+  machine-readable record of what upstream builds. `SyncUpstream.py` turns them into
+  `UpstreamProjects.txt`, and checks that copy is current on every build.
+- **Upstream churns about five source-list entries a year.** 107 commits in total, and four in
+  the last twelve months touched a `.vcxproj` source list. Keeping the Linux source list in
+  three reviewed text files therefore costs almost nothing, and it removes the filename
+  heuristics a live-parsing generator needs. See
+  [02-Architecture.md](02-Architecture.md#decision-three-source-lists-checked-against-the-vcxproj-files).
 
 ## Scope decisions already made
 
@@ -88,6 +93,9 @@ These were decided at planning time. Change one only with a deliberate decision 
 
 - **Build system: extend `Code/Scripts/NinjaGen/NinjaGen.py`.** Not CMake. See the reasoning in
   [02-Architecture.md](02-Architecture.md#build-system).
+- **The Linux source list lives in three reviewed text files**, synced off the `.vcxproj` files
+  by `SyncUpstream.py` rather than derived live on every build. Amended 2026-08-27; the original
+  plan derived it live. [Progress.md](Progress.md) records why.
 - **Renderer: full feature parity with the Direct3D 12 backend.** This includes raytracing, mesh
   shaders, and variable rate shading. There is no reduced-feature Linux renderer.
 - **Target: x86-64 Linux, Vulkan 1.3, clang.** No ARM, no GCC as the primary compiler, and no
@@ -95,5 +103,5 @@ These were decided at planning time. Change one only with a deliberate decision 
 
 ## Status
 
-See [Progress.md](Progress.md). At the time of writing, **no implementation work has started**.
-This directory is the plan only.
+See [Progress.md](Progress.md). **Phase 0 is in progress.** P0.1 to P0.4 are done: the source
+lists and the sync tool. The ninja emitter, P0.5 to P0.8, is next.

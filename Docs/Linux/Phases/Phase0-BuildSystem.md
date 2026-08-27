@@ -27,7 +27,8 @@ constraint.
 
 ## Scope boundary
 
-**In scope:** the generator, the dependency-acquisition script, and `.gitignore`.
+**In scope:** the source lists and sync tool, the generator, the dependency-acquisition script,
+and `.gitignore`.
 
 **Out of scope:** making anything compile. Do not write a single `_Linux.cpp` in this phase. Do
 not stub out Win32 code to get further. Compile errors from missing platform implementations are
@@ -37,80 +38,75 @@ the *expected output* of Phase 0, and the input to Phase 1.
 
 ## Tasks
 
-### P0.1 - `.slnx` parsing
+### P0.1 - The source lists and the sync tool
 
-Replace the `.sln` regex with XML parsing of `Esoterica.slnx`.
+The Linux build reads three text files under `Code/Scripts/NinjaGen/`, not XML:
 
-The file is simple XML. These elements matter:
+| File | Maintained | Contents |
+|---|---|---|
+| `UpstreamProjects.txt` | **generated** | Per project: the `.vcxproj` path, `ConfigurationType` per configuration, `.slnx` build exclusions, project references, property sheets, and every source upstream builds. |
+| `Exclusions.txt` | by hand | Globs for upstream sources the Linux build drops, each with a comment saying why. |
+| `LinuxSources.txt` | by hand | Sources this fork adds, grouped by `[Project]`. |
 
-```xml
-<Solution>
-  <Configurations>
-    <BuildType Name="Debug" /> <BuildType Name="Release" /> <BuildType Name="Shipping" />
-    <Platform Name="x64" />
-  </Configurations>
-  <Folder Name="/1. Applications/">
-    <Project Path="Code/Applications/Editor/Esoterica.Applications.Editor.vcxproj" Id="...">
-      <BuildDependency Project="Code/Applications/ResourceCompiler/..." />
-      <Build Solution="Shipping|*" Project="false" />
-    </Project>
-  </Folder>
-</Solution>
-```
+`SyncUpstream.py` is the only thing that reads `Esoterica.slnx` and the `.vcxproj` files.
+
+- `python3 Code/Scripts/NinjaGen/SyncUpstream.py --update` rewrites `UpstreamProjects.txt`.
+- `python3 Code/Scripts/NinjaGen/SyncUpstream.py` re-derives it and **exits 1 with a diff** if
+  the committed copy is stale.
 
 Requirements:
 
 - Use `xml.etree.ElementTree`. Add no new Python dependencies.
 - Honor `<Build Project="false"/>` (never build) and
-  `<Build Solution="Shipping|*" Project="false"/>` (exclude from that configuration only).
-- Honor `<BuildDependency>`, as well as each `.vcxproj` file's own `<ProjectReference>`.
-- **Warn** on any project in the `.slnx` that the generator does not recognize. Do not skip it
-  silently. A silently dropped project is the failure mode that hurts most on a future upstream
-  merge.
-- Read the configuration names from `<Configurations>`. Do not hardcode them.
+  `<Build Solution="Shipping|*" Project="false"/>` (exclude from that configuration only), with
+  `*` as a wildcard on either side of the `|`.
+- Read the configuration and platform names from `<Configurations>`. Do not hardcode them.
+- **Correct filename case at sync time.** Several `.vcxproj` entries disagree with the case of
+  the file on disk. MSBuild ignores case and Linux does not. Write the on-disk spelling into
+  `UpstreamProjects.txt` so the correction happens once, not on every build.
+- **Drop a listed source that no file matches**, with a warning. It is a stale `.vcxproj` entry,
+  and keeping it only makes ninja fail with `missing and no known rule to make it`.
+- Ignore `<ClInclude>`. Headers are only needed as the `REFLECT` rule's dependency set, and a
+  glob gives that without a list anybody has to maintain.
+- **Deterministic output.** Same input, byte-identical file. Sort projects and sources.
 
 Note that `Code/Scripts/Reflect/Esoterica.Scripts.Reflect.vcxproj` is an NMAKE wrapper project
-(`Reflect.nmake`), not a real C++ project. The stale script special-cased it by name. Keep that
-behavior, but detect it by the absence of `ClCompile` entries instead of by name.
+(`Reflect.nmake`), not a real C++ project. Its `ConfigurationType` is `Makefile`. Record it as
+such and never build it directly. Detect it by its `ConfigurationType`, not by name.
 
-### P0.2 - `.vcxproj` parsing
+### P0.2 - `ConfigurationType` and property sheets, per configuration
 
-Extract this from each project file:
+Both vary by configuration in this codebase, and the stale upstream script read each once and
+got it wrong.
 
-| Element | Use |
-|---|---|
-| `<ClCompile Include="..."/>` | source list |
-| `<ClInclude Include="..."/>` | header list, needed for the `REFLECT` rule's dependency set |
-| `<ProjectReference Include="..."/>` | link dependency edges |
-| `<ConfigurationType>` | `.so`, `.a`, or executable. **Read it per configuration**, see below. |
-| `<Import Project="..\PropertySheets\X.props"/>` | which external dependencies to link |
+- `Esoterica.Base` is `DynamicLibrary` in Debug and Release, and `StaticLibrary` in Shipping.
+  Three separate `<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='...'">` blocks
+  declare it.
+- Property sheet imports sit in `<ImportGroup Condition="...">` blocks, one per configuration.
+  `Esoterica.Base` imports `ixWebSocket.props` in Debug and Release but not in Shipping.
 
-**`ConfigurationType` varies by configuration.** `Esoterica.Base` is `DynamicLibrary` in Debug
-and Release, and `StaticLibrary` in Shipping. Three separate
-`<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='...'">` blocks declare it. The stale
-script read it once and got this wrong. Parse it per configuration.
+Map `DynamicLibrary` to a `.so`, `StaticLibrary` to a `.a`, `Application` to an executable, and
+`Makefile` to "never built".
 
-Line-based parsing works here, because the files are machine-generated with one element per
-line, and the stale script does it that way. XML parsing is more robust and costs little, so
-prefer XML.
+### P0.3 - Exclusions
 
-### P0.3 - Platform source filtering
+`Exclusions.txt` decides what the Linux build drops. Globs match the repo-relative path, where
+`**/` is zero or more leading directories, `**` is anything, and `*` is anything except `/`.
 
-The rule:
+The starting set:
 
-- **Exclude** any source whose stem ends in `_Win32`.
-- **Include** any `*_Linux.cpp` in the same directory as an excluded `*_Win32.cpp`, plus any
-  `*_Linux.cpp` under a `Platform/` directory. The `.vcxproj` files never list these, by
-  design. That is what keeps the project files unmodified.
-- **Warn loudly** on any source with a platform-looking suffix that is neither `_Win32` nor
-  `_Linux`, such as a future `_Mac` or `_Durango`. A new upstream platform must not slip
-  through.
-- Also exclude `.rc` and `.aps` resource files, and anything under a `Win32/` directory
-  (`Code/Applications/Editor/Win32/`, `Code/Applications/Engine/Win32/`). Include the matching
-  `Linux/` directories.
+```
+**/*_Win32.cpp                              the platform implementations
+**/Win32/**                                 the application entry point directories
+Code/Base/Render/RHI_Direct3D12.cpp         6084 lines, no platform suffix, no #if _WIN32 guard
+Code/Base/ThirdParty/D3D12MemoryAllocator/**   AMD's D3D12 allocator. VMA replaces it in Phase 5
+```
 
-Write this as one well-commented function with a table of suffixes. It is the most important
-piece of upstream-drift insulation in the generator.
+**Report any glob that matches nothing.** It is almost always a leftover from an upstream
+rename, and a stale exclusion is how a file quietly rejoins the build.
+
+Every entry carries a comment saying why. That comment is the thing a future reader needs and
+that no filename convention can supply.
 
 ### P0.4 - Autogenerated source globbing
 
@@ -121,14 +117,14 @@ _Module/_Autogenerated/TypeInfo/*.cpp
 _Module/_Autogenerated/Shaders/*.cpp
 ```
 
-Glob both, per project. The directories may not exist before the Reflector has run (Phase 2).
-Handle their absence without failing, and make sure a re-run after reflection is cheap and picks
-up the new files.
+These are Reflector outputs, regenerated on every reflection run, so they stay **globbed** rather
+than listed. Glob both, per project. The directories do not exist before the Reflector has run
+(Phase 2). Handle their absence without failing.
 
 Upstream has a case inconsistency here. `Esoterica.props` writes `_Module\_Autogenerated\`,
 `Reflect.nmake` writes `_Module\_AutoGenerated\`, and `.gitignore` has `**/_AutoGenerated/*`. On
-a case-sensitive filesystem those are different directories. **Use whatever the Reflector
-actually emits** (find out in Phase 2), and glob case-insensitively to be safe.
+a case-sensitive filesystem those are different directories. **The real one on disk is
+`_AutoGenerated`.** Glob case-insensitively so both spellings work.
 
 ### P0.5 - Compiler and linker flags
 
@@ -237,20 +233,25 @@ Each one is checkable. All must pass.
 1. `python3 Code/Scripts/NinjaGen/NinjaGen.py` exits 0 and writes
    `Build/Linux/Esoterica.ninja`.
 2. The generated ninja file has a compile rule for every `.cpp` in `Esoterica.Base.vcxproj`
-   **except** those matching `*_Win32.cpp`.
+   **except** those `Exclusions.txt` covers. Kept plus excluded must account for all 147
+   `ClCompile` entries.
 3. The `Esoterica.Base` compile commands include `-DESOTERICA_BASE`, `-DEE_DLL` (Debug),
    `-ICode`, `-std=c++20`, and `-fno-exceptions`.
 4. `Esoterica.Base` resolves to a `.so` target in Debug and Release, and a `.a` target in
    Shipping.
 5. The generator writes `compile_commands.json`, and `clangd` can resolve
    `#include "Base/Esoterica.h"` from any source file.
-6. A re-run with no changes produces a byte-identical ninja file. The output must be
-   deterministic, so that the file diffs cleanly.
+6. A re-run with no changes produces a byte-identical ninja file, and
+   `SyncUpstream.py --update` produces a byte-identical `UpstreamProjects.txt`. Both must be
+   deterministic, so that they diff cleanly.
 7. `git status --porcelain` shows no change to any `.vcxproj` file, and none to
    `Esoterica.slnx`.
 8. `git check-ignore Build/foo` succeeds.
-9. **The Windows MSBuild build still succeeds**, unchanged.
-10. `ninja -f Build/Linux/Esoterica.ninja` reaches the compiler and emits compile errors from
+9. `python3 Code/Scripts/NinjaGen/SyncUpstream.py` exits 0 on a clean tree, and exits 1 with a
+   diff when a `.vcxproj` gains a source. `SourceLists.py` reports no problems: no stale
+   exclusion glob, no missing Linux source, no unknown project section.
+10. **The Windows MSBuild build still succeeds**, unchanged.
+11. `ninja -f Build/Linux/Esoterica.ninja` reaches the compiler and emits compile errors from
     *missing platform implementations*, not from generator bugs such as bad flags, missing
     include paths, or malformed rules. Save that error output. It is Phase 1's worklist.
 
@@ -268,7 +269,7 @@ Each one is checkable. All must pass.
 
 Record this in [Progress.md](../Progress.md):
 
-- The compile-error output from criterion 10, or where you saved it.
+- The compile-error output from criterion 11, or where you saved it.
 - Which `.props` sheets you mapped, and which are still unmapped.
-- Whether the real directory is `_Autogenerated` or `_AutoGenerated`.
 - Any `.slnx` or `.vcxproj` construct you had to special-case.
+- Any source you added to `Exclusions.txt` beyond the starting set, and why.
