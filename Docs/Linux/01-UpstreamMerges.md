@@ -18,13 +18,24 @@ git remote add upstream https://github.com/BobbyAnguelov/Esoterica.git
 git fetch upstream
 ```
 
-## Merge cadence
+## When to merge
 
-**Merge upstream weekly, or before you start a new phase, whichever comes first.**
+**On request only. Never on your own initiative.**
 
-This is the highest-leverage habit in the project. Merge cost grows faster than the drift does.
-A week of upstream commits is a routine merge. Six months is a research project. Do not let the
-fork drift because a phase is nearly done.
+There is no cadence. Not weekly, not before a phase, not when `SyncUpstream.py` reports drift,
+not when `upstream/main` moves. If you notice new upstream commits, mention them and carry on
+with the task you were given.
+
+The port is being built against **one fixed upstream commit** until it works end-to-end.
+Upstream develops slowly - 107 commits in total, and four in the last twelve months touched a
+source list - so the drift stays cheap to absorb. Absorbing it early means debugging the port
+and the merge at the same time, and that trade is a bad one.
+
+This reverses the original plan, which called for weekly merges. The measurement in
+[Progress.md](Progress.md) is what changed it: at this rate of upstream change, the drift is not
+the risk. Half-finished work colliding with a merge is.
+
+The rest of this document is the procedure for when a merge **is** asked for.
 
 ## The merge procedure
 

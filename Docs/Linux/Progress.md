@@ -422,6 +422,27 @@ the reasoning, not just the outcome.
 **Alternatives rejected:** ...
 -->
 
+### 2026-08-27 - Upstream merges happen on request only
+
+**Context:** The plan called for merging `upstream/main` weekly, or before each new phase,
+whichever came first, on the reasoning that merge cost grows faster than drift.
+
+**Decision:** No cadence. Merge only when explicitly asked. `AGENTS.md` and
+[01-UpstreamMerges.md](01-UpstreamMerges.md) both say so.
+
+**Rationale:** The churn measurement taken during Phase 0 undercuts the original reasoning.
+Upstream has 107 commits in total, and four in the last twelve months touched a source list. The
+drift is cheap and stays cheap. What is not cheap is debugging a half-finished port and a merge
+at the same time: when something breaks, there is no way to tell which change caused it. The
+port is therefore built against **one fixed upstream commit** until it works end-to-end.
+
+**Alternatives rejected:** Merging before each phase, which is the same trade at a slower rate.
+Merging when `SyncUpstream.py` reports drift, which turns a useful signal into an interrupt.
+
+**Note:** `upstream/main` is at `47e6293` (2026-08-26) and this fork is based on `6813cf9`. One
+commit of drift, touching a `.vcxproj` source list by +2/-1. Recorded so nobody has to rediscover
+it; **not** a reason to merge.
+
 ### 2026-08-27 - The build is the test. Check only what a green build would hide
 
 **Context:** The first cut of the generator carried 520 lines of checks against 1441 lines of
