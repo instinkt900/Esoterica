@@ -99,7 +99,8 @@ directory, `Code/Scripts/NinjaGen/`, which Conventions rule 7 designates for bui
 |---|---|---|
 | `Code/Scripts/NinjaGen/SyncUpstream.py` | Reads `Esoterica.slnx` and the `.vcxproj` files. Writes and checks `UpstreamProjects.txt` | 0 |
 | `Code/Scripts/NinjaGen/SourceLists.py` | The three-list format, and the build model built from it | 0 |
-| `Code/Scripts/NinjaGen/SourceLists_Test.py` | Checks for both of the above | 0 |
+| `Code/Scripts/NinjaGen/Toolchain.py` | Property sheet and compiler flag translation | 0 |
+| `Code/Scripts/NinjaGen/Checks.py` | The few checks a green build would not catch | 0 |
 | `Code/Scripts/NinjaGen/UpstreamProjects.txt` | Generated snapshot of the Visual Studio projects. Never hand-edited | 0 |
 | `Code/Scripts/NinjaGen/Exclusions.txt` | Upstream sources the Linux build drops | 0 |
 | `Code/Scripts/NinjaGen/LinuxSources.txt` | Sources this fork adds | 0 |

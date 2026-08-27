@@ -168,16 +168,30 @@ Agent writing runs wordy by default. Keep it easy to read instead:
 The test: a reviewer who skims a PR, or a future session that reads Progress.md, gets the point in
 one pass. A paragraph that needs a second read is too long or too twisted. Rewrite it.
 
+## Testing
+
+**The Linux build is the test.** Getting `ninja` further through the tree is the goal, and a
+compile error is louder, more specific and cheaper than an assertion that duplicates it.
+
+Do not write a check for something a build would catch. No asserting that a rule passes
+`-std=c++20`, that a target resolves to a `.so`, or that link order is right. Build it instead.
+
+`Code/Scripts/NinjaGen/Checks.py` holds the exception: failures that leave a **green build**
+behind and surface much later, usually on an upstream merge. Drift detection, determinism, stale
+exclusion globs, an unmapped property sheet. Add to it only when the failure would be silent.
+See the 2026-08-27 decision in [Docs/Linux/Progress.md](Docs/Linux/Progress.md).
+
 ## Definition of done
 
 A task is done only when all of these hold:
 
 1. The task meets its **acceptance criteria in the phase doc**. The criteria are written to be
    checkable, so check them instead of assuming.
-2. **The Linux build succeeds** (after Phase 0 lands):
+2. **The Linux build succeeds**, or gets measurably further than it did before:
    ```bash
    python3 Code/Scripts/NinjaGen/NinjaGen.py && ninja -f Build/Linux/Esoterica.ninja
    ```
+   Until Phase 1 finishes, "further" is the measure. Say how far it got, and what stopped it.
 3. **The Windows MSBuild build still succeeds**, unchanged. This is not optional, and it is not
    someone else's problem. A port that breaks Windows is worse than no port.
 4. **[Docs/Linux/TouchedFiles.md](Docs/Linux/TouchedFiles.md)** lists every upstream file you
