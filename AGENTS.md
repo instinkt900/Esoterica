@@ -220,14 +220,19 @@ more than an optimistic summary. This matters most in Phase 5, which runs for mo
 
 ## Merging upstream
 
-Merge upstream **weekly, or before you start a new phase**, whichever comes first. Merge cost grows
-faster than the drift does. A week is routine. Six months is a research project.
+**Never merge upstream on your own initiative. Only when asked to, explicitly.**
 
-[01-UpstreamMerges.md](Docs/Linux/01-UpstreamMerges.md) holds the full procedure, including the
-post-merge audit that catches new Windows-only code paths.
+There is no schedule and no trigger. Not weekly, not before a phase, not because
+`SyncUpstream.py` reports drift, and not because `upstream/main` has moved. If you notice new
+upstream commits, say so and carry on with the task you were given.
 
-The merge goes on an `upstream-merge/<date>` branch and reaches `main` through a PR, like any other
-code change. The post-merge audit and the two-platform rebuild are what review is for.
+The reason: the port is being built against **one fixed upstream commit** until it works
+end-to-end. Upstream develops slowly, so the drift is cheap to absorb later, and absorbing it
+early means debugging the port and the merge at the same time. That trade is bad.
+
+When a merge is asked for, [01-UpstreamMerges.md](Docs/Linux/01-UpstreamMerges.md) holds the full
+procedure, including the post-merge audit that catches new Windows-only code paths. It goes on an
+`upstream-merge/<date>` branch and reaches `main` through a PR, like any other code change.
 
 Do not merge onto a dirty tree. Land or shelve in-flight task branches first.
 
