@@ -12,7 +12,7 @@
 // The OS level function (ReadDirectoryChangesW) will trigger a modification event for multiple operations that are part of a logical operation
 //-------------------------------------------------------------------------
 
-#if _WIN32
+#if _WIN32 || defined( __linux__ )
 namespace EE::FileSystem
 {
     class EE_ENGINETOOLS_API Watcher final

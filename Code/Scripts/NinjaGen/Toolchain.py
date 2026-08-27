@@ -302,13 +302,36 @@ def pkg_config_flags( package, mode ):
 # LLVM.props links clangAST, clangBasic, clangLex and libclang by name, plus about 18 LLVM*
 # libraries. The clang ones have no llvm-config equivalent, so they are named; the LLVM ones are
 # asked for by component so that the list keeps working if upstream adds one.
-CLANG_LIBRARIES = ( 'clangAST', 'clangBasic', 'clangLex', 'clangFrontend', 'clangSerialization',
-                    'clangDriver', 'clangParse', 'clangSema', 'clangEdit', 'clangAnalysis',
-                    'clangASTMatchers', 'clangSupport', 'clangAPINotes' )
+# 'clang' is libclang, the stable C API that ClangParser.cpp calls (clang_parseTranslationUnit
+# and friends). It ships as a shared library, unlike the rest, which are static.
+CLANG_LIBRARIES = ( 'clang', 'clangAST', 'clangBasic', 'clangLex', 'clangFrontend',
+                    'clangSerialization', 'clangDriver', 'clangParse', 'clangSema', 'clangEdit',
+                    'clangAnalysis', 'clangASTMatchers', 'clangSupport', 'clangAPINotes' )
 
 LLVM_COMPONENTS = ( 'core', 'support', 'analysis', 'object', 'bitreader', 'profiledata',
                     'frontendhlsl', 'frontendopenmp', 'mc', 'transformutils', 'scalaropts',
                     'targetparser', 'demangle', 'remarks', 'binaryformat' )
+
+def find_linker_flags( repo_root ):
+    """Returns the flags needed to link against the pinned LLVM, or an empty list.
+
+    The official LLVM release archives hold **LLVM IR bitcode**, not ELF objects: the release is
+    built with LTO. GNU ld cannot read them and fails with "file format not recognized". LLD
+    understands bitcode natively, and the LLVM tarball ships its own ld.lld, so the Reflector is
+    linked with that.
+
+    Only targets that actually link LLVM need this, but passing it everywhere would change the
+    linker for the whole build, so the caller applies it per project.
+    """
+
+    linker = repo_root / 'External/LLVM/bin/ld.lld'
+    if linker.is_file():
+        return [ f'-fuse-ld={linker}' ]
+
+    if shutil.which( 'ld.lld' ) is not None:
+        return [ '-fuse-ld=lld' ]
+
+    return []
 
 def llvm_config_path( repo_root ):
     """Prefers the pinned External/LLVM over anything on PATH.
@@ -399,6 +422,8 @@ def resolve_sheets( sheet_names, repo_root = None ):
                 link_flags.extend( flags )
 
         if name == 'LLVM':
+            # Must come before the -l flags, so the linker choice applies to them.
+            link_flags.extend( find_linker_flags( root ) )
             flags = llvm_link_flags( root )
             if flags is None:
                 problems.append( 'llvm-config is not installed, so LLVM.props cannot be '
