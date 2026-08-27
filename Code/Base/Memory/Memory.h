@@ -15,7 +15,7 @@
 
 //-------------------------------------------------------------------------
 
-#ifdef _WIN32
+#if defined( _WIN32 ) || defined( __linux__ )
 
 #define EE_STACK_ALLOC( x ) alloca( x )
 #define EE_STACK_ARRAY_ALLOC( type, numElements ) reinterpret_cast<type*>( alloca( sizeof( type ) * numElements ) );

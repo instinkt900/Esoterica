@@ -8,6 +8,9 @@
 // Pulling them in here keeps the Esoterica.h edit to the 2-line include switch.
 #include <stddef.h>
 #include <stdarg.h>
+#include <limits.h>   // INT_MIN, INT_MAX, UINT_MAX
+#include <math.h>     // ldexp
+#include <alloca.h>   // EE_STACK_ALLOC, EE_STACK_ARRAY_ALLOC
 
 //-------------------------------------------------------------------------
 

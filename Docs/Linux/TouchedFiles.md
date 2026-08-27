@@ -39,6 +39,8 @@ nothing and guarantees conflicts.
 | `Code/Base/Types/Color.h` | Hoist `struct ByteColor` out of the anonymous union that holds it. A named type may not be declared inside an anonymous union in standard C++; MSVC allows it as an extension. Layout, member names and Windows behaviour are unchanged. | 1 | done |
 | `Code/Base/TypeSystem/TypeInstance.h` | One line: `template<typename T> friend class TTypeInstance;`. `TTypeInstance`'s copy constructor reads `m_pInstance` through a `TypeInstance const&`, and standard C++ only allows a derived class to reach a protected member through an object of its own type. MSVC permits it without the friend. | 1 | done |
 | `Code/Base/Resource/ResourcePtr.h` | A forward declaration of `EE::TResourcePtr` at `EE` scope, plus `template<typename T> friend class EE::TResourcePtr;`. Same protected-access rule as above. The qualification matters: `TResourcePtr` lives in `EE`, not in `EE::Resource`. | 1 | done |
+| `Code/Base/Memory/Memory.h` | Line 18: `#ifdef _WIN32` to `#if defined( _WIN32 ) \|\| defined( __linux__ )`. One line modified. The existing `#else` defines the stack allocators as empty, so `EE_STACK_ALLOC` and `EE_STACK_ARRAY_ALLOC` expanded to nothing. `alloca` works on both platforms; `Platform_Linux.h` supplies `<alloca.h>`. | 1 | done |
+| `Code/Base/Resource/ResourceTypeID.h` | Line 26: `template<eastl_size_t S>` to `template<int S>`. `eastl::fixed_string` declares its size parameter as `int`, so deducing an `eastl_size_t` from `TInlineString<9>` fails. MSVC accepts the narrowing during deduction. | 1 | done |
 
 ## Two-line guard additions
 
@@ -72,7 +74,7 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | File | Change | Phase | Status |
 |---|---|---|---|
 | `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
-| `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`. The header is MSVC-only, and this file uses nothing from it. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
+| `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`, with an `#else` including `<immintrin.h>`. The MSVC header is where `_tzcnt_u64` and `_lzcnt_u64` come from on Windows; clang has them in `<immintrin.h>`. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
 
 ## Whole-body guard wrap
 
@@ -91,7 +93,7 @@ Checked during the survey. Recorded so that nobody investigates them again.
 
 | File | Why no change is needed |
 |---|---|
-| `Code/Base/Memory/Memory.h` | The `#ifdef _WIN32` at line 18 (`EE_STACK_ALLOC`) **already has an `#else` branch** for non-Windows. |
+| ~~`Code/Base/Memory/Memory.h`~~ | **The survey was wrong; this needed an edit.** See "Real edits". The `#else` branch exists but defines `EE_STACK_ALLOC` and `EE_STACK_ARRAY_ALLOC` as *nothing*, so every call site failed with "expected expression". |
 | `Code/Base/Memory/Memory.cpp` | The `#ifdef _WIN32` at line 13 already guards its `<windows.h>` include. The only `VirtualAlloc` use (`PageAllocator`, near line 234) sits inside it. During Phase 1, confirm that the guarded region has a working `#else`, or that the function is Windows-only by design. **Flagged for a check, not yet confirmed.** |
 | `Code/Base/Profiling.cpp` | Both `#if _WIN32` guards (lines 8 and 36) are already there. `OpenProfiler()` becomes a no-op on Linux, which is correct because this port drops Optick. |
 | `Code/Base/FileSystem/FileSystemPath.h` | This header declares `s_pathDelimiter`, and the platform `.cpp` defines it. The Linux `.cpp` defines `'/'`, and this header stays untouched. It is the model example of the intended pattern. |

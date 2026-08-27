@@ -23,7 +23,7 @@ namespace EE
         inline static bool IsValidResourceTypeIdentifierString( String const& str ) { return DataFileExtension::IsValidExtension( str.c_str() ); }
 
         // Check if a given string is a valid resource type EightCC (i.e. [1:4] lowercase letters or digits)
-        template<eastl_size_t S>
+        template<int S>
         inline static bool IsValidResourceTypeIdentifierString( TInlineString<S> const& str ) { return DataFileExtension::IsValidExtension( str.c_str() ); }
 
         // Expensive verification to ensure that a resource type ID EightCCs only contains uppercase or numeric chars
