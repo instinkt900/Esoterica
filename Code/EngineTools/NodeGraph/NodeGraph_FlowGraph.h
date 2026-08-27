@@ -160,7 +160,7 @@ namespace EE::NodeGraph
         inline Pin const* GetInputPin( int32_t pinIdx ) const { EE_ASSERT( pinIdx >= 0 && pinIdx < m_inputPins.size() ); return &m_inputPins[pinIdx]; }
 
         // Get a specific input pin via ID
-        inline Pin const* GetInputPin( UUID const& pinID ) const;
+        Pin const* GetInputPin( UUID const& pinID ) const;
 
         // Get a specific input pin via ID
         inline Pin* GetInputPin( UUID const& pinID ) { return const_cast<Pin*>( const_cast<FlowNode const*>( this )->GetInputPin( pinID ) ); }
@@ -194,7 +194,7 @@ namespace EE::NodeGraph
         inline Pin const* GetOutputPin( int32_t pinIdx = 0 ) const { EE_ASSERT( pinIdx >= 0 && pinIdx < m_outputPins.size() ); return &m_outputPins[pinIdx]; }
 
         // Get a specific output pin via ID
-        inline Pin const* GetOutputPin( UUID const& pinID ) const;
+        Pin const* GetOutputPin( UUID const& pinID ) const;
 
         // Get a specific output pin via ID
         inline Pin* GetOutputPin( UUID const& pinID ) { return const_cast<Pin*>( const_cast<FlowNode const*>( this )->GetOutputPin( pinID ) ); }

@@ -11,8 +11,9 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 3 (all build and compile criteria met).** `EsotericaResourceCompiler` builds, links and
-compiles 22 of the 27 real resources under `Data/`: every texture, mesh, physics mesh, physics
-material database and the map. All four libraries link. The file system watcher passes a 15-check
+compiles 22 of the 27 real resources under `Data/` into 38 output files: every texture, mesh,
+physics mesh, physics material database and the map. Debug and Release produce byte-identical
+output. All four libraries link. The file system watcher passes a 15-check
 scratch test, including a subdirectory created after watching started and `IN_Q_OVERFLOW`.
 
 The 5 that do not compile are the `.material` files, and they fail for one reason: they
@@ -87,9 +88,9 @@ session are 11 `inline` removals, 5 `va_copy` fixes, one CTAD fix in `PageAlloca
 | # | Criterion | Result |
 |---|---|---|
 | 1 | Four libraries build | **met** |
-| 2 | `EsotericaResourceCompiler` builds and links | **met** (Debug; Release not run) |
+| 2 | `EsotericaResourceCompiler` builds and links | **met**, Debug and Release. Release found two more `inline` declarations that Debug did not: `NodeGraph_FlowGraph.h` `GetInputPin` and `GetOutputPin`. Build Release too, or that class of bug hides. |
 | 3 | Compiles the full `Data/` tree without errors | **partly.** 22 of 27 resources. The 5 `.material` files need shader-generated types. The other 13 files in `Data/` are `EE_DATA_FILE`, not resources: `.txtg`, `.meshgrp` and `.pml` have no compiler on any platform, and "failed to find a compiler" is the correct answer. |
-| 4 | Byte-identical to Windows output | **not checked.** Needs a Windows machine. |
+| 4 | Byte-identical to Windows output | **not checked**, needs a Windows machine. What *was* checked: the Debug and Release compilers produce byte-identical output for all 38 files. That rules out the float-formatting and optimisation-dependent differences the phase doc warns about, and leaves only genuinely platform-dependent ones. |
 | 5 | Watcher works, including a subdirectory created after the start | **met** |
 | 6 | Reports `OnMassiveChangeDetected` on `IN_Q_OVERFLOW` | **met** |
 | 7 | `FileRegistry.cpp` compiles and its watcher handling works | **met** (compiles and links; the watcher itself is tested above) |
