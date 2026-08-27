@@ -134,7 +134,10 @@ fetch_optick()
 
 # ixWebSocket. Base/Network uses it for the resource server connection.
 IXWEBSOCKET_REPO="https://github.com/machinezone/IXWebSocket.git"
-IXWEBSOCKET_TAG="v11.4.5"
+# v12.0.1, not something older. Base/Network/Servers/NetworkServer_WebSockets.cpp constructs
+# ix::WebSocketServer with 8 arguments, and the 8th, sendTimeoutSeconds, only exists from
+# v12.0.0 onwards. Anything earlier fails to compile against the engine.
+IXWEBSOCKET_TAG="v12.0.1"
 
 fetch_ixwebsocket()
 {
@@ -170,7 +173,7 @@ fetch_gamenetworkingsockets()
 {
     local target="${EXTERNAL_DIR}/GameNetworkingSockets"
 
-    if [[ -f "${target}/include/steam/steamnetworkingsockets.h" ]]
+    if [[ -f "${target}/include/GameNetworkingSockets/steam/steamnetworkingsockets.h" ]]
     then
         info "GameNetworkingSockets already present"
         return
@@ -212,7 +215,7 @@ list_dependencies()
         case "${name}" in
             optick)                 [[ -f "${EXTERNAL_DIR}/Optick/include/optick.h" ]] && status="ready" ;;
             ixwebsocket)            [[ -f "${EXTERNAL_DIR}/ixwebsocket/include/ixwebsocket/IXWebSocket.h" ]] && status="ready" ;;
-            gamenetworkingsockets)  [[ -f "${EXTERNAL_DIR}/GameNetworkingSockets/include/steam/steamnetworkingsockets.h" ]] && status="ready" ;;
+            gamenetworkingsockets)  [[ -f "${EXTERNAL_DIR}/GameNetworkingSockets/include/GameNetworkingSockets/steam/steamnetworkingsockets.h" ]] && status="ready" ;;
         esac
         printf '%-24s %s\n' "${name}" "${status}"
     done
