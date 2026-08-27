@@ -54,6 +54,11 @@ ESOTERICA_DEFINES = (
 COMMON_DEFINES = (
     'NDEBUG',
     '_HAS_EXCEPTIONS=0',
+    # glibc hides the POSIX surface under a strict -std=c17 or -std=c++20, and the vendored
+    # rpmalloc calls posix_madvise. Code/**/ThirdParty cannot be edited (Conventions rule 5),
+    # so this is the -D the rule points to. The alternative, -std=gnu17, changes language
+    # semantics everywhere to fix one call.
+    '_DEFAULT_SOURCE',
 )
 
 # NOMINMAX, WIN32_LEAN_AND_MEAN and _CRT_SECURE_NO_WARNINGS sit beside NDEBUG in the same
@@ -65,6 +70,10 @@ COMMON_COMPILER_FLAGS = (
     '-fPIC',                    # every target may end up inside a .so
     '-msse4.2',                 # the hand-rolled SIMD math assumes both of these
     '-mavx',
+    # HandleAllocator uses _tzcnt_u64 and _lzcnt_u64. MSVC exposes them unconditionally; clang
+    # gates each behind its own instruction set flag.
+    '-mbmi',
+    '-mlzcnt',
     '-Wall',
     '-Wextra',
     # The vendored imgui and EASTL define their export macros as __declspec(dllexport) under
