@@ -64,6 +64,23 @@ ESOTERICA_INCLUDE_DIRECTORIES = (
     # Esoterica.props imports Optick.props transitively, so every project gets this path even
     # though no .vcxproj names the sheet. Base/Profiling.h includes <optick.h> unconditionally.
     'External/Optick/include',
+
+    # These two are the Linux stand-in for the Windows SDK.
+    #
+    # The Reflector includes <dxcapi.h> and <d3d12shader.h> but imports neither DXC.props nor
+    # anything else that would supply them: on Windows both ship with the Windows SDK and are on
+    # the compiler's default search path. There is no such default here, so the paths are global
+    # rather than attached to a property sheet, which is what makes them reachable from every
+    # project the way the SDK is.
+    #
+    # The DXC *library* stays on DXC.props, where the .vcxproj files actually declare it.
+    'External/DirectXShaderCompiler/inc/dxc',
+    'External/DirectX-Headers/include/directx',
+    # d3dcommon.h includes "rpc.h", which does not exist off Windows. Only that one file is
+    # taken from DirectX-Headers' stubs: putting the whole wsl/stubs directory on the path makes
+    # its COM shims collide with DXC's own WinAdapter.h, turning one missing header into twenty
+    # redefinition errors. DownloadDependencies.sh isolates it into linux-shims.
+    'External/DirectX-Headers/include/linux-shims',
 )
 
 # EA.props: EASTL_USER_CONFIG_HEADER=$(EE_EASTL_USER_CONFIG_HEADER), whose value already
@@ -245,9 +262,16 @@ SHEETS = {
     'CTT':                   Sheet( libraries = ( 'ctt_capi', ),
                                     requires_path = 'External/CTT',
                                     deferred_to_phase = 'Phase 3' ),
-    'DXC':                   Sheet( libraries = ( 'dxcompiler', ),
-                                    library_directories = ( 'External/DXC/lib', ),
-                                    requires_path = 'External/DXC',
+    # DXC.props points at External/DirectXShaderCompiler with inc/ and lib/x64/.
+    #
+    # Two include paths, not one. The Linux tarball nests its headers under inc/dxc, and
+    # ShaderReflection_ShaderCompiler.h also includes d3d12shader.h, which is a Windows SDK
+    # header that the tarball does not ship. DirectX-Headers supplies it; that is the project
+    # Microsoft publishes for exactly this gap.
+    # Include paths are global; see ESOTERICA_INCLUDE_DIRECTORIES for why.
+    'DXC':                   Sheet( library_directories = ( 'External/DirectXShaderCompiler/lib/x64', ),
+                                    libraries = ( 'dxcompiler', ),
+                                    requires_path = 'External/DirectXShaderCompiler',
                                     deferred_to_phase = 'Phase 4' ),
     'LLVM':                  Sheet( include_directories = ( 'External/LLVM/include', ),
                                     library_directories = ( 'External/LLVM/lib', ),

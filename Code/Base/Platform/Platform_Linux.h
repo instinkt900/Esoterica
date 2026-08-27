@@ -38,6 +38,13 @@ EE_FORCE_INLINE int _strnicmp( char const* pLHS, char const* pRHS, size_t count 
     return strncasecmp( pLHS, pRHS, count );
 }
 
+// The unprefixed spelling, which the Reflector's shader code generator uses. It is a deprecated
+// POSIX name that glibc does not declare under a strict -std=c++20.
+EE_FORCE_INLINE int stricmp( char const* pLHS, char const* pRHS )
+{
+    return strcasecmp( pLHS, pRHS );
+}
+
 // MSVC's strncpy_s always null-terminates and returns 0 on success. strncpy does neither, so
 // this is a bounded copy plus an explicit terminator rather than a straight forward.
 EE_FORCE_INLINE int strncpy_s( char* pDestination, size_t destinationSize, char const* pSource, size_t count )

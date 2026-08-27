@@ -58,6 +58,14 @@ requirements_llvm()
     require_command xz xz-utils
 }
 
+requirements_dxc()
+{
+    require_command curl curl
+    require_command tar tar
+}
+
+requirements_directx_headers() { :; }
+
 requirements_meshoptimizer()
 {
     require_command cmake cmake
@@ -182,6 +190,80 @@ fetch_llvm()
     info "LLVM $( "${target}/bin/llvm-config" --version ) installed"
 }
 
+# DXC, the DirectX Shader Compiler. The Reflector's shader reflection pass and the shader
+# pipeline both need it, and eight Engine Render files include generated .esh reflection headers
+# that only exist once it has run.
+#
+# Microsoft ships official prebuilt Linux binaries, so this is a download rather than a build.
+# DXC is LLVM-based and building it from source takes tens of minutes.
+#
+# DXC.props expects External/DirectXShaderCompiler with inc/ and lib/x64/, so the tarball is
+# rearranged to match rather than inventing a second layout.
+DXC_VERSION="v1.10.2605.37"
+DXC_URL="https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_VERSION}/linux_dxc_2026_08_11.x86_64.tar.gz"
+
+# DirectX-Headers. Microsoft's cross-platform D3D12 headers.
+#
+# Not in the plan, and needed: shader reflection uses ID3D12ShaderReflection, declared in
+# d3d12shader.h, which is a Windows SDK header. The Linux DXC tarball does not ship it. This is
+# the project Microsoft publishes for exactly that gap, and it is what DXC's own Linux
+# consumers use.
+DIRECTX_HEADERS_REPO="https://github.com/microsoft/DirectX-Headers.git"
+DIRECTX_HEADERS_TAG="v1.619.5"
+
+fetch_directx_headers()
+{
+    local target="${EXTERNAL_DIR}/DirectX-Headers"
+
+    if [[ -f "${target}/include/directx/d3d12shader.h" ]]
+    then
+        info "DirectX-Headers already present"
+        return
+    fi
+
+    info "fetching DirectX-Headers ${DIRECTX_HEADERS_TAG}"
+    rm -rf "${target}"
+    git clone -q --depth 1 --branch "${DIRECTX_HEADERS_TAG}" "${DIRECTX_HEADERS_REPO}" "${target}"
+
+    # d3dcommon.h includes "rpc.h", which does not exist off Windows. DirectX-Headers ships a
+    # stub for it, but the whole wsl/stubs directory cannot go on the include path: its COM
+    # shims collide with the ones in DXC's own WinAdapter.h, which turns one missing header into
+    # twenty redefinition errors. Only rpc.h is needed, and it is an empty stub, so it gets a
+    # directory of its own.
+    mkdir -p "${target}/include/linux-shims"
+    cp "${target}/include/wsl/stubs/rpc.h" "${target}/include/linux-shims/"
+
+    info "DirectX-Headers installed"
+}
+
+fetch_dxc()
+{
+    local target="${EXTERNAL_DIR}/DirectXShaderCompiler"
+
+    if [[ -f "${target}/lib/x64/libdxcompiler.so" ]]
+    then
+        info "DXC already present"
+        return
+    fi
+
+    info "fetching DXC ${DXC_VERSION}"
+    rm -rf "${target}" "${target}.tar.gz" "${target}.tmp"
+    curl -fL --no-progress-meter -o "${target}.tar.gz" "${DXC_URL}"
+
+    mkdir -p "${target}.tmp"
+    tar -xzf "${target}.tar.gz" -C "${target}.tmp"
+    rm -f "${target}.tar.gz"
+
+    mkdir -p "${target}/inc" "${target}/lib/x64" "${target}/bin/x64"
+    cp -r "${target}.tmp"/include/* "${target}/inc/" 2>/dev/null || true
+    find "${target}.tmp" -name 'libdxcompiler.so*' -exec cp -P {} "${target}/lib/x64/" \;
+    find "${target}.tmp" -name 'libdxil.so*' -exec cp -P {} "${target}/lib/x64/" \;
+    find "${target}.tmp" -name 'dxc' -type f -exec cp {} "${target}/bin/x64/" \;
+    rm -rf "${target}.tmp"
+
+    info "DXC installed"
+}
+
 # MeshOptimizer. Engine and EngineTools use it for mesh simplification and vertex cache
 # optimisation. MeshOptimizer.props points at External/MeshOptimizer/src for headers and
 # External/MeshOptimizer/lib for the library, so the layout here matches that rather than
@@ -292,7 +374,7 @@ fetch_gamenetworkingsockets()
 
 #-------------------------------------------------------------------------
 
-ALL_DEPENDENCIES=( optick meshoptimizer ixwebsocket gamenetworkingsockets llvm )
+ALL_DEPENDENCIES=( optick meshoptimizer ixwebsocket gamenetworkingsockets directx_headers dxc llvm )
 
 list_dependencies()
 {
@@ -303,6 +385,8 @@ list_dependencies()
         case "${name}" in
             optick)                 [[ -f "${EXTERNAL_DIR}/Optick/include/optick.h" ]] && status="ready" ;;
             meshoptimizer)          [[ -f "${EXTERNAL_DIR}/MeshOptimizer/lib/libmeshoptimizer.a" ]] && status="ready" ;;
+            dxc)                    [[ -f "${EXTERNAL_DIR}/DirectXShaderCompiler/lib/x64/libdxcompiler.so" ]] && status="ready" ;;
+            directx_headers)        [[ -f "${EXTERNAL_DIR}/DirectX-Headers/include/directx/d3d12shader.h" ]] && status="ready" ;;
             ixwebsocket)            [[ -f "${EXTERNAL_DIR}/ixwebsocket/include/ixwebsocket/IXWebSocket.h" ]] && status="ready" ;;
             gamenetworkingsockets)  [[ -f "${EXTERNAL_DIR}/GameNetworkingSockets/include/GameNetworkingSockets/steam/steamnetworkingsockets.h" ]] && status="ready" ;;
             llvm)                   [[ -f "${EXTERNAL_DIR}/LLVM/bin/llvm-config" ]] && status="ready ($( "${EXTERNAL_DIR}/LLVM/bin/llvm-config" --version ))" ;;
@@ -333,6 +417,8 @@ main()
         case "${name}" in
             optick)                 fetch_optick ;;
             meshoptimizer)          fetch_meshoptimizer ;;
+            dxc)                    fetch_dxc ;;
+            directx_headers)        fetch_directx_headers ;;
             ixwebsocket)            fetch_ixwebsocket ;;
             gamenetworkingsockets)  fetch_gamenetworkingsockets ;;
             llvm)                   fetch_llvm ;;
