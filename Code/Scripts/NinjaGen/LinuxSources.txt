@@ -13,12 +13,13 @@ FileSystem/Platform/FileSystemPath_Linux.cpp
 FileSystem/Platform/FileSystem_Linux.cpp
 Logging/Platform/SystemLog_Linux.cpp
 Platform/PlatformUtils_Linux.cpp
+Platform/Platform_Linux.cpp
+Render/RHI_Vulkan.cpp
+Threading/Platform/Threading_Linux.cpp
 Types/Platform/Types_Linux.cpp
 #
 # Still to come in Phase 1:
 #   Application/Platform/Application_Linux.cpp
-#   Platform/Platform_Linux.cpp
-#   Threading/Platform/Threading_Linux.cpp
 #
 # Phase 5 - the Vulkan backend, sibling to the excluded RHI_Direct3D12.cpp:
 #   Render/RHI_Vulkan.cpp
