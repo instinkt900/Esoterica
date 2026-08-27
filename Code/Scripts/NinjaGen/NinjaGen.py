@@ -115,7 +115,7 @@ def project_compile_flags( repo_root, project, configuration, problems ):
     """Every flag that compiling this project in this configuration needs."""
 
     sheets = project.get_property_sheets( configuration.base_name )
-    sheet_includes, sheet_defines, _, sheet_problems = Toolchain.resolve_sheets( sheets )
+    sheet_includes, sheet_defines, _, sheet_problems = Toolchain.resolve_sheets( sheets, repo_root )
     problems.extend( f'{project.name}: {p}' for p in sheet_problems )
 
     include_directories = list( Toolchain.ESOTERICA_INCLUDE_DIRECTORIES ) + sheet_includes
@@ -134,15 +134,21 @@ def project_compile_flags( repo_root, project, configuration, problems ):
     flags += list( Toolchain.COMMON_COMPILER_FLAGS )
     flags += list( configuration.compiler_flags )
 
-    # -fvisibility=hidden only means something once _Module/API.h grows its
-    # __attribute__(( visibility( "default" ) )) branch, which is Phase 1. Setting it now means
-    # the export surface is correct as soon as that lands.
-    if project.get_project_type( configuration.base_name ) == SourceLists.PROJECT_TYPE_SHARED_LIBRARY:
-        flags.append( '-fvisibility=hidden' )
+    # No -fvisibility=hidden. It looks right, and it is wrong here.
+    #
+    # The export macros this codebase uses are a Windows DLL mechanism. _Module/API.h now has a
+    # visibility( "default" ) branch for Linux, but the vendored imgui and EASTL headers define
+    # IMGUI_API and EASTL_API as __declspec, which clang parses and then ignores on ELF. Under
+    # -fvisibility=hidden those symbols would be hidden, and Engine and EngineTools would fail
+    # to link against them. Code/**/ThirdParty cannot be edited (Conventions rule 5).
+    #
+    # Default visibility for everything is the ordinary ELF behaviour, and it is what the
+    # dllexport model approximates on Windows. Phase 5 or 7 can revisit this if .so load time
+    # ever matters.
 
     return flags
 
-def project_link_flags( solution, project, configuration, problems ):
+def project_link_flags( repo_root, solution, project, configuration, problems ):
     """Link flags for a project, including the sheets of everything it depends on."""
 
     sheets = list( project.get_property_sheets( configuration.base_name ) )
@@ -152,7 +158,7 @@ def project_link_flags( solution, project, configuration, problems ):
             if sheet not in sheets:
                 sheets.append( sheet )
 
-    _, _, link_flags, sheet_problems = Toolchain.resolve_sheets( sheets )
+    _, _, link_flags, sheet_problems = Toolchain.resolve_sheets( sheets, repo_root )
     problems.extend( f'{project.name}: {p}' for p in sheet_problems )
 
     flags = list( configuration.linker_flags )
@@ -160,6 +166,11 @@ def project_link_flags( solution, project, configuration, problems ):
     # Replaces the MSBuild Copy targets, such as DXC_CopyDLL, that stage DLLs beside the
     # executable. rpath has fewer moving parts than a staging step.
     flags.append( "-Wl,-rpath,'$$ORIGIN'" )
+
+    # -rdynamic puts the executable's own symbols in the dynamic table, which is what lets the
+    # crash handler in Platform_Linux.cpp print function names instead of bare addresses.
+    # Without it a backtrace is close to useless.
+    flags.append( '-rdynamic' )
     flags.extend( link_flags )
 
     return flags
@@ -271,7 +282,7 @@ def emit( repo_root, solution, configurations ):
                 dependency_libraries = [ library_path( d, configuration ) for d in dependencies ]
                 dependency_libraries = [ p for p in dependency_libraries if p is not None ]
 
-                link_flags = project_link_flags( solution, project, configuration, problems )
+                link_flags = project_link_flags( repo_root, solution, project, configuration, problems )
                 shared = project_type == SourceLists.PROJECT_TYPE_SHARED_LIBRARY
 
                 rule_name = ( f'so_{identifier}' if shared else f'exe_{identifier}' )
