@@ -36,6 +36,9 @@ ESOTERICA_INCLUDE_DIRECTORIES = (
     'Code/Base/ThirdParty/EA/EASTL/Include',
     'Code/Base/ThirdParty/EA/EABase/include/Common',
     'Code/Base/ThirdParty/imgui',
+    # Esoterica.props imports Optick.props transitively, so every project gets this path even
+    # though no .vcxproj names the sheet. Base/Profiling.h includes <optick.h> unconditionally.
+    'External/Optick/include',
 )
 
 # EA.props: EASTL_USER_CONFIG_HEADER=$(EE_EASTL_USER_CONFIG_HEADER), whose value already
@@ -195,7 +198,11 @@ SHEETS = {
     # dropped" looks like.
     'AmdAgs':                Sheet( note = 'dropped, Windows only' ),
     'WinPixEventRuntime':    Sheet( note = 'dropped, Windows only' ),
-    'Optick':                Sheet( note = 'dropped, Windows only' ),
+    # Not dropped after all, but its include path is global rather than per-sheet: see
+    # ESOTERICA_INCLUDE_DIRECTORIES. Base/Profiling.h includes <optick.h> unconditionally, and
+    # Conventions rule 4 forbids stripping that include, so the header has to exist. No
+    # OptickCore library is built: USE_OPTICK stays 0 and the OPTICK_* macros compile away.
+    'Optick':                Sheet( note = 'headers only, path is global, profiling never enabled' ),
     'SuperLuminal':          Sheet( note = 'dropped. Do not define EE_ENABLE_SUPERLUMINAL' ),
     'LivePP':                Sheet( note = 'dropped. Do not define EE_ENABLE_LPP' ),
     'NavPower':              Sheet( note = 'dropped. Do not define EE_ENABLE_NAVPOWER' ),
