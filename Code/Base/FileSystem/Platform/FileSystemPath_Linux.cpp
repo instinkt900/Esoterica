@@ -1,7 +1,9 @@
 #ifdef __linux__
 #include "../FileSystemPath.h"
+#include <dirent.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 
 //-------------------------------------------------------------------------
@@ -78,16 +80,97 @@ namespace EE::FileSystem
 
     bool Path::GetCorrectCaseForPath( char const* pPath, String& outPath )
     {
-        // This is a Windows concept. Linux filesystems are case sensitive, so the correct case
-        // for a path *is* the case it was given in: if it were wrong, the file would not exist.
-        //
-        // Emulating case-insensitive resolution would mean walking every directory component
-        // and comparing entries, which is slow, wrong on a case-insensitive mount, and only
-        // ever hides a real bug in the caller.
+        // The fast path, and the only one that runs for paths the engine produced itself.
         outPath = pPath;
 
         struct stat pathInfo;
-        return stat( pPath, &pathInfo ) == 0;
+        if ( stat( pPath, &pathInfo ) == 0 )
+        {
+            return true;
+        }
+
+        // Nothing is there under that spelling, so walk the path a component at a time and look
+        // for an entry that differs only in case.
+        //
+        // On Windows this function asks the filesystem for a path's canonical case. Here it is
+        // doing something subtly different: recovering the real path when the caller was given
+        // the wrong case. That matters because several .vcxproj entries disagree with the disk,
+        // for example ThirdParty\enkits against ThirdParty/EnkiTS, and MSBuild never notices.
+        // The Reflector reads those paths directly.
+        String const requestedPath( pPath );
+        String resolvedPath;
+        resolvedPath.reserve( requestedPath.length() );
+
+        size_t componentStart = 0;
+        if ( !requestedPath.empty() && requestedPath[0] == s_pathDelimiter )
+        {
+            resolvedPath += s_pathDelimiter;
+            componentStart = 1;
+        }
+
+        while ( componentStart <= requestedPath.length() )
+        {
+            size_t componentEnd = requestedPath.find( s_pathDelimiter, componentStart );
+            if ( componentEnd == String::npos )
+            {
+                componentEnd = requestedPath.length();
+            }
+
+            String const component = requestedPath.substr( componentStart, componentEnd - componentStart );
+            if ( component.empty() )
+            {
+                break;
+            }
+
+            String candidate = resolvedPath + component;
+
+            if ( stat( candidate.c_str(), &pathInfo ) != 0 )
+            {
+                // Search the parent directory for an entry matching case-insensitively.
+                String const searchDirectory = resolvedPath.empty() ? String( "." ) : resolvedPath;
+                DIR* pDirectory = opendir( searchDirectory.c_str() );
+                if ( pDirectory == nullptr )
+                {
+                    return false;
+                }
+
+                bool found = false;
+                while ( dirent const* pEntry = readdir( pDirectory ) )
+                {
+                    if ( strcasecmp( pEntry->d_name, component.c_str() ) == 0 )
+                    {
+                        candidate = resolvedPath + pEntry->d_name;
+                        found = true;
+                        break;
+                    }
+                }
+
+                closedir( pDirectory );
+
+                if ( !found )
+                {
+                    return false;
+                }
+            }
+
+            resolvedPath = candidate;
+
+            if ( componentEnd == requestedPath.length() )
+            {
+                break;
+            }
+
+            resolvedPath += s_pathDelimiter;
+            componentStart = componentEnd + 1;
+        }
+
+        if ( stat( resolvedPath.c_str(), &pathInfo ) != 0 )
+        {
+            return false;
+        }
+
+        outPath = resolvedPath;
+        return true;
     }
 }
 #endif

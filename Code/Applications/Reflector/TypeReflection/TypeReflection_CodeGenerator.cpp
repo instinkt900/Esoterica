@@ -5,7 +5,7 @@
 #include "Base/Utils/TopologicalSort.h"
 #include "Base/ThirdParty/pugixml/src/pugixml.hpp"
 #include "Base/Serialization/XmlSerialization.h"
-#include <eastl/sort.h>
+#include <EASTL/sort.h>
 #include <string>
 
 //-------------------------------------------------------------------------

@@ -17,6 +17,9 @@ namespace EE::Resource
 {
     struct ResourceDescriptor;
     class CompilerRegistry;
+    // Only a `friend class Compiler;` declares this today, and a friend declaration does not
+    // make the name findable by ordinary lookup. MSVC is permissive about it and clang is not.
+    class Compiler;
     struct CompileDependency;
 
     //-------------------------------------------------------------------------

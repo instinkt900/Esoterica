@@ -8,6 +8,15 @@
 
 namespace EE
 {
+    // Forward declaration only. The definition is at the bottom of this file, *after* the
+    // template that streams a String. Two-phase lookup needs it visible at the point of
+    // definition, and argument-dependent lookup does not reach it: String is an eastl type, so
+    // ADL searches namespace eastl rather than EE. MSVC's delayed lookup finds it anyway, which
+    // is why this only breaks off Windows.
+    std::ostream& operator<<( std::ostream& s, String const& val );
+
+    //-------------------------------------------------------------------------
+
     class CommandLineParser
     {
         template<typename T>

@@ -245,7 +245,11 @@ SHEETS = {
                                     library_directories = ( 'External/DXC/lib', ),
                                     requires_path = 'External/DXC',
                                     deferred_to_phase = 'Phase 4' ),
-    'LLVM':                  Sheet( note = 'resolved with llvm-config, see llvm_link_flags()' ),
+    'LLVM':                  Sheet( include_directories = ( 'External/LLVM/include', ),
+                                    library_directories = ( 'External/LLVM/lib', ),
+                                    requires_path = 'External/LLVM',
+                                    deferred_to_phase = 'Phase 2',
+                                    note = 'libraries come from llvm-config, see llvm_link_flags()' ),
 
     # Dropped. Conventions rule 4: leave the EE_ENABLE_* define unset in the Linux build rather
     # than touching a call site. Naming them here, with no flags, is what "recognised and
@@ -295,19 +299,75 @@ def pkg_config_flags( package, mode ):
 
     return result.stdout.split()
 
-def llvm_link_flags():
+# LLVM.props links clangAST, clangBasic, clangLex and libclang by name, plus about 18 LLVM*
+# libraries. The clang ones have no llvm-config equivalent, so they are named; the LLVM ones are
+# asked for by component so that the list keeps working if upstream adds one.
+# 'clang' is libclang, the stable C API that ClangParser.cpp calls (clang_parseTranslationUnit
+# and friends). It ships as a shared library, unlike the rest, which are static.
+CLANG_LIBRARIES = ( 'clang', 'clangAST', 'clangBasic', 'clangLex', 'clangFrontend',
+                    'clangSerialization', 'clangDriver', 'clangParse', 'clangSema', 'clangEdit',
+                    'clangAnalysis', 'clangASTMatchers', 'clangSupport', 'clangAPINotes' )
+
+LLVM_COMPONENTS = ( 'core', 'support', 'analysis', 'object', 'bitreader', 'profiledata',
+                    'frontendhlsl', 'frontendopenmp', 'mc', 'transformutils', 'scalaropts',
+                    'targetparser', 'demangle', 'remarks', 'binaryformat' )
+
+def find_linker_flags( repo_root ):
+    """Returns the flags needed to link against the pinned LLVM, or an empty list.
+
+    The official LLVM release archives hold **LLVM IR bitcode**, not ELF objects: the release is
+    built with LTO. GNU ld cannot read them and fails with "file format not recognized". LLD
+    understands bitcode natively, and the LLVM tarball ships its own ld.lld, so the Reflector is
+    linked with that.
+
+    Only targets that actually link LLVM need this, but passing it everywhere would change the
+    linker for the whole build, so the caller applies it per project.
+    """
+
+    linker = repo_root / 'External/LLVM/bin/ld.lld'
+    if linker.is_file():
+        return [ f'-fuse-ld={linker}' ]
+
+    if shutil.which( 'ld.lld' ) is not None:
+        return [ '-fuse-ld=lld' ]
+
+    return []
+
+def llvm_config_path( repo_root ):
+    """Prefers the pinned External/LLVM over anything on PATH.
+
+    A distro llvm-config would silently report a different major version, and clang's C++ AST
+    API is not stable across those, so the pinned build has to win.
+    """
+
+    pinned = repo_root / 'External/LLVM/bin/llvm-config'
+    if pinned.is_file():
+        return str( pinned )
+
+    return shutil.which( 'llvm-config' )
+
+def llvm_link_flags( repo_root ):
     """LLVM.props maps to whatever llvm-config reports. Returns None when it is not installed."""
 
-    if shutil.which( 'llvm-config' ) is None:
+    config = llvm_config_path( repo_root )
+    if config is None:
         return None
 
-    result = subprocess.run( [ 'llvm-config', '--libs', 'core', 'support' ],
+    result = subprocess.run( [ config, '--libs' ] + list( LLVM_COMPONENTS ),
                              capture_output = True, text = True )
-
     if result.returncode != 0:
         return None
 
-    return result.stdout.split()
+    flags = [ f'-l{library}' for library in CLANG_LIBRARIES ]
+    flags += result.stdout.split()
+
+    # llvm-config --system-libs names the platform libraries the static LLVM archives need,
+    # such as -lz, -lzstd, -ltinfo. Leaving them out gives a wall of undefined references.
+    system = subprocess.run( [ config, '--system-libs' ], capture_output = True, text = True )
+    if system.returncode == 0:
+        flags += system.stdout.split()
+
+    return flags
 
 #-------------------------------------------------------------------------
 
@@ -321,6 +381,7 @@ def resolve_sheets( sheet_names, repo_root = None ):
     defines = []
     link_flags = []
     problems = []
+    root = repo_root if repo_root is not None else Path( '.' )
 
     for name in sheet_names:
         sheet = SHEETS.get( name )
@@ -334,7 +395,6 @@ def resolve_sheets( sheet_names, repo_root = None ):
         # Skip a dependency that has not been built yet. Emitting its -l would fail the link
         # with "cannot find -lfoo", which tells the reader nothing about which phase supplies it.
         if sheet.requires_path is not None:
-            root = repo_root if repo_root is not None else Path( '.' )
             if not ( root / sheet.requires_path ).exists():
                 problems.append(
                     f'{name}.props is skipped: {sheet.requires_path} does not exist. '
@@ -362,7 +422,9 @@ def resolve_sheets( sheet_names, repo_root = None ):
                 link_flags.extend( flags )
 
         if name == 'LLVM':
-            flags = llvm_link_flags()
+            # Must come before the -l flags, so the linker choice applies to them.
+            link_flags.extend( find_linker_flags( root ) )
+            flags = llvm_link_flags( root )
             if flags is None:
                 problems.append( 'llvm-config is not installed, so LLVM.props cannot be '
                                  'resolved. The Reflector will not link until Phase 2.' )
