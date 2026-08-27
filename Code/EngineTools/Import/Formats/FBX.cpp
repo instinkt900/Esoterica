@@ -1,5 +1,5 @@
 #include "FBX.h"
-#include "EngineTools/Import/importedSkeleton.h"
+#include "EngineTools/Import/ImportedSkeleton.h"
 #include "EngineTools/Import/ImportedAnimation.h"
 #include "EngineTools/Import/ImportedMesh.h"
 
