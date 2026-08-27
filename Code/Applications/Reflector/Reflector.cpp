@@ -1,7 +1,9 @@
 #include "Reflector.h"
 #include "ReflectedMacro.h"
 #include "ShaderReflection/ShaderReflection_ShaderParser.h"
+#if _WIN32
 #include "ShaderReflection/ShaderReflection_ShaderCompiler.h"
+#endif
 #include "ShaderReflection/ShaderReflection_CodeGenerator.h"
 #include "ShaderReflection/ShaderReflection_ShaderInputReflector.h"
 #include "TypeReflection/TypeReflection_CodeGenerator.h"
@@ -872,6 +874,12 @@ namespace EE::Reflection
 
     bool Reflector::ReflectShaders( Output desiredOutput )
     {
+        #if !_WIN32
+        // Shader reflection needs DXC, which the Linux build does not have until Phase 4. This
+        // reports rather than halting, so that the -typeinfo path still works, which is the
+        // whole point of the Reflector in Phase 2.
+        return PrintError( "Shader reflection is not available on this platform yet" );
+        #else
         EE_ASSERT( IsShaderOutputRequired( desiredOutput ) );
 
         m_shaderReflectionRequiresTypeReflection = false;
@@ -1043,6 +1051,7 @@ namespace EE::Reflection
         }
 
         return true;
+        #endif
     }
 
     bool Reflector::ReflectTypeInfo()
