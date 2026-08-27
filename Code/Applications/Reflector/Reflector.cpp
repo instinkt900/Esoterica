@@ -233,7 +233,13 @@ namespace EE::Reflection
             String const& filePathStr = path.GetString();
             for ( auto pToolsProjectName : Settings::g_toolProjectFolderNames )
             {
-                InlineString const searchStr( InlineString::CtorSprintf(), "\\%s\\", pToolsProjectName );
+                // Was "\\%s\\". FileSystem::Path uses the platform delimiter, so a hardcoded
+                // backslash never matches on Linux: every tools header was then treated as a
+                // runtime header, parsed in the no-dev-tools pass, and failed on the ImGuiX
+                // types that only exist when EE_DEVELOPMENT_TOOLS is set.
+                InlineString const searchStr( InlineString::CtorSprintf(), "%c%s%c",
+                                              FileSystem::Path::s_pathDelimiter, pToolsProjectName,
+                                              FileSystem::Path::s_pathDelimiter );
                 if ( filePathStr.find( searchStr.c_str() ) != String::npos )
                 {
                     return true;
