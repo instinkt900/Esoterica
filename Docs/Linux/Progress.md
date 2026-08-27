@@ -422,6 +422,59 @@ the reasoning, not just the outcome.
 **Alternatives rejected:** ...
 -->
 
+### 2026-08-27 - DXC on Linux is blocked by clashing COM shims, not by DXC itself
+
+**Context:** Eight `Engine/Render` files include `.esf` shader sources, which include generated
+`.esh` reflection headers. Those come from the Reflector's `-shaders` pass, which Phase 2
+disabled because it needs DXC. So Phase 3's "Engine builds" criterion depends on Phase 4 work.
+The decision was to bring DXC forward rather than exclude the files or fake the headers.
+
+**What worked.** DXC itself is easy. Microsoft ships official prebuilt Linux binaries, so
+`./DownloadDependencies.sh dxc` is a download, not an hours-long LLVM build. It lands in
+`External/DirectXShaderCompiler` with `inc/` and `lib/x64/`, matching what `DXC.props` expects.
+
+`ShaderReflection_ShaderCompiler.h` also includes **`d3d12shader.h`**, which is a Windows SDK
+header that the Linux DXC tarball does not ship. **DirectX-Headers**, Microsoft's cross-platform
+D3D12 headers, supplies it. The plan never mentions this dependency and it is not optional.
+
+Neither header is reachable through a property sheet: the Reflector imports only `Esoterica` and
+`LLVM`, because on Windows both headers come from the Windows SDK and are on the default search
+path. The Linux equivalent is to put them in the global include set, which is what
+`ESOTERICA_INCLUDE_DIRECTORIES` now does. The DXC *library* stays on `DXC.props`.
+
+**Where it stops.** DXC's `WinAdapter.h` and DirectX-Headers' `wsl/stubs` are **two alternative
+COM shims for the same types**, and the shader compiler needs headers from both. Include them
+together and `IUnknown` ends up declared but never defined, so every
+`ID3D10Blob : public IUnknown` in `d3dcommon.h` fails with "base class has incomplete type".
+
+Measured, so the next attempt does not repeat it:
+
+| Include set | Errors |
+|---|---|
+| DXC + DirectX-Headers `directx/` only | 1 (`rpc.h` missing) |
+| plus the trivial stubs, no `basetsd.h` | 1 |
+| plus `basetsd.h`, `unknwnbase.h`, `oaidl.h` | 1 (`ocidl.h` missing) |
+| plus `ocidl.h` | **20** |
+| `dxcapi.h` included before `d3d12shader.h` | 17 |
+
+`ocidl.h` is a five-line empty stub, so it is not the cause: adding it simply lets compilation
+reach line 423 of `d3dcommon.h`, where the real problem is. Include order does not fix it either.
+
+**Current state:** the four Phase 2 shader guards are **restored**, so the tree builds. The DXC
+and DirectX-Headers dependencies, and the include-path plumbing, are kept, because any solution
+needs them.
+
+**What to try next**, in order:
+
+1. Find the guard macro that makes DXC's `WinAdapter.h` and DirectX-Headers cooperate. Both are
+   Microsoft projects and this combination must work somewhere; `__EMULATE_UUID` and the
+   `__IUnknown_INTERFACE_DEFINED__` family are the places to look.
+2. Use DXC's reflection interfaces (`IDxcContainerReflection`) instead of
+   `ID3D12ShaderReflection`, dropping `d3d12shader.h` entirely. This is an upstream code change
+   to `ShaderReflection_ShaderCompiler`, so **escalate first**.
+3. Reconsider whether Linux shader reflection should go through SPIRV-Reflect, which Phase 5
+   brings in for Vulkan anyway. That is a larger design change and definitely needs escalation.
+
 ### 2026-08-27 - Upstream merges happen on request only
 
 **Context:** The plan called for merging `upstream/main` weekly, or before each new phase,
