@@ -1,5 +1,7 @@
 #ifdef __linux__
 #include "SystemDialogs.h"
+#include "Base/TypeSystem/TypeRegistry.h"
+#include "ToolsContext.h"
 
 //-------------------------------------------------------------------------
 // Native file dialogs
@@ -22,7 +24,7 @@ namespace EE
     {
         // Not halting: this is a plain value type that callers construct while building filter
         // lists, well before any dialog is opened. Halting here would stop the editor starting.
-        EE_UNUSED( displayText );
+        (void) displayText;
     }
 
     //-------------------------------------------------------------------------

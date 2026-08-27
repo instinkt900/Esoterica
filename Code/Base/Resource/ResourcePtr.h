@@ -156,6 +156,13 @@ namespace EE
         inline bool IsSetAndIsValidResourceTypeID() const { return IsSet() && m_resourceID.GetResourceTypeID() == T::GetStaticResourceTypeID(); }
         inline ResourceTypeID GetRequiredResourceTypeID() const { return T::GetStaticResourceTypeID(); }
 
+        // Assigning nullptr is ambiguous for the same reason: it matches the implicit copy
+        // assignment through the converting constructor as well as operator=( ResourcePtr ).
+        inline TResourcePtr<T>& operator=( nullptr_t )
+        {
+            return operator=( ResourcePtr() );
+        }
+
         // Assigning a ResourceID is otherwise ambiguous: it converts to ResourcePtr, which then
         // matches both this operator and the implicit copy assignment reached through
         // TResourcePtr's converting constructor. MSVC picks one; clang reports the ambiguity.

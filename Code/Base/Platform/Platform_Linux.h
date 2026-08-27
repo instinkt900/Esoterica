@@ -60,6 +60,14 @@ EE_FORCE_INLINE int strncpy_s( char* pDestination, size_t destinationSize, char 
     return 0;
 }
 
+// MSVC also supplies a template overload that deduces the destination size from an array, and
+// the call sites use both forms.
+template<size_t N>
+EE_FORCE_INLINE int strncpy_s( char ( &destination )[N], char const* pSource, size_t count )
+{
+    return strncpy_s( destination, N, pSource, count );
+}
+
 EE_FORCE_INLINE int vsprintf_s( char* pBuffer, size_t bufferSize, char const* pFormat, va_list args )
 {
     return vsnprintf( pBuffer, bufferSize, pFormat, args );
