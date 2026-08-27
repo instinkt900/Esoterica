@@ -10,6 +10,8 @@ Docs/Linux/Phases/Phase0-BuildSystem.md, P0.5 to P0.7, holds the flag mapping.
 import shutil
 import subprocess
 
+from pathlib import Path
+
 #-------------------------------------------------------------------------
 # Toolchain
 #-------------------------------------------------------------------------
@@ -263,6 +265,13 @@ def resolve_sheets( sheet_names ):
         defines.extend( sheet.defines )
 
         if sheet.pkg_config is not None:
+            # --cflags matters as much as --libs: Freetype's headers live under
+            # /usr/include/freetype2, so <ft2build.h> is not on the default search path.
+            cflags = pkg_config_flags( sheet.pkg_config, '--cflags' )
+            if cflags is not None:
+                include_directories.extend(
+                    f[2:] for f in cflags if f.startswith( '-I' ) )
+
             flags = pkg_config_flags( sheet.pkg_config, '--libs' )
             if flags is None:
                 problems.append( f'pkg-config has no package "{sheet.pkg_config}" '
@@ -294,7 +303,8 @@ def missing_include_directories( repo_root, include_directories ):
     error it eventually gives names a header rather than the include path. Check up front.
     """
 
-    return [ d for d in include_directories if not ( repo_root / d ).is_dir() ]
+    return [ d for d in include_directories
+             if not Path( d ).is_absolute() and not ( repo_root / d ).is_dir() ]
 
 def project_define( project_name ):
     """Esoterica.props sets $(ProjectName.ToUpper().Replace('.','_')).
