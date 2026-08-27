@@ -158,7 +158,10 @@ namespace EE
         inline void ReplaceExtension( String const& extension ) { ReplaceExtension( extension.c_str() ); }
 
         // Replaces the extension (excluding the '.') for this path (will create an extensions if no extension exists)
-        template<size_t S> void ReplaceExtension( TInlineString<S> const& extension ) { ReplaceExtension( extension.c_str() ); }
+        // template<int S>, not size_t or eastl_size_t: eastl::fixed_string declares its size
+        // parameter as int, so deducing any other type from a TInlineString<N> fails. MSVC
+        // accepts the narrowing during deduction. Same fix as ResourceTypeID.h.
+        template<int S> void ReplaceExtension( TInlineString<S> const& extension ) { ReplaceExtension( extension.c_str() ); }
 
         // Sub-File Paths
         //-------------------------------------------------------------------------
