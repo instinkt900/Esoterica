@@ -492,6 +492,38 @@ the reasoning, not just the outcome.
 **Alternatives rejected:** ...
 -->
 
+### 2026-08-28 - A Windows-only `.cpp` is excluded, never wrapped in `#ifdef _WIN32`
+
+**Context:** `Code/EngineTools/Core/SystemDialogs.cpp` is 552 lines of COM `IFileDialog` with an
+unguarded `<windows.h>`. The Phase 3 plan said to wrap the whole body in `#ifdef _WIN32`, the
+"wrap, do not split" technique, and that is what the first Phase 3 commit did.
+
+**Decision:** Name it in `Exclusions.txt` instead. The upstream file is byte-identical again.
+
+**Rationale:** Both approaches produce the same object code: nothing. The difference is where
+the knowledge lives.
+
+- **Zero lines added beats two.** Every line in an upstream file is a line a future
+  `git merge upstream/main` can conflict on. The wrap touches the first and last line of the
+  file, which are exactly the lines an upstream reformat or a new include is most likely to
+  move.
+- **An exclusion is checked; an `#ifdef` is not.** `SourceLists.load` reports any pattern that
+  matches nothing, so an upstream rename or delete fails the build with a named problem. A
+  `#ifdef _WIN32` whose file upstream has replaced sits there silently forever.
+- **It states the reason in the place a reviewer already reads.** `Exclusions.txt` is the one
+  file a post-merge audit opens to see what the Linux build drops and why. A guard buried at
+  line 1 of a 552-line file is not in that inventory.
+- **The shared header was never the obstacle.** The original note claimed the file had to be
+  wrapped "because the header is shared". `SystemDialogs.h` is untouched either way - it is
+  `SystemDialogs_Linux.cpp` that includes it and defines every symbol it declares out of line.
+
+**The rule:** a `.cpp` gets an exclusion. A header gets the wrap, because nothing lists headers,
+so there is no way to exclude one. `ShaderReflection_ShaderCompiler.h` is the only file the wrap
+still applies to, and Phase 4 has already replaced its whole-body wrap with targeted guards.
+
+**Alternatives rejected:** keeping the wrap for symmetry with the header. Symmetry between a
+`.cpp` and a `.h` is worth less than an upstream file with no diff at all.
+
 ### 2026-08-28 - `ctt` is open source, and is built from crates.io rather than substituted
 
 Open question 1 is answered, and it is the best of the three outcomes
@@ -657,8 +689,9 @@ filename heuristics to decide what was Windows-only.
 Those heuristics were wrong in both directions, silently:
 
 - `Code/EngineTools/Core/SystemDialogs_Linux.cpp` would not have been found. The rule only
-  searched directories that had lost a Windows file, and `SystemDialogs.cpp` gets guarded rather
-  than excluded.
+  searched directories that had lost a Windows file, and `SystemDialogs.cpp` was to be guarded
+  rather than excluded. (Phase 3 excluded it instead, so this particular example no longer
+  holds. The two below still do, and they were the decisive ones.)
 - `Code/Base/Render/RHI_Direct3D12.cpp` was **in** the Linux build. It carries no platform
   suffix and no `#if _WIN32` guard, so nothing kept it out. Same for
   `Code/Base/ThirdParty/D3D12MemoryAllocator/`.

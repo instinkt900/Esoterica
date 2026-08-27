@@ -1,7 +1,3 @@
-// 552 lines of COM IFileDialog code. Wrapped whole rather than split, per the "wrap, do not
-// split" technique in Docs/Linux/TouchedFiles.md: two lines added, nothing modified. The Linux
-// implementation is the sibling SystemDialogs_Linux.cpp.
-#ifdef _WIN32
 #include "SystemDialogs.h"
 #include "Base/TypeSystem/TypeRegistry.h"
 #include "Base/TypeSystem/ResourceInfo.h"
@@ -555,4 +551,3 @@ namespace EE
         return result;
     }
 }
-#endif

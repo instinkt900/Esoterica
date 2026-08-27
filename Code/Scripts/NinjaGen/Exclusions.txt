@@ -25,6 +25,14 @@
 # directories later.
 **/Win32/**
 
+# Windows implementations that carry no suffix at all. Same rule as the two globs above - the
+# file is a Windows implementation and its _Linux sibling is listed in LinuxSources.txt - but
+# the name gives the generator nothing to match on, so each one needs a line of its own.
+
+# 552 lines of COM IFileDialog. The shared header is SystemDialogs.h, which both sides include;
+# excluding the .cpp drops only the Windows implementation. Sibling: SystemDialogs_Linux.cpp.
+Code/EngineTools/Core/SystemDialogs.cpp
+
 #-------------------------------------------------------------------------
 # Direct3D 12
 #-------------------------------------------------------------------------
