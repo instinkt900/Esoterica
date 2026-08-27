@@ -91,6 +91,16 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Engine/Render/Device/DeviceRenderView.cpp` | `"base/Render/RHI.h"` to `"Base/Render/RHI.h"`. Case mismatch. | 3 | done |
 | `Code/Engine/**`, `Code/EngineTools/**` (6 files) | `<eastl/...>` to `<EASTL/...>`. Case mismatches; the directory is `EASTL`. | 3 | done |
 
+## Phase 4 (brought forward) - Shader pipeline
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.h` | Replace the Phase 2 whole-body wrap with targeted guards. `d3d12shader.h` and `<wrl/client.h>` go behind `#if _WIN32`; Linux takes `ComPtr_Linux.h` instead. | 4 | done |
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.cpp` | Unwrapped. `-spirv -fspv-target-env=vulkan1.3` on Linux instead of DXC's default DXIL. `-Qembed_debug` and `-Fd` are DXIL-only and make libdxcompiler **segfault** on the SPIR-V path, so they are Windows-only. | 4 | done |
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_CodeGenerator.cpp` | Replace `std::stable_sort( doc.begin(), doc.end(), ... )`. `pugi::xml_node_iterator` is bidirectional and `stable_sort` needs random access. **The comparator was also wrong**: it returned `stricmp`'s `int`, true for a difference in *either* direction, which is not a strict weak ordering and so was undefined behaviour on Windows too. | 4 | done |
+| `Code/Base/Render/RHI.esh` | `HLSL_STATIC_ASSERT` becomes a no-op under `__spirv__`. DXC's SPIR-V back end does not implement `_Static_assert`. **The plan predicted no `.esh` file would need edits; that was wrong.** | 4 | done |
+| `Code/Applications/Reflector/ShaderReflection/ComPtr_Linux.h` | **New file.** A minimal `Microsoft::WRL::ComPtr` replacement. DXC's own `CComPtr` lacks `Get`, `GetAddressOf` and `ReleaseAndGetAddressOf`, which is what the eleven call sites use. | 4 | done |
+
 ## Phase 2 - Reflector
 
 | File | Change | Phase | Status |

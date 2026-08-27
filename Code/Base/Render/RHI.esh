@@ -65,7 +65,17 @@ template <typename T> using RootParameter = uint64_t;
 #define EE_BEGIN_SHADER_TYPES_NAMESPACE
 #define EE_END_SHADER_TYPES_NAMESPACE
 
+#ifdef __spirv__
+// DXC's SPIR-V back end does not implement _Static_assert: it fails with "decl type
+// StaticAssert unimplemented". The DXIL back end does, so Windows keeps the check.
+//
+// These asserts only verify struct sizes at compile time, so dropping them changes no generated
+// code. It does mean a size mismatch is caught on Windows and not on Linux, which is worth
+// knowing when a struct layout changes.
+#define HLSL_STATIC_ASSERT( X, Y )
+#else
 #define HLSL_STATIC_ASSERT( X, Y ) _Static_assert( X, Y )
+#endif
 #endif
 
 // Hacky macros to make it easier for shader compiler to recognize shader metadata
