@@ -4,6 +4,8 @@
 #include "Base/Math/Math.h"
 #if _WIN32
 #include <intrin.h>
+#else
+#include <immintrin.h>
 #endif
 
 //-------------------------------------------------------------------------
