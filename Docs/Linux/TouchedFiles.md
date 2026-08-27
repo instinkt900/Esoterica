@@ -95,6 +95,8 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Base/FileSystem/FileSystemPath.h`, `DataPath.h`, `DataFileExtension.h` | `template<size_t S>` / `template<eastl_size_t S>` to `template<int S>` on the `TInlineString<S>` overloads. `eastl::fixed_string` declares its size parameter as `int`, so deducing any other type from a `TInlineString<N>` fails. Same fix as `ResourceTypeID.h` in Phase 2. | 3 | done |
 | `Code/Base/Resource/ResourcePtr.h` (2) | Add `TResourcePtr<T>::operator=( nullptr_t )`. Assigning `nullptr` was ambiguous for the same reason as `ResourceID`. | 3 | done |
 | `Code/Engine/Render/Device/DeviceRenderWorld.cpp` | `Math::Max( 1ULL, ...size() )` to `Math::Max( size_t( 1 ), ... )`. `Math::Max` deduces one type from both arguments; on Windows `size_t` *is* `unsigned long long` so they agree, and on LP64 Linux it is `unsigned long`. | 3 | done |
+| `Code/EngineTools/Game/ResourceEditors/ResourceEditor_Hitbox.h` (2) | Forward-declare `class Hitbox;`. Used as a pointer at line 163 and never declared, which broke the class and cascaded into a dozen "cannot initialize object parameter" errors that looked like a broken inheritance chain. | 3 | done |
+| `Code/EngineTools/Import/Formats/FBX.cpp` | `"EngineTools/Import/importedSkeleton.h"` to `ImportedSkeleton.h`. Case mismatch. | 3 | done |
 | `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. 552 lines of COM `IFileDialog`. New sibling `SystemDialogs_Linux.cpp` provides the symbols. | 3 | done |
 
 ## Phase 4 (brought forward) - Shader pipeline
@@ -138,6 +140,8 @@ the same interface.
 | `Code/Base/FileSystem/FileSystemPath.h`, `DataPath.h`, `DataFileExtension.h` | `template<size_t S>` / `template<eastl_size_t S>` to `template<int S>` on the `TInlineString<S>` overloads. `eastl::fixed_string` declares its size parameter as `int`, so deducing any other type from a `TInlineString<N>` fails. Same fix as `ResourceTypeID.h` in Phase 2. | 3 | done |
 | `Code/Base/Resource/ResourcePtr.h` (2) | Add `TResourcePtr<T>::operator=( nullptr_t )`. Assigning `nullptr` was ambiguous for the same reason as `ResourceID`. | 3 | done |
 | `Code/Engine/Render/Device/DeviceRenderWorld.cpp` | `Math::Max( 1ULL, ...size() )` to `Math::Max( size_t( 1 ), ... )`. `Math::Max` deduces one type from both arguments; on Windows `size_t` *is* `unsigned long long` so they agree, and on LP64 Linux it is `unsigned long`. | 3 | done |
+| `Code/EngineTools/Game/ResourceEditors/ResourceEditor_Hitbox.h` (2) | Forward-declare `class Hitbox;`. Used as a pointer at line 163 and never declared, which broke the class and cascaded into a dozen "cannot initialize object parameter" errors that looked like a broken inheritance chain. | 3 | done |
+| `Code/EngineTools/Import/Formats/FBX.cpp` | `"EngineTools/Import/importedSkeleton.h"` to `ImportedSkeleton.h`. Case mismatch. | 3 | done |
 | `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. It is 552 lines of COM `IFileDialog` code, with an unguarded `<windows.h>` and `<shobjidl.h>` include at line 5. New sibling: `SystemDialogs_Linux.cpp`. | 7 | planned |
 
 ## Confirmed to need no change

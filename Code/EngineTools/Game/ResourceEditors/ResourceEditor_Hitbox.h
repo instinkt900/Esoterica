@@ -19,6 +19,10 @@ namespace EE
     // through some other translation unit's includes. Forward-declared rather than including
     // EntityWorld.h, which would pull the whole engine world into a tools header.
     class EntityWorld;
+
+    // Hitbox is used as a pointer below and never declared here either. It lives in
+    // Engine/Hitbox/Hitbox_Instance.h.
+    class Hitbox;
 }
 
 namespace EE::Render { class SkeletalMeshComponent; }
