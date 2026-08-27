@@ -1,5 +1,5 @@
 #pragma once
-#include "Base\Esoterica.h"
+#include "Base/Esoterica.h"
 
 //-------------------------------------------------------------------------
 // Global Instance Registry Helper

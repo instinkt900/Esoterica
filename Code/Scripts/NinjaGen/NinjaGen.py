@@ -1,287 +1,370 @@
+"""Generates Build/Linux/Esoterica.ninja and compile_commands.json.
 
-from ninja_syntax import Writer
+    python3 Code/Scripts/NinjaGen/NinjaGen.py
+    ninja -f Build/Linux/Esoterica.ninja
+
+The build model comes from the three source lists (SourceLists.py), and the flags come from the
+property sheet translation (Toolchain.py). This file does the emitting, and nothing else.
+
+It refuses to run when UpstreamProjects.txt no longer matches the Visual Studio projects. That
+check is what keeps a new upstream source from joining the build unnoticed, so it is not
+optional and there is no flag to skip it.
+
+Output layout mirrors MSBuild's, which Esoterica.props sets as Build/$(Platform)_$(Configuration):
+
+    Build/Linux/Esoterica.ninja           the build file
+    Build/Linux_<Config>/                 binaries
+    Build/_Temp/Linux_<Config>/<Project>/ object files
+"""
+
+import argparse
+import subprocess
+import sys
+
 from pathlib import Path
 
-import re, copy, subprocess
+sys.path.insert( 0, str( Path( __file__ ).resolve().parent ) )
 
-REGEX_PROJ = re.compile(r'Project\("\{([^\}]+)\}"\)[\s=]+"([^\"]+)",\s"(.+proj)", "(\{[^\}]+\})"')
+import SourceLists
+import SyncUpstream
+import Toolchain
 
-class Toolchain:
-    def WineGCC():
-        result = Toolchain()
-        result.name             = 'WineGCC'
-        result.compiler_c       = 'winegcc'
-        result.compiler_cpp     = 'wineg++'
-        result.librarian        = 'ar'
-        result.linker           = 'g++'
-        result.compiler_flags   = '-D__LINUX__ -g -m64 -msse4.2 -mavx -MMD -mwindows -Wno-multichar -Wno-c++20-compat'
-        result.c_flags          = '-std=c11'
-        result.cpp_flags        = '-std=c++17'
-        result.librarian_flags  = ''
-        result.linker_flags     = ''
-        return result
+from ninja_syntax import Writer
 
-    def GCC():
-        result = Toolchain()
-        result.name             = 'GCC'
-        result.compiler_c       = 'gcc'
-        result.compiler_cpp     = 'g++'
-        result.librarian        = 'ar'
-        result.linker           = 'g++'
-        result.compiler_flags   = '-D__LINUX__ -g -m64 -msse4.2 -mavx -MMD'
-        result.c_flags          = '-std=c11'
-        result.cpp_flags        = '-std=c++17'
-        result.librarian_flags  = ''
-        result.linker_flags     = ''
-        return result
+#-------------------------------------------------------------------------
 
-    def Clang():
-        result = Toolchain()
-        result.name             = 'Clang'
-        result.compiler_c       = 'clang'
-        result.compiler_cpp     = 'clang++'
-        result.librarian        = 'llvm-ar'
-        result.linker           = 'clang++'
-        result.compiler_flags   = '-D__LINUX__ -g -m64 -msse4.2 -mavx -MMD'
-        result.c_flags          = '-std=c11'
-        result.cpp_flags        = '-std=c++17'
-        result.librarian_flags  = ''
-        result.linker_flags     = ''
-        return result
+NINJA_DIRECTORY = 'Build/Linux'
+NINJA_FILE      = 'Build/Linux/Esoterica.ninja'
+OUTPUT_PREFIX   = 'Build/Linux'
+TEMP_PREFIX     = 'Build/_Temp/Linux'
 
-    def ClangCL():
-        result = Toolchain()
-        result.name             = 'ClangCL'
-        result.compiler_c       = 'clang-cl'
-        result.compiler_cpp     = 'clang-cl'
-        result.librarian        = 'llvm-ar'
-        result.linker           = 'clang-cl'
-        result.compiler_flags   = ''
-        result.c_flags          = '/std:c11'
-        result.cpp_flags        = '/std:c++17'
-        result.librarian_flags  = ''
-        result.linker_flags     = ''
-        return result
+#-------------------------------------------------------------------------
 
-class Configuration:
-    def __init__(self, name, compiler_flags, linker_flags):
-        self.name = name
-        self.compiler_flags = compiler_flags
-        self.linker_flags = linker_flags
+def ninja_identifier( name ):
+    """ninja variable and rule names cannot contain a dot."""
 
-class Project:
-    def __init__(self, project_name):
-        self.name = project_name
-        self.project_type = ''
-        self.c_source_files = []
-        self.cpp_source_files = []
-        self.header_files = []
-        self.project_references = []
+    return name.replace( '.', '_' )
 
-def parse_vcxproj(filename):
-    file_path = Path(filename)
-    base_path = file_path.parent
+def shell_quote( value ):
+    """Quotes a define value so the shell passes it through unchanged.
 
-    result = Project(file_path.stem)
-    with open(filename) as f:
-        for line in f.readlines():
-            line = line.strip()
+    EASTL_USER_CONFIG_HEADER's value contains double quotes that are part of the macro.
+    """
 
-            if line.startswith('<ClCompile Include='):
-                index0 = line.find('"') + 1
-                index1 = line.rfind('"')
+    if any( character in value for character in ' "\'$()' ):
+        return "'" + value.replace( "'", """'"'"'""" ) + "'"
+    return value
 
-                source_file = line[index0:index1].replace('\\', '/');
+def format_define( define ):
+    if isinstance( define, tuple ):
+        name, value = define
+        return f'-D{name}={shell_quote( value )}'
+    return f'-D{define}'
 
-                if source_file.endswith('.cpp'):
-                    result.cpp_source_files.append(str(base_path.joinpath(source_file)))
-                elif source_file.endswith('.c'):
-                    result.c_source_files.append(str(base_path.joinpath(source_file)))
-                else:
-                    print(f'Unknown file {filename} {source_file}')
+#-------------------------------------------------------------------------
 
-            if line.startswith('<ClInclude Include='):
-                index0 = line.find('"') + 1
-                index1 = line.rfind('"')
+def topological_order( solution, project ):
+    """Returns `project`'s dependencies, closest first.
 
-                source_file = line[index0:index1].replace('\\', '/');
+    A static archive has to appear on the link line after everything that needs it, so link
+    order is the reverse topological order of the reference graph.
+    """
 
-                if source_file.endswith('.h') or source_file.endswith('.hpp') or source_file.endswith('.inl'):
-                    result.header_files.append(str(base_path.joinpath(source_file)))
-                else:
-                    print(f'Unknown file {filename} {source_file}')
+    ordered = []
+    seen = set()
 
-            if line.startswith('<ProjectReference Include="'):
-                index0 = line.find('"') + 1
-                index1 = line.rfind('"')
+    def visit( name ):
+        if name in seen:
+            return
+        seen.add( name )
 
-                reference_file = line[index0:index1].replace('\\', '/');
-                reference_project = str(Path(reference_file).stem)
+        dependency = solution.get_project( name )
+        if dependency is None:
+            return
 
-                result.project_references.append(reference_project)
+        ordered.append( dependency )
+        for reference in dependency.references:
+            visit( reference )
 
-            if line.startswith('<ConfigurationType>'):
-                index0 = line.find('>') + 1
-                index1 = line.rfind('<')
+    for reference in project.references:
+        visit( reference )
 
-                project_type = line[index0:index1]
-                if project_type == 'StaticLibrary' or project_type == 'DynamicLibrary':
-                    result.project_type = 'Lib'
-                elif project_type == 'Application':
-                    result.project_type = 'Exe'
-                else:
-                    result.project_type = None
-    return result
+    return ordered
 
-def parse_sln(filename):
-    result = []
-    with open(filename) as f:
-        for line in f.readlines():
-            project_path = re.findall(REGEX_PROJ, line)
-            if project_path:
-                project = parse_vcxproj(project_path[0][2].replace('\\', '/'))
-                if project.name != 'Esoterica.Scripts.Reflect': # Special case
-                    result.append(project)
-    return result
+def library_path( project, configuration ):
+    """Where a project's library lands, or None when it does not produce one."""
 
+    project_type = project.get_project_type( configuration.base_name )
 
-def build_toolchain(build, toolchain, configurations, projects):
-    build.variable(f'CompilerFlags_{toolchain.name}', toolchain.compiler_flags)
-    build.variable(f'CFlags_{toolchain.name}', toolchain.c_flags)
-    build.variable(f'CppFlags_{toolchain.name}', toolchain.cpp_flags)
-    build.variable(f'LibrarianFlags_{toolchain.name}', toolchain.librarian_flags)
-    build.variable(f'LinkerFlags_{toolchain.name}', toolchain.linker_flags)
+    if project_type == SourceLists.PROJECT_TYPE_SHARED_LIBRARY:
+        return f'{OUTPUT_PREFIX}_{configuration.name}/lib{project.name}.so'
+    if project_type == SourceLists.PROJECT_TYPE_STATIC_LIBRARY:
+        return f'{OUTPUT_PREFIX}_{configuration.name}/lib{project.name}.a'
+    return None
+
+def target_path( project, configuration ):
+    project_type = project.get_project_type( configuration.base_name )
+
+    if project_type == SourceLists.PROJECT_TYPE_EXECUTABLE:
+        return f'{OUTPUT_PREFIX}_{configuration.name}/{project.name}'
+    return library_path( project, configuration )
+
+#-------------------------------------------------------------------------
+
+def project_compile_flags( repo_root, project, configuration, problems ):
+    """Every flag that compiling this project in this configuration needs."""
+
+    sheets = project.get_property_sheets( configuration.base_name )
+    sheet_includes, sheet_defines, _, sheet_problems = Toolchain.resolve_sheets( sheets )
+    problems.extend( f'{project.name}: {p}' for p in sheet_problems )
+
+    include_directories = list( Toolchain.ESOTERICA_INCLUDE_DIRECTORIES ) + sheet_includes
+
+    for missing in Toolchain.missing_include_directories( repo_root, include_directories ):
+        problems.append( f'{project.name}: include directory "{missing}" does not exist.' )
+
+    defines = [ Toolchain.project_define( project.name ) ]
+    defines += list( Toolchain.COMMON_DEFINES )
+    defines += list( Toolchain.ESOTERICA_DEFINES )
+    defines += list( configuration.defines )
+    defines += list( sheet_defines )
+
+    flags = [ format_define( d ) for d in defines ]
+    flags += [ f'-I{directory}' for directory in include_directories ]
+    flags += list( Toolchain.COMMON_COMPILER_FLAGS )
+    flags += list( configuration.compiler_flags )
+
+    # -fvisibility=hidden only means something once _Module/API.h grows its
+    # __attribute__(( visibility( "default" ) )) branch, which is Phase 1. Setting it now means
+    # the export surface is correct as soon as that lands.
+    if project.get_project_type( configuration.base_name ) == SourceLists.PROJECT_TYPE_SHARED_LIBRARY:
+        flags.append( '-fvisibility=hidden' )
+
+    return flags
+
+def project_link_flags( solution, project, configuration, problems ):
+    """Link flags for a project, including the sheets of everything it depends on."""
+
+    sheets = list( project.get_property_sheets( configuration.base_name ) )
+
+    for dependency in topological_order( solution, project ):
+        for sheet in dependency.get_property_sheets( configuration.base_name ):
+            if sheet not in sheets:
+                sheets.append( sheet )
+
+    _, _, link_flags, sheet_problems = Toolchain.resolve_sheets( sheets )
+    problems.extend( f'{project.name}: {p}' for p in sheet_problems )
+
+    flags = list( configuration.linker_flags )
+
+    # Replaces the MSBuild Copy targets, such as DXC_CopyDLL, that stage DLLs beside the
+    # executable. rpath has fewer moving parts than a staging step.
+    flags.append( "-Wl,-rpath,'$$ORIGIN'" )
+    flags.extend( link_flags )
+
+    return flags
+
+#-------------------------------------------------------------------------
+
+def object_path( project, configuration, source ):
+    """Object paths derive from the repo-relative source path, never an absolute one.
+
+    An absolute path here would make the build directory unusable on any other machine.
+    """
+
+    return f'{TEMP_PREFIX}_{configuration.name}/{project.name}/{source}.o'
+
+def emit( repo_root, solution, configurations ):
+    """Writes the ninja file. Returns ( text, problems, debug_rule_names )."""
+
+    problems = []
+    debug_rule_names = []
+
+    from io import StringIO
+    output = StringIO()
+    writer = Writer( output, 100 )
+
+    writer.comment( 'GENERATED FILE - regenerate with python3 Code/Scripts/NinjaGen/NinjaGen.py' )
+    writer.comment( 'Source of truth: Code/Scripts/NinjaGen/{UpstreamProjects,Exclusions,LinuxSources}.txt' )
+    writer.newline()
+
+    writer.variable( 'ninja_required_version', '1.10' )
+    writer.newline()
+
+    writer.variable( 'cc', Toolchain.COMPILER_C )
+    writer.variable( 'cxx', Toolchain.COMPILER_CPP )
+    writer.variable( 'ld', Toolchain.LINKER )
+    writer.variable( 'ar', Toolchain.ARCHIVER )
+    writer.newline()
+
+    writer.variable( 'c_std', ' '.join( Toolchain.C_FLAGS ) )
+    writer.variable( 'cpp_std', ' '.join( Toolchain.CPP_FLAGS ) )
+    writer.newline()
+
+    default_targets = []
 
     for configuration in configurations:
-        build.variable(f'CompilerFlags_{configuration.name}', configuration.compiler_flags)
-        build.variable(f'LinkerFlags_{configuration.name}', configuration.linker_flags)
+        writer.comment( '-' * 71 )
+        writer.comment( f'Configuration: {configuration.name}' )
+        writer.comment( '-' * 71 )
+        writer.newline()
 
-        cc_rule     = f'CC_{toolchain.name}_{configuration.name}'
-        cpp_rule    = f'CPP_{toolchain.name}_{configuration.name}'
-        lib_rule    = f'LIB_{toolchain.name}_{configuration.name}'
-        link_rule   = f'LINK_{toolchain.name}_{configuration.name}'
+        writer.rule( f'ar_{configuration.name}',
+                     command = '$ar rcs $out $in',
+                     description = f'AR {configuration.name} $out' )
 
-        build.rule(cc_rule,
-            f'{toolchain.compiler_c} -MF $out.d -c $in -o $out $CompilerFlags_{toolchain.name} $CompilerFlags_{configuration.name} $CFlags_{toolchain.name}',
-            None, '$out.d')
-        build.rule(cpp_rule,
-            f'{toolchain.compiler_c} -MF $out.d -c $in -o $out $CompilerFlags_{toolchain.name} $CompilerFlags_{configuration.name} $CppFlags_{toolchain.name}',
-            None, '$out.d')
-        build.rule(lib_rule, f'{toolchain.librarian} $LibrarianFlags_{toolchain.name} rcs $in $out')
-        build.rule(link_rule, f'{toolchain.linker} $LinkerFlags_{toolchain.name} $LinkerFlags_{configuration.name} $in -o $out')
+        for project in sorted( solution.projects, key = lambda p: p.name ):
+            if not project.builds_in( configuration.base_name ):
+                continue
 
-        for project in projects:
+            identifier = f'{ninja_identifier( project.name )}_{configuration.name}'
+
+            compile_flags = project_compile_flags( repo_root, project, configuration, problems )
+            flag_text = ' '.join( compile_flags )
+
+            # One rule per project and configuration, with the flags baked in. The alternative
+            # is a per-edge variable, which doubles the size of the file for no gain.
+            writer.rule( f'cc_{identifier}',
+                         command = f'$cc -MMD -MF $out.d $c_std {flag_text} -c $in -o $out',
+                         description = f'CC {configuration.name} $out',
+                         depfile = '$out.d', deps = 'gcc' )
+            writer.rule( f'cxx_{identifier}',
+                         command = f'$cxx -MMD -MF $out.d $cpp_std {flag_text} -c $in -o $out',
+                         description = f'CXX {configuration.name} $out',
+                         depfile = '$out.d', deps = 'gcc' )
+
+            if configuration.name == 'Debug':
+                debug_rule_names.append( f'cc_{identifier}' )
+                debug_rule_names.append( f'cxx_{identifier}' )
+
             object_files = []
 
-            project_out_path = f'Build/x64_Linux_{toolchain.name}_{configuration.name}/{project.name}'
-            project_obj_path = f'{project_out_path}/Obj'
+            for source in project.sources:
+                out = object_path( project, configuration, source )
+                extension = Path( source ).suffix.lower()
+                rule = ( f'cc_{identifier}' if extension in SourceLists.C_SOURCE_EXTENSIONS
+                         else f'cxx_{identifier}' )
+                writer.build( out, rule, source )
+                object_files.append( out )
 
-            for c_source_file in project.c_source_files:
-                out_file = f'{project_obj_path}/{c_source_file}.o'
-                build.build(out_file, cc_rule, c_source_file)
-                object_files.append(out_file)
+            writer.newline()
 
-            for cpp_source_file in project.cpp_source_files:
-                out_file = f'{project_obj_path}/{cpp_source_file}.o'
-                build.build(out_file, cpp_rule, cpp_source_file)
-                object_files.append(out_file)
+            output_path = target_path( project, configuration )
+            if output_path is None:
+                problems.append( f'{project.name}: no output type for '
+                                 f'{configuration.base_name}. Nothing is linked.' )
+                continue
 
-            for reference in project.project_references:
-                object_files.append(f'Build/x64_Linux_{toolchain.name}_{configuration.name}/{reference}/{reference}.a')
+            # An empty source list is normal in Phase 0. Esoterica.Applications.Engine has only
+            # a Win32 entry point until Phase 6 adds the Linux one.
+            if not object_files:
+                problems.append( f'{project.name}: no sources in {configuration.name}. '
+                                 f'{output_path} is not built.' )
+                continue
 
-            if project.project_type == 'Lib':
-                build.build(f'{project_out_path}/{project.name}.a', lib_rule, object_files)
-            elif project.project_type == 'Exe':
-                build.build(f'{project_out_path}/{project.name}', link_rule, object_files)
+            project_type = project.get_project_type( configuration.base_name )
+
+            if project_type == SourceLists.PROJECT_TYPE_STATIC_LIBRARY:
+                writer.build( output_path, f'ar_{configuration.name}', object_files )
             else:
-                print(f'Unknown project type: {project.name} {project.project_type}')
+                dependencies = topological_order( solution, project )
+                dependency_libraries = [ library_path( d, configuration ) for d in dependencies ]
+                dependency_libraries = [ p for p in dependency_libraries if p is not None ]
 
-all_toolchains = [
-    Toolchain.WineGCC(),
-    Toolchain.GCC(),
-    Toolchain.Clang(),
-]
+                link_flags = project_link_flags( solution, project, configuration, problems )
+                shared = project_type == SourceLists.PROJECT_TYPE_SHARED_LIBRARY
 
-esoterica_flags = '-ICode/Base/ThirdParty/EA/EABase/include/Common -ICode/Base/ThirdParty/EA/EASTL/Include -ICode/Base/ThirdParty/imgui -IExternal/Optick/include'
-esoterica_flags_msvc = esoterica_flags.replace('-I', '/I')
+                rule_name = ( f'so_{identifier}' if shared else f'exe_{identifier}' )
+                shared_flag = '-shared ' if shared else ''
 
-base_configurations = [
-    Configuration('Debug',      f'{esoterica_flags} -Wall -O0 -ICode -DEE_DEBUG=1',             ''),
-    Configuration('Release',    f'{esoterica_flags} -Wall -O2 -ICode -DEE_RELEASE=1',           ''),
-    Configuration('Shipping',   f'{esoterica_flags} -Wall -O2 -ICode -DEE_SHIPPING=1 -flto',    '-flto')
-]
+                writer.rule( rule_name,
+                             command = f'$ld {shared_flag}-o $out $in {" ".join( link_flags )}',
+                             description = f'LINK {configuration.name} $out' )
+                writer.build( output_path, rule_name, object_files + dependency_libraries )
 
-reflector_toolchain = all_toolchains[0]             # WineGCC
-reflector_configuration = base_configurations[2]    # Shipping
+            writer.newline()
 
-compile_commands_toolchain = Toolchain.ClangCL()
-compile_commands_warnings = (
-    '-Wall',
-    ' -Wno-c++98-compat -Wno-c++98-compat-pedantic'
-)
-compile_commands_configurations = [
-    Configuration('Debug', f'{esoterica_flags_msvc} {compile_commands_warnings} /ICode /DEE_DEBUG=1', ''),
-]
+            if configuration.name == 'Debug':
+                default_targets.append( output_path )
 
-all_configurations = []
-all_configurations.extend(base_configurations)
+    if default_targets:
+        writer.comment( 'Building with no target named builds every Debug target.' )
+        writer.default( default_targets )
 
-for configuration in base_configurations:
-    asan_configuration = copy.deepcopy(configuration)
-    asan_configuration.name += '_ASan'
-    asan_configuration.compiler_flags += ' -fsanitize-address -fno-omit-frame-pointer'
-    asan_configuration.linker_flags += ' -fsanitize-address'
+    # Writer.close() closes the underlying stream, so take the text first.
+    text = output.getvalue()
+    writer.close()
+    return text, problems, debug_rule_names
 
-    msan_configuration = copy.deepcopy(configuration)
-    msan_configuration.name += '_MSan'
-    msan_configuration.compiler_flags += ' -fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer'
-    msan_configuration.linker_flags += ' -fsanitize=memory'
+#-------------------------------------------------------------------------
 
-    tsan_configuration = copy.deepcopy(configuration)
-    tsan_configuration.name += '_TSan'
-    tsan_configuration.compiler_flags += ' -fsanitize=thread'
-    tsan_configuration.linker_flags += ' -fsanitize=thread'
+def write_compile_commands( repo_root, rule_names ):
+    """Generates compile_commands.json for clangd.
 
-    all_configurations.append(asan_configuration)
-    all_configurations.append(msan_configuration)
-    all_configurations.append(tsan_configuration)
+    Only the Debug rules go in. Every configuration compiles the same files, and a duplicated
+    entry per configuration would make the file nine times larger for no benefit.
+    """
 
-all_projects = parse_sln('Esoterica.sln')
+    result = subprocess.run(
+        [ 'ninja', '-f', NINJA_FILE, '-t', 'compdb' ] + rule_names,
+        cwd = repo_root, capture_output = True, text = True )
 
-Path('Build/x64_Linux').mkdir(parents = True, exist_ok = True)
+    if result.returncode != 0:
+        return False, result.stderr.strip()
 
-with open('Build/x64_Linux/Esoterica.x64.Linux.ninja', 'w') as build_output:
-    build = Writer(build_output, 110)
+    ( repo_root / 'compile_commands.json' ).write_text( result.stdout )
+    return True, ''
 
-    for toolchain in all_toolchains:
-        build_toolchain(build, toolchain, all_configurations, all_projects)
+#-------------------------------------------------------------------------
 
-    # Special case - reflector to generate reflection metadata
-    reflector_project = None
-    autogenerated_files = []
-    reflector_dependencies = set()
-    module_pattern = str(Path('_Module/_AutoGenerated/_module.cpp'))
-    for project in all_projects:
-        if project.name == 'Esoterica.Applications.Reflector':
-            reflector_project = project
-        for source_file in project.cpp_source_files:
-            reflector_dependencies.update(project.header_files)
-            if source_file.endswith(module_pattern):
-                autogenerated_files.append(source_file)
+def main():
+    parser = argparse.ArgumentParser( description = __doc__ )
+    parser.add_argument( '--no-compdb', action = 'store_true',
+                         help = 'skip compile_commands.json' )
+    arguments = parser.parse_args()
 
-    reflector_dependencies.update(reflector_project.c_source_files)
-    reflector_dependencies.update(reflector_project.cpp_source_files)
+    repo_root = SourceLists.find_repo_root()
 
-    build.rule('REFLECT',
-        f'Build/x64_Linux_{reflector_toolchain.name}_{reflector_configuration.name}/{reflector_project.name}/{reflector_project.name} -s Esoterica.sln')
-    build.build(autogenerated_files, 'REFLECT', list(reflector_dependencies))
-    build.close()
+    # The staleness check comes first, and there is no way to skip it. See the module docstring.
+    sync = subprocess.run( [ sys.executable, 'Code/Scripts/NinjaGen/SyncUpstream.py' ],
+                           cwd = repo_root, capture_output = True, text = True )
+    if sync.returncode != 0:
+        sys.stderr.write( sync.stdout )
+        sys.stderr.write( sync.stderr )
+        return 1
 
-with open('Build/x64_Linux/Esoterica.x64.CompileCommands.ninja', 'w') as build_output:
-    build = Writer(build_output, 110)
-    build_toolchain(build, compile_commands_toolchain, compile_commands_configurations, all_projects)
-    build.close()
+    solution, list_problems = SourceLists.load( repo_root )
+    configurations = Toolchain.build_configurations( solution.configurations )
 
-subprocess.run(
-    'ninja -f Build/x64_Linux/Esoterica.x64.CompileCommands.ninja -t compdb > compile_commands.json',
-    shell = True, check = True);
+    text, emit_problems, debug_rules = emit( repo_root, solution, configurations )
+
+    ( repo_root / NINJA_DIRECTORY ).mkdir( parents = True, exist_ok = True )
+    ( repo_root / NINJA_FILE ).write_text( text )
+
+    source_count = sum( len( p.sources ) for p in solution.projects )
+    print( f'wrote {NINJA_FILE}: {len( solution.projects )} projects, {source_count} sources, '
+           f'{len( configurations )} configurations.' )
+
+    if not arguments.no_compdb:
+        ok, error = write_compile_commands( repo_root, debug_rules )
+        if ok:
+            print( 'wrote compile_commands.json' )
+        else:
+            emit_problems.append( f'compile_commands.json failed: {error}' )
+
+    # The same problem repeats once per configuration, so report each distinct one once.
+    problems = []
+    for problem in list_problems + emit_problems:
+        if problem not in problems:
+            problems.append( problem )
+
+    for problem in problems:
+        print( f'problem: {problem}', file = sys.stderr )
+
+    # Problems are reported, not fatal. Several are expected in Phase 0: dependencies that do
+    # not arrive until a later phase, and projects whose only source is a Win32 entry point.
+    print( f'{len( problems )} problem(s).' )
+    return 0
+
+if __name__ == '__main__':
+    sys.exit( main() )
