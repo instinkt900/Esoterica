@@ -13,6 +13,8 @@
 #ifdef _WIN32
 // TODO: Get rid of this
 #include <windows.h>
+#elif defined( __linux__ )
+#include <sys/mman.h>
 #endif
 
 //-------------------------------------------------------------------------
@@ -231,15 +233,27 @@ namespace EE
         void* VirtualMemoryReserve( size_t size )
         {
             EE_ASSERT( size );
+            #ifdef _WIN32
             return VirtualAlloc( 0, size, MEM_RESERVE, PAGE_READWRITE );
+            #else
+            // PROT_NONE plus MAP_NORESERVE is the mmap equivalent of MEM_RESERVE: address space
+            // is taken, but no pages are charged until VirtualMemoryCommit makes them readable.
+            void* pMemory = mmap( nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0 );
+            return ( pMemory == MAP_FAILED ) ? nullptr : pMemory;
+            #endif
         }
 
         void VirtualMemoryCommit( void* pStart, size_t size )
         {
             EE_ASSERT( pStart );
             EE_ASSERT( size );
+            #ifdef _WIN32
             VirtualAlloc( pStart, size, MEM_COMMIT, PAGE_READWRITE );
             InterlockedAdd64( &s_totalVirtualMemoryCommitted, size );
+            #else
+            mprotect( pStart, size, PROT_READ | PROT_WRITE );
+            __atomic_fetch_add( &s_totalVirtualMemoryCommitted, (int64_t) size, __ATOMIC_SEQ_CST );
+            #endif
         }
 
         void VirtualMemoryFree( void* pMemory, size_t reservedSize, size_t committedSize )
@@ -247,8 +261,14 @@ namespace EE
             EE_ASSERT( pMemory );
             EE_ASSERT( reservedSize );
             EE_ASSERT( committedSize );
+            #ifdef _WIN32
             VirtualFree( pMemory, 0, MEM_RELEASE );
             InterlockedAdd64( &s_totalVirtualMemoryCommitted, -int64_t( committedSize ) );
+            #else
+            // munmap needs the reserved size; VirtualFree with MEM_RELEASE works it out itself.
+            munmap( pMemory, reservedSize );
+            __atomic_fetch_add( &s_totalVirtualMemoryCommitted, -int64_t( committedSize ), __ATOMIC_SEQ_CST );
+            #endif
         }
 
         //-------------------------------------------------------------------------

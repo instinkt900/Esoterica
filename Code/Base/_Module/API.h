@@ -3,7 +3,9 @@
 //-------------------------------------------------------------------------
 
 #if EE_DLL
-    #if ESOTERICA_BASE
+    #if defined( __linux__ )
+        #define EE_BASE_API __attribute__(( visibility( "default" ) ))
+    #elif ESOTERICA_BASE
         #define EE_BASE_API __declspec(dllexport)
     #else
         #define EE_BASE_API __declspec(dllimport)

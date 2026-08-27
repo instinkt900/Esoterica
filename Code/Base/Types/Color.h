@@ -125,16 +125,16 @@ namespace EE
 
     public:
 
+        struct ByteColor
+        {
+            uint8_t             m_r;
+            uint8_t             m_g;
+            uint8_t             m_b;
+            uint8_t             m_a;
+        };
+
         union
         {
-            struct ByteColor
-            {
-                uint8_t         m_r;
-                uint8_t         m_g;
-                uint8_t         m_b;
-                uint8_t         m_a;
-            };
-
             ByteColor           m_byteColor;
             uint32_t            m_color;
         };

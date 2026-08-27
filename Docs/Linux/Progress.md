@@ -10,14 +10,15 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 0 (in progress).** P0.1 to P0.8 and P0.10 are done. `ninja` builds Linux targets and
-reaches the compiler. It does not compile yet, which is the expected end state for Phase 0. Only
-P0.9, `DownloadDependencies.sh`, is left.
+**Phase: 1 (nearly complete).** `Esoterica.Base` compiles and links on Linux in all three
+configurations. Phase 0 is done, including P0.9. What is left in Phase 1 is
+`Esoterica.Applications.Tester`, which cannot link until Phase 2 supplies the reflection
+codegen; see the entry below.
 
 | Phase | Status |
 |---|---|
-| 0 - Build System | in progress (P0.1-P0.8 and P0.10 done, P0.9 open) |
-| 1 - Base Platform Layer | not started |
+| 0 - Build System | **done** |
+| 1 - Base Platform Layer | in progress (P1.1-P1.10 done; Tester blocked on Phase 2) |
 | 2 - Reflector | not started |
 | 3 - Resource Compiler | not started |
 | 4 - Shader Pipeline | not started |
@@ -25,15 +26,16 @@ P0.9, `DownloadDependencies.sh`, is left.
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
-Linux build status: **does not build.**
+Linux build status: **`Esoterica.Base` builds and links.** Debug and Release produce
+`libEsoterica.Base.so`, Shipping produces `libEsoterica.Base.a`. Nothing downstream is built
+yet.
 Windows build status: **unchanged from upstream** (no edits landed yet).
 
 ## In flight
 
-**P0.9** - `DownloadDependencies.sh`. Independent of the generator. Phase 0 needs only libunwind,
-libdw, Freetype and SQLite; the rest defer to the phase that first needs them.
-
-After that, Phase 0 is done and **Phase 1** starts on the worklist below.
+**Phase 2, the Reflector.** It is now the critical path: `Esoterica.Applications.Tester`,
+`Esoterica.Engine.Runtime` and everything above them need the reflection codegen before they can
+build.
 
 ---
 
@@ -49,6 +51,96 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-27 - P1.1-P1.10 Base platform layer
+
+`Esoterica.Base` compiles and links on Linux. 132 of 132 translation units, in Debug, Release
+and Shipping. It went from 1 of 132 at the start of the phase.
+
+New files, all listed in `Code/Scripts/NinjaGen/LinuxSources.txt`:
+
+| File | Task |
+|---|---|
+| `Platform/Platform_Linux.h` | P1.1 |
+| `Math/Platform/Math_Linux.h` | P1.2 |
+| `Threading/Platform/Threading_Linux.cpp` | P1.3 |
+| `FileSystem/Platform/FileSystem_Linux.cpp`, `FileSystemPath_Linux.cpp` | P1.4 |
+| `Platform/PlatformUtils_Linux.{h,cpp}` | P1.5 |
+| `Types/Platform/Types_Linux.cpp` | P1.6 |
+| `Logging/Platform/SystemLog_Linux.cpp` | P1.7 |
+| `Platform/Platform_Linux.cpp` | P1.8 |
+| `Render/RHI_Vulkan.cpp` | P1.9, 102 stubs |
+| `Imgui/Platform/ImguiPlatform_Linux.cpp`, `Input/InputDevices/Platform/InputDevice_KeyboardMouse_Linux.cpp`, `InputDevice_XBoxController_Linux.cpp` | **not in the plan**, see below |
+
+Acceptance criteria met: **1, 2, 3, 5, 6, 7, 9.**
+
+Not met:
+
+- **4, `Tester` links and runs.** Not achievable in Phase 1. See the correction below.
+- **8, the Windows MSBuild build.** Not run; there is no Windows machine on this side. This
+  phase edits 12 upstream files, so this is a real gap, not a formality.
+
+**Answers the notes the phase document asked for:**
+
+- **`SyncEvent` is a manual reset event.** `Threading_Win32.cpp` calls
+  `CreateEvent( nullptr, TRUE, FALSE, nullptr )`, and the second argument is `bManualReset`. So
+  it stays signalled once signalled, releasing every current and future waiter, until `Reset()`
+  is called explicitly; waiting does not clear it. The Linux version is a condition variable
+  plus an explicit flag, with `notify_all`.
+- **`GetFileModifiedTime` returns nanoseconds since the epoch.** Every caller stores the value
+  and later compares it for equality, so it never has to agree with the Win32 FILETIME.
+  Nanoseconds rather than seconds because seconds let two edits inside the same second look
+  identical, which shows up as a resource that silently fails to recompile.
+- **Open question 5, does GameNetworkingSockets block Base?** Yes, and at *compile* time, not
+  link time. `DownloadDependencies.sh` builds it.
+- **Open question 6, does `Memory.cpp` have a working non-Windows path?** No. Three unguarded
+  functions called `VirtualAlloc`, `VirtualFree` and `InterlockedAdd64`.
+
+## Plan corrections found during Phase 1
+
+**P1.8 was mis-scoped.** The document calls it the largest task in the phase, 249 lines of stack
+walking and crash dumps. Lines 25 to 235 of `Platform_Win32.cpp` are inside an `#if 0`, and
+`Initialize` and `Shutdown` have their bodies commented out. None of it runs, so there was no
+behaviour to match. The Linux version is a real signal handler anyway, because acceptance
+criterion 6 asks for a backtrace, but it is ~90 lines rather than ~250.
+
+**Three Phase 6 stubs were needed in Phase 1.** The plan has the RHI stub for exactly this
+reason but missed the same argument for imgui and input: `ImguiPlatform_Win32.cpp`,
+`InputDevice_KeyboardMouse_Win32.cpp` and `InputDevice_XboxController_Win32.cpp` are excluded,
+and without definitions `Esoterica.Base` does not link, so nothing downstream can be built or
+tested. They halt, except the controller dead zone and threshold getters, which return the
+XInput constants: those are read during device construction before anything is plugged in, and
+halting there would stop the engine starting at all.
+
+**Only five `_Module/API.h` files exist, not six.** `Code/Applications/Tester/_Module/API.h` is
+a single `#pragma once` and declares no export macro.
+
+**`Esoterica.Applications.Tester` is not an empty console app.** The plan describes it as one,
+and says its only job is to prove the `.so` loads. Its `Main.cpp` includes
+`EngineTools/_Module/_AutoGenerated/TypeInfo/TypeRegistration.h`, a Reflector output, plus a
+dozen `EngineTools` headers. It cannot link until Phase 2 and Phase 3. Criterion 5's scratch
+program was used instead, which is what proved Base works.
+
+**Optick cannot be dropped.** `Profiling.h` includes `<optick.h>` unconditionally, and
+Conventions rule 4 forbids stripping that include, so the header has to exist. It also only
+zeroes `USE_OPTICK` when `EE_DEVELOPMENT_TOOLS` is off, so Debug and Release emitted real Optick
+calls. `DownloadDependencies.sh` fetches the headers, and the generator passes `-DUSE_OPTICK=0`.
+
+**`DownloadDependencies.bat` has no Linux analogue.** It downloads one prebuilt `External.zip`
+of Windows binaries from an upstream release. Each dependency is fetched and built from source
+instead.
+
+## Notes for the next session
+
+- **Run the Windows build.** Twelve upstream files changed. The riskiest is `IniFile.cpp`, where
+  an `#endif` moved.
+- **Phase 2 is the critical path.** Nothing above `Base` builds without the reflection codegen.
+- The RHI stub generator is not committed, on purpose: Phase 5 replaces those bodies, so
+  regenerating would be destructive.
+- `ixWebSocket` is pinned to **v12.0.1**. `NetworkServer_WebSockets.cpp` builds
+  `ix::WebSocketServer` with 8 arguments, and the 8th only exists from v12.0.0.
+- The smoke test used for criteria 5 and 6 is not committed. It links against `Base` directly,
+  which `Tester` cannot do yet.
 
 ### 2026-08-27 - P0.5-P0.8, P0.10 Ninja emitter, flags, linking
 
@@ -347,8 +439,8 @@ question to "Decisions made" once you answer it.
 | 2 | Which LLVM version does the Reflector need, and does `clangAST` compile against it on Linux? | Phase 2 | open |
 | 3 | Use `volk`, or the plain Vulkan loader? | Phase 5 | open |
 | 4 | Do the target distros package SDL3, or must we always build it? | Phase 6 | open |
-| 5 | Does `GameNetworkingSockets` block the first `Base` link, or can we defer it? | Phase 1 | open |
-| 6 | Does the `VirtualAlloc` region in `Memory.cpp` (`PageAllocator`, near line 234) have a working non-Windows path? | Phase 1 | open |
+| 5 | ~~Does `GameNetworkingSockets` block the first `Base` link?~~ | Phase 1 | **answered: yes, and at compile time, not link** |
+| 6 | ~~Does the `VirtualAlloc` region in `Memory.cpp` have a working non-Windows path?~~ | Phase 1 | **answered: no** |
 
 Answered:
 
@@ -385,6 +477,40 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `Math_Win32.h` truncates `GetMostSignificantBit` above 2^32
+
+`Code/Base/Math/Platform/Math_Win32.h` casts its argument to `unsigned long` before the scan:
+
+```cpp
+_BitScanReverse64( &index, (unsigned long) value );
+```
+
+`unsigned long` is 32 bits on Windows, so every value above `2^32` gives the wrong answer.
+`Math_Linux.h` uses `__builtin_clzll` and is correct for the full 64-bit range. **The two
+platforms therefore disagree**, which is worse than either bug alone, so it is commented in the
+Linux header as well as recorded here. Not fixed on the Win32 side (Conventions rule 3).
+
+### `SystemLog_Win32.cpp` drops newlines on medium-length messages
+
+`TraceMessage` bounds its newline append at `numCharsWritten < 509` while the buffer is 2048
+bytes, so messages between 509 and 2045 characters silently lose their newline.
+`SystemLog_Linux.cpp` bounds it at the real buffer size. Commented in the Linux file.
+
+### `IniFile.cpp` puts its whole body inside `#if defined(_MSC_VER)`
+
+The guard opens at line 4 and its matching `#endif` is the **last line of the file**. On any
+non-MSVC compiler the translation unit produces nothing at all: it compiles cleanly and leaves
+`IniFile::Load`, `Save`, `GetString` and `SetString` undefined until something tries to link an
+executable. This is the single most expensive bug found so far, because there is no compile
+error to point at.
+
+### Two `#include` directives use a backslash
+
+`Code/Base/Utils/GlobalRegistryBase.h` and
+`Code/Base/Input/InputDevices/InputDevice_Controller.cpp`. clang does not treat `\` as a path
+separator inside an include, so neither header was found on Linux. MSVC accepts `/`, so fixing
+them costs Windows nothing.
 
 ### Path case mismatches between the `.vcxproj` files and the disk
 

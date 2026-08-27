@@ -36,6 +36,12 @@ nothing and guarantees conflicts.
 | `Code/EngineTools/FileSystem/FileSystemWatcher.cpp` | Wrap the unguarded `<windows.h>` include block (lines 8-16) in `#ifdef _WIN32`. The rest of the file already sits inside the `#if _WIN32` that starts at line 18. | 3 | planned |
 | `Code/Base/Utils/GlobalRegistryBase.h` | Line 2: `#include "Base\Esoterica.h"` to `#include "Base/Esoterica.h"`. One character. clang does not treat `\` as a path separator in an include, so on Linux the header is simply not found. MSVC accepts `/`, so Windows is unaffected. | 0 | done |
 | `Code/Base/Input/InputDevices/InputDevice_Controller.cpp` | Line 2: `#include "Base\Math\Vector.h"` to `#include "Base/Math/Vector.h"`. Same reason as above. | 0 | done |
+| `Code/Base/Types/Color.h` | Hoist `struct ByteColor` out of the anonymous union that holds it. A named type may not be declared inside an anonymous union in standard C++; MSVC allows it as an extension. Layout, member names and Windows behaviour are unchanged. | 1 | done |
+| `Code/Base/TypeSystem/TypeInstance.h` | One line: `template<typename T> friend class TTypeInstance;`. `TTypeInstance`'s copy constructor reads `m_pInstance` through a `TypeInstance const&`, and standard C++ only allows a derived class to reach a protected member through an object of its own type. MSVC permits it without the friend. | 1 | done |
+| `Code/Base/Resource/ResourcePtr.h` | A forward declaration of `EE::TResourcePtr` at `EE` scope, plus `template<typename T> friend class EE::TResourcePtr;`. Same protected-access rule as above. The qualification matters: `TResourcePtr` lives in `EE`, not in `EE::Resource`. | 1 | done |
+| `Code/Base/Memory/Memory.h` | Line 18: `#ifdef _WIN32` to `#if defined( _WIN32 ) \|\| defined( __linux__ )`. One line modified. The existing `#else` defines the stack allocators as empty, so `EE_STACK_ALLOC` and `EE_STACK_ARRAY_ALLOC` expanded to nothing. `alloca` works on both platforms; `Platform_Linux.h` supplies `<alloca.h>`. | 1 | done |
+| `Code/Base/Memory/Memory.cpp` | `#elif defined( __linux__ )` for `<sys/mman.h>`, and an `#else` inside each of `VirtualMemoryReserve`, `VirtualMemoryCommit` and `VirtualMemoryFree`. `mmap` with `PROT_NONE` and `MAP_NORESERVE` is the `MEM_RESERVE` equivalent, `mprotect` is `MEM_COMMIT`, `munmap` is `MEM_RELEASE`, and `__atomic_fetch_add` replaces `InterlockedAdd64`. Windows lines untouched. | 1 | done |
+| `Code/Base/Resource/ResourceTypeID.h` | Line 26: `template<eastl_size_t S>` to `template<int S>`. `eastl::fixed_string` declares its size parameter as `int`, so deducing an `eastl_size_t` from `TInlineString<9>` fails. MSVC accepts the narrowing during deduction. | 1 | done |
 
 ## Two-line guard additions
 
@@ -43,19 +49,33 @@ Each of these files already has a platform guard. Add a sibling branch, and noth
 
 | File | Line | Existing | Add | Phase | Status |
 |---|---|---|---|---|---|
-| `Code/Base/Esoterica.h` | 55 | `#if _WIN32` includes `Platform/Platform_Win32.h` | `#elif defined( __linux__ )` includes `Platform/Platform_Linux.h` | 1 | planned |
-| `Code/Base/Math/Math.h` | 12 | `#if _WIN32` includes `Platform/Math_Win32.h` | `#elif defined( __linux__ )` includes `Platform/Math_Linux.h` | 1 | planned |
-| `Code/Base/Settings/IniFile.cpp` | 4 | `#if defined(_MSC_VER)` wraps the `#pragma warning` pair **and** the `mINI/ini.h` include | An `#else` branch that includes `ini.h` without the MSVC pragmas. Without it the include never happens on clang, and the file fails to compile. | 1 | planned |
+| `Code/Base/Esoterica.h` | 55 | `#if _WIN32` includes `Platform/Platform_Win32.h` | `#elif defined( __linux__ )` includes `Platform/Platform_Linux.h` | 1 | **done** (2 added, 0 modified) |
+| `Code/Base/Math/Math.h` | 12 | `#if _WIN32` includes `Platform/Math_Win32.h` | `#elif defined( __linux__ )` includes `Platform/Math_Linux.h` | 1 | **done** (2 added, 0 modified) |
+| `Code/Base/Settings/IniFile.cpp` | 4 | `#if defined(_MSC_VER)` wraps the pragmas, the `ini.h` include **and the entire file body** - the matching `#endif` is the last line | Close the guard right after the pragmas, and reopen it around the trailing `#pragma warning( pop )`. **2 lines added, 0 modified.** The plan expected a compile failure; the actual symptom was worse: the translation unit produced *nothing* on clang, so `IniFile::Load`, `Save`, `GetString` and `SetString` were silently undefined until an executable tried to link. | 1 | **done** |
 | `Code/Base/Imgui/ImguiSystem.cpp` | 12 | `#if _WIN32` includes `imgui_freetype.h` | `#if _WIN32 \|\| defined( __linux__ )`. Linux uses Freetype too. | 6 | planned |
-| `Code/Base/_Module/API.h` | 5 | `__declspec(dllexport)` and `dllimport` | An `#elif` branch that uses `__attribute__(( visibility( "default" ) ))` | 1 | planned |
-| `Code/Engine/_Module/API.h` | - | as above | as above | 1 | planned |
-| `Code/EngineTools/_Module/API.h` | - | as above | as above | 1 | planned |
-| `Code/Game/_Module/API.h` | - | as above | as above | 1 | planned |
-| `Code/GameTools/_Module/API.h` | - | as above | as above | 1 | planned |
-| `Code/Applications/Tester/_Module/API.h` | - | as above | as above | 1 | planned |
+| `Code/Base/_Module/API.h` | 5 | `__declspec(dllexport)` and `dllimport` | A `#if defined( __linux__ )` branch using `__attribute__(( visibility( "default" ) ))`, placed first so the existing `#if`/`#ifdef` becomes an `#elif`. 2 added, 1 modified. | 1 | **done** |
+| `Code/Engine/_Module/API.h` | - | as above | as above | 1 | **done** |
+| `Code/EngineTools/_Module/API.h` | - | as above | as above | 1 | **done** |
+| `Code/Game/_Module/API.h` | - | as above | as above | 1 | **done** |
+| `Code/GameTools/_Module/API.h` | - | as above | as above | 1 | **done** |
+| ~~`Code/Applications/Tester/_Module/API.h`~~ | - | - | **No change needed.** The file is one line, `#pragma once`, and declares no export macro. The survey assumed six API.h files; there are five. | 1 | **not needed** |
 
-*(The six `API.h` files get separate rows because each is an independent edit. They are one
-logical change, so land them in one commit.)*
+*(The `API.h` files get separate rows because each is an independent edit. They are one logical
+change, so land them in one commit. Note that only **five** need changing, not six.)*
+
+**On the ELF import case.** The plan expected separate export and import branches. ELF needs
+only one: `visibility( "default" )` on an imported declaration is correct and harmless, so a
+single `#if defined( __linux__ )` branch covers both and keeps the diff to 2 added, 1 modified.
+
+## Missing includes that MSVC supplies transitively
+
+MSVC's standard headers pull in more than they promise, so this codebase relies on includes it
+never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modified**.
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
+| `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`, with an `#else` including `<immintrin.h>`. The MSVC header is where `_tzcnt_u64` and `_lzcnt_u64` come from on Windows; clang has them in `<immintrin.h>`. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
 
 ## Whole-body guard wrap
 
@@ -74,8 +94,8 @@ Checked during the survey. Recorded so that nobody investigates them again.
 
 | File | Why no change is needed |
 |---|---|
-| `Code/Base/Memory/Memory.h` | The `#ifdef _WIN32` at line 18 (`EE_STACK_ALLOC`) **already has an `#else` branch** for non-Windows. |
-| `Code/Base/Memory/Memory.cpp` | The `#ifdef _WIN32` at line 13 already guards its `<windows.h>` include. The only `VirtualAlloc` use (`PageAllocator`, near line 234) sits inside it. During Phase 1, confirm that the guarded region has a working `#else`, or that the function is Windows-only by design. **Flagged for a check, not yet confirmed.** |
+| ~~`Code/Base/Memory/Memory.h`~~ | **The survey was wrong; this needed an edit.** See "Real edits". The `#else` branch exists but defines `EE_STACK_ALLOC` and `EE_STACK_ARRAY_ALLOC` as *nothing*, so every call site failed with "expected expression". |
+| ~~`Code/Base/Memory/Memory.cpp`~~ | **Checked in Phase 1; it did need an edit.** See "Real edits". `VirtualMemoryReserve`, `VirtualMemoryCommit` and `VirtualMemoryFree` sit *outside* the `_WIN32` guard and call `VirtualAlloc`, `VirtualFree` and `InterlockedAdd64` directly. This answers open question 6: there was no working non-Windows path. |
 | `Code/Base/Profiling.cpp` | Both `#if _WIN32` guards (lines 8 and 36) are already there. `OpenProfiler()` becomes a no-op on Linux, which is correct because this port drops Optick. |
 | `Code/Base/FileSystem/FileSystemPath.h` | This header declares `s_pathDelimiter`, and the platform `.cpp` defines it. The Linux `.cpp` defines `'/'`, and this header stays untouched. It is the model example of the intended pattern. |
 | `Code/Base/Render/RHI.h` | Contains no Direct3D types. The Vulkan backend is a new sibling `.cpp`. **Do not modify this header.** |

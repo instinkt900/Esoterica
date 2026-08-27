@@ -10,6 +10,8 @@ Docs/Linux/Phases/Phase0-BuildSystem.md, P0.5 to P0.7, holds the flag mapping.
 import shutil
 import subprocess
 
+from pathlib import Path
+
 #-------------------------------------------------------------------------
 # Toolchain
 #-------------------------------------------------------------------------
@@ -17,7 +19,32 @@ import subprocess
 COMPILER_C   = 'clang'
 COMPILER_CPP = 'clang++'
 LINKER       = 'clang++'
-ARCHIVER     = 'llvm-ar'
+
+def find_archiver():
+    """Picks an archiver that can handle LLVM bitcode.
+
+    Shipping compiles with -flto, so the object files are bitcode rather than ELF and a plain
+    `ar` only works where binutils has the LLVM plugin. Distributions often ship llvm-ar only
+    under a versioned name, so an unqualified 'llvm-ar' is not safe to assume.
+    """
+
+    candidates = [ 'llvm-ar' ]
+
+    # Match the archiver to the compiler's own major version where possible.
+    version = subprocess.run( [ COMPILER_CPP, '-dumpversion' ],
+                              capture_output = True, text = True )
+    if version.returncode == 0 and version.stdout.strip():
+        candidates.append( f'llvm-ar-{version.stdout.strip().split( "." )[0]}' )
+
+    candidates.append( 'ar' )
+
+    for candidate in candidates:
+        if shutil.which( candidate ) is not None:
+            return candidate
+
+    return 'ar'
+
+ARCHIVER     = find_archiver()
 
 #-------------------------------------------------------------------------
 # Flags shared by every configuration
@@ -34,6 +61,9 @@ ESOTERICA_INCLUDE_DIRECTORIES = (
     'Code/Base/ThirdParty/EA/EASTL/Include',
     'Code/Base/ThirdParty/EA/EABase/include/Common',
     'Code/Base/ThirdParty/imgui',
+    # Esoterica.props imports Optick.props transitively, so every project gets this path even
+    # though no .vcxproj names the sheet. Base/Profiling.h includes <optick.h> unconditionally.
+    'External/Optick/include',
 )
 
 # EA.props: EASTL_USER_CONFIG_HEADER=$(EE_EASTL_USER_CONFIG_HEADER), whose value already
@@ -52,6 +82,17 @@ ESOTERICA_DEFINES = (
 COMMON_DEFINES = (
     'NDEBUG',
     '_HAS_EXCEPTIONS=0',
+    # glibc hides the POSIX surface under a strict -std=c17 or -std=c++20, and the vendored
+    # rpmalloc calls posix_madvise. Code/**/ThirdParty cannot be edited (Conventions rule 5),
+    # so this is the -D the rule points to. The alternative, -std=gnu17, changes language
+    # semantics everywhere to fix one call.
+    '_DEFAULT_SOURCE',
+    # Profiling.h only sets USE_OPTICK to 0 when EE_DEVELOPMENT_TOOLS is off, so Debug and
+    # Release would otherwise emit real Optick calls and need OptickCore at link time. This
+    # port takes the headers but never enables profiling, so turn it off for every
+    # configuration. Conventions rule 4: the feature stays off through the build configuration,
+    # not by touching a call site.
+    'USE_OPTICK=0',
 )
 
 # NOMINMAX, WIN32_LEAN_AND_MEAN and _CRT_SECURE_NO_WARNINGS sit beside NDEBUG in the same
@@ -61,10 +102,25 @@ COMMON_COMPILER_FLAGS = (
     '-fno-exceptions',          # ExceptionHandling: false
     '-g',                       # DebugInformationFormat: ProgramDatabase
     '-fPIC',                    # every target may end up inside a .so
-    '-msse4.2',                 # the hand-rolled SIMD math assumes both of these
+    '-msse4.2',                 # the hand-rolled SIMD math assumes these
     '-mavx',
+    # Memory.cpp calls _mm256_stream_load_si256 unconditionally, so AVX2 is already the real
+    # hardware floor on Windows too. MSVC lets any intrinsic through whatever /arch says;
+    # clang gates each one, so the baseline has to be stated.
+    '-mavx2',
+    # HandleAllocator uses _tzcnt_u64 and _lzcnt_u64. MSVC exposes them unconditionally; clang
+    # gates each behind its own instruction set flag.
+    '-mbmi',
+    '-mlzcnt',
     '-Wall',
     '-Wextra',
+    # The vendored imgui and EASTL define their export macros as __declspec(dllexport) under
+    # `#if EE_DLL`, and Code/**/ThirdParty is out of bounds (Conventions rule 5). -fdeclspec
+    # makes clang parse the attribute and ignore it, which is the generator-side fix that rule
+    # points to. It fires -Wignored-attributes hundreds of times from those headers, so the
+    # warning is off; nothing first-party uses __declspec.
+    '-fdeclspec',
+    '-Wno-ignored-attributes',
     # Esoterica.props sets TreatWarningAsError with EnableAllWarnings and a long list of
     # disabled MSVC warning numbers that have no clang equivalent. Phase 0 deliberately does not
     # translate that list, and does not pass -Werror. Conventions rule 3 forbids fixing upstream
@@ -142,11 +198,17 @@ def build_configurations( configuration_names ):
 
 class Sheet:
     def __init__( self, include_directories = (), defines = (), libraries = (),
-                  pkg_config = None, note = '' ):
+                  library_directories = (), pkg_config = None, requires_path = None,
+                  deferred_to_phase = None, note = '' ):
         self.include_directories = tuple( include_directories )
         self.defines = tuple( defines )
-        self.libraries = tuple( libraries )     # plain -l names
-        self.pkg_config = pkg_config            # pkg-config package name, if it has one
+        self.libraries = tuple( libraries )             # plain -l names
+        self.library_directories = tuple( library_directories )  # -L, for External/ builds
+        self.pkg_config = pkg_config                    # pkg-config package name, if it has one
+        # A sheet whose dependency is not built yet contributes nothing rather than producing a
+        # link error naming a library the reader has no way to supply at this phase.
+        self.requires_path = requires_path               # skip the sheet when this is absent
+        self.deferred_to_phase = deferred_to_phase       # named in the message when skipped
         self.note = note
 
 # The table from Docs/Linux/03-Dependencies.md. A sheet that is present with no flags
@@ -165,11 +227,24 @@ SHEETS = {
 
     'FreeType':              Sheet( pkg_config = 'freetype2' ),
     'SQLite':                Sheet( libraries = ( 'sqlite3', ) ),
-    'MeshOptimizer':         Sheet( libraries = ( 'meshoptimizer', ) ),
-    'GameNetworkingSockets': Sheet( libraries = ( 'GameNetworkingSockets', 'protobuf', 'ssl', 'crypto' ) ),
-    'ixWebSocket':           Sheet( libraries = ( 'ixwebsocket', 'z', 'ssl', 'crypto' ) ),
-    'CTT':                   Sheet( libraries = ( 'ctt_capi', ) ),
-    'DXC':                   Sheet( libraries = ( 'dxcompiler', ) ),
+    'MeshOptimizer':         Sheet( libraries = ( 'meshoptimizer', ),
+                                    requires_path = 'External/meshoptimizer',
+                                    deferred_to_phase = 'Phase 3' ),
+    # The install puts headers under include/GameNetworkingSockets/steam, and the engine writes
+    # #include <steam/...>, so the search path is one level deeper than the install prefix.
+    'GameNetworkingSockets': Sheet( include_directories = ( 'External/GameNetworkingSockets/include/GameNetworkingSockets', ),
+                                    library_directories = ( 'External/GameNetworkingSockets/lib', ),
+                                    libraries = ( 'GameNetworkingSockets', 'protobuf', 'ssl', 'crypto' ) ),
+    'ixWebSocket':           Sheet( include_directories = ( 'External/ixwebsocket/include', ),
+                                    library_directories = ( 'External/ixwebsocket/lib', ),
+                                    libraries = ( 'ixwebsocket', 'z', 'ssl', 'crypto' ) ),
+    'CTT':                   Sheet( libraries = ( 'ctt_capi', ),
+                                    requires_path = 'External/CTT',
+                                    deferred_to_phase = 'Phase 3' ),
+    'DXC':                   Sheet( libraries = ( 'dxcompiler', ),
+                                    library_directories = ( 'External/DXC/lib', ),
+                                    requires_path = 'External/DXC',
+                                    deferred_to_phase = 'Phase 4' ),
     'LLVM':                  Sheet( note = 'resolved with llvm-config, see llvm_link_flags()' ),
 
     # Dropped. Conventions rule 4: leave the EE_ENABLE_* define unset in the Linux build rather
@@ -177,7 +252,11 @@ SHEETS = {
     # dropped" looks like.
     'AmdAgs':                Sheet( note = 'dropped, Windows only' ),
     'WinPixEventRuntime':    Sheet( note = 'dropped, Windows only' ),
-    'Optick':                Sheet( note = 'dropped, Windows only' ),
+    # Not dropped after all, but its include path is global rather than per-sheet: see
+    # ESOTERICA_INCLUDE_DIRECTORIES. Base/Profiling.h includes <optick.h> unconditionally, and
+    # Conventions rule 4 forbids stripping that include, so the header has to exist. No
+    # OptickCore library is built: USE_OPTICK stays 0 and the OPTICK_* macros compile away.
+    'Optick':                Sheet( note = 'headers only, path is global, profiling never enabled' ),
     'SuperLuminal':          Sheet( note = 'dropped. Do not define EE_ENABLE_SUPERLUMINAL' ),
     'LivePP':                Sheet( note = 'dropped. Do not define EE_ENABLE_LPP' ),
     'NavPower':              Sheet( note = 'dropped. Do not define EE_ENABLE_NAVPOWER' ),
@@ -232,7 +311,7 @@ def llvm_link_flags():
 
 #-------------------------------------------------------------------------
 
-def resolve_sheets( sheet_names ):
+def resolve_sheets( sheet_names, repo_root = None ):
     """Turns a project's property sheet imports into include directories and link flags.
 
     Returns ( include_directories, defines, link_flags, problems ).
@@ -252,10 +331,28 @@ def resolve_sheets( sheet_names ):
                 f'Toolchain.SHEETS and to Docs/Linux/03-Dependencies.md.' )
             continue
 
+        # Skip a dependency that has not been built yet. Emitting its -l would fail the link
+        # with "cannot find -lfoo", which tells the reader nothing about which phase supplies it.
+        if sheet.requires_path is not None:
+            root = repo_root if repo_root is not None else Path( '.' )
+            if not ( root / sheet.requires_path ).exists():
+                problems.append(
+                    f'{name}.props is skipped: {sheet.requires_path} does not exist. '
+                    f'{sheet.deferred_to_phase} builds it. Anything needing its symbols will '
+                    f'fail to link until then.' )
+                continue
+
         include_directories.extend( sheet.include_directories )
         defines.extend( sheet.defines )
 
         if sheet.pkg_config is not None:
+            # --cflags matters as much as --libs: Freetype's headers live under
+            # /usr/include/freetype2, so <ft2build.h> is not on the default search path.
+            cflags = pkg_config_flags( sheet.pkg_config, '--cflags' )
+            if cflags is not None:
+                include_directories.extend(
+                    f[2:] for f in cflags if f.startswith( '-I' ) )
+
             flags = pkg_config_flags( sheet.pkg_config, '--libs' )
             if flags is None:
                 problems.append( f'pkg-config has no package "{sheet.pkg_config}" '
@@ -272,6 +369,12 @@ def resolve_sheets( sheet_names ):
             else:
                 link_flags.extend( flags )
 
+        # -L before -l, and an rpath so an executable finds the .so at run time without
+        # LD_LIBRARY_PATH. These live under External/, not in a system directory.
+        for directory in sheet.library_directories:
+            link_flags.append( f'-L{directory}' )
+            link_flags.append( f'-Wl,-rpath,{directory}' )
+
         link_flags.extend( f'-l{library}' for library in sheet.libraries )
 
     return include_directories, defines, link_flags, problems
@@ -287,7 +390,8 @@ def missing_include_directories( repo_root, include_directories ):
     error it eventually gives names a header rather than the include path. Check up front.
     """
 
-    return [ d for d in include_directories if not ( repo_root / d ).is_dir() ]
+    return [ d for d in include_directories
+             if not Path( d ).is_absolute() and not ( repo_root / d ).is_dir() ]
 
 def project_define( project_name ):
     """Esoterica.props sets $(ProjectName.ToUpper().Replace('.','_')).
