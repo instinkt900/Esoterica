@@ -161,6 +161,11 @@ namespace EE::Render::RHI
         EE_UNIMPLEMENTED_FUNCTION();
     }
 
+    void CmdSetRenderTargets( CommandBuffer* pCommandBuffer, TArrayView<Texture* const> renderTargets, Texture* pDepthStencil, LoadAction* pLoadAction, TArrayView<uint32_t const> colorArraySlices, TArrayView<uint32_t const> colorMipSlices, uint32_t depthArraySlice, uint32_t depthMipSlice )
+    {
+        EE_UNIMPLEMENTED_FUNCTION();
+    }
+
     void CmdSetShadingRate( CommandBuffer* pCommandBuffer, ShadingRate shadingRate, Texture* pShadingRateTexture, ShadingRateCombiner postRasterizerCombiner, ShadingRateCombiner finalCombiner )
     {
         EE_UNIMPLEMENTED_FUNCTION();

@@ -22,9 +22,7 @@ set -euo pipefail
 REPO_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 SOLUTION_PATH="${REPO_ROOT}/Esoterica.slnx"
 
-# -typeinfo restricts the run to C++ type reflection. The default is shaders *and* typeinfo, and
-# shader reflection needs DXC, which arrives in Phase 4. **Phase 4 removes this flag.**
-REFLECTOR_ARGS=( -typeinfo )
+REFLECTOR_ARGS=()
 REFLECTOR_EXE="${REPO_ROOT}/Build/Linux_Release/Esoterica.Applications.Reflector"
 
 #-------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 #include "EntityLog.h"
 #include "Base/Resource/ResourceRequesterID.h"
 #include "Base/TypeSystem/TypeRegistry.h"
-#include <eastl/sort.h>
+#include <EASTL/sort.h>
 
 //-------------------------------------------------------------------------
 

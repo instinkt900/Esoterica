@@ -21,7 +21,10 @@ namespace EE
 
         static bool IsValidExtension( char const* pStr ) { return IsValidExtension( pStr, pStr != nullptr ? strlen( pStr ) : 0 ); }
         static bool IsValidExtension( FileSystem::Extension const& ext ) { return IsValidExtension( ext.c_str(), ext.length() ); }
-        template<eastl_size_t S> static bool IsValidExtension( TInlineString<S> const& str ) { return IsValidExtension( str.c_str(), str.length() ); }
+        // template<int S>, not size_t or eastl_size_t: eastl::fixed_string declares its size
+        // parameter as int, so deducing any other type from a TInlineString<N> fails. MSVC
+        // accepts the narrowing during deduction. Same fix as ResourceTypeID.h.
+        template<int S> static bool IsValidExtension( TInlineString<S> const& str ) { return IsValidExtension( str.c_str(), str.length() ); }
 
         static bool IsValidExtensionCode( uint64_t code );
 

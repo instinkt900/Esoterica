@@ -2,9 +2,7 @@
 #include <EASTL/algorithm.h>
 #include "ReflectedMacro.h"
 #include "ShaderReflection/ShaderReflection_ShaderParser.h"
-#if _WIN32
 #include "ShaderReflection/ShaderReflection_ShaderCompiler.h"
-#endif
 #include "ShaderReflection/ShaderReflection_CodeGenerator.h"
 #include "ShaderReflection/ShaderReflection_ShaderInputReflector.h"
 #include "TypeReflection/TypeReflection_CodeGenerator.h"
@@ -479,10 +477,27 @@ namespace EE::Reflection
                 auto secondIdx = line.find( "\"", firstIdx );
                 EE_ASSERT( secondIdx != String::npos );
 
-                String const shaderFilePathStr = line.substr( firstIdx, secondIdx - firstIdx );
+                String shaderFilePathStr = line.substr( firstIdx, secondIdx - firstIdx );
+
+                #if !_WIN32
+                // Same as the header and dependency paths above: MSBuild writes '\' as its
+                // separator, which is an ordinary filename character here.
+                eastl::replace( shaderFilePathStr.begin(), shaderFilePathStr.end(), '\\', '/' );
+                #endif
+
                 if ( shaderFilePathStr.find( Settings::g_shaderSourceFileExtension ) != String::npos )
                 {
-                    shaderFiles.emplace_back( project.m_directoryPath + shaderFilePathStr );
+                    FileSystem::Path shaderFilePath = project.m_directoryPath + shaderFilePathStr;
+
+                    #if !_WIN32
+                    String correctlyCasedShaderPath;
+                    if ( FileSystem::Path::GetCorrectCaseForPath( shaderFilePath.c_str(), correctlyCasedShaderPath ) )
+                    {
+                        shaderFilePath = FileSystem::Path( correctlyCasedShaderPath.c_str() );
+                    }
+                    #endif
+
+                    shaderFiles.emplace_back( shaderFilePath );
                 }
             }
         }
@@ -909,12 +924,6 @@ namespace EE::Reflection
 
     bool Reflector::ReflectShaders( Output desiredOutput )
     {
-        #if !_WIN32
-        // Shader reflection needs DXC, which the Linux build does not have until Phase 4. This
-        // reports rather than halting, so that the -typeinfo path still works, which is the
-        // whole point of the Reflector in Phase 2.
-        return PrintError( "Shader reflection is not available on this platform yet" );
-        #else
         EE_ASSERT( IsShaderOutputRequired( desiredOutput ) );
 
         m_shaderReflectionRequiresTypeReflection = false;
@@ -1086,7 +1095,6 @@ namespace EE::Reflection
         }
 
         return true;
-        #endif
     }
 
     bool Reflector::ReflectTypeInfo()

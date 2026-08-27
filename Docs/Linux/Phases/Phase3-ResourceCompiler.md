@@ -129,11 +129,16 @@ The vendored third-party code is all portable:
 - `subprocess`. Check its Linux path. `ResourceServerWorker.cpp` uses it.
 
 `Code/EngineTools/Core/SystemDialogs.cpp` is 552 lines of Windows COM with an unguarded
-`<windows.h>`. **It is in `EngineTools`, so it must at least compile.** Apply the "wrap, do not
-split" technique now: `#ifdef _WIN32` at the top, `#endif` at the bottom, two lines. Defer the
-real Linux implementation to Phase 7. Confirm that nothing in the ResourceCompiler's call graph
-opens a dialog. If something does, you need a minimal `SystemDialogs_Linux.cpp` stub here rather
-than in Phase 7.
+`<windows.h>`. **It is in `EngineTools`, so its symbols must resolve.** Name it in
+`Exclusions.txt` and write the `SystemDialogs_Linux.cpp` sibling that supplies them. The shared
+header, `SystemDialogs.h`, is untouched by either side.
+
+Do not wrap it in `#ifdef _WIN32`. The plan originally said to, and that was wrong: an exclusion
+leaves the upstream file byte-identical, and a stale exclusion is reported as a problem while a
+stale `#ifdef` is not. See [TouchedFiles.md](../TouchedFiles.md#whole-body-guard-wrap).
+
+Confirm that nothing in the ResourceCompiler's call graph opens a dialog. Nothing does, so the
+sibling can halt rather than implement; Phase 7 owns the real one.
 
 The six `OpenInExplorer` call sites in `EngineTools` also need to *compile*. They sit in UI code
 that the ResourceCompiler never runs, but they still need a symbol that resolves. The Phase 1
@@ -220,7 +225,8 @@ Investigate these differences rather than accepting them:
 
 ## Do not
 
-- Implement Linux file dialogs. Wrap `SystemDialogs.cpp` and move on. Phase 7 owns it.
+- Implement Linux file dialogs. Exclude `SystemDialogs.cpp`, stub the sibling, and move on.
+  Phase 7 owns it.
 - Touch anything under `Code/**/ThirdParty/`.
 - Swap in a different texture compressor quietly. Escalate first.
 - Fix clang-against-MSVC upstream errors without recording them.

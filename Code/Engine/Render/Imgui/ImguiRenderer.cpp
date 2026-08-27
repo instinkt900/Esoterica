@@ -426,7 +426,7 @@ namespace EE::Render
                 { ( R + L ) / ( L - R ), ( T + B ) / ( B - T ), 0.5f, 1.0f },
             };
 
-            ShaderTypes::ImguiConstantBuffer alignas( 32 ) constantBufferData = {};
+            alignas( 32 ) ShaderTypes::ImguiConstantBuffer constantBufferData = {};
             std::memcpy( constantBufferData.m_projectionMatrix, mvp, sizeof( float ) * 16 );
             constantBufferData.m_vertexBuffer = RHI::GetBufferHandle( m_vertexBuffers[frameIndex].m_pBuffer, RHI::DescriptorTypeFlags::Buffer );
 
@@ -488,7 +488,7 @@ namespace EE::Render
                     { 0.0f, 0.0f, 0.5f, 0.0f },
                     { ( R + L ) / ( L - R ), ( T + B ) / ( B - T ), 0.5f, 1.0f },
                 };
-                ShaderTypes::ImguiConstantBuffer alignas( 32 ) constantBufferData = {};
+                alignas( 32 ) ShaderTypes::ImguiConstantBuffer constantBufferData = {};
                 std::memcpy( constantBufferData.m_projectionMatrix, mvp, sizeof( float ) * 16 );
                 constantBufferData.m_vertexBuffer = RHI::GetBufferHandle( m_vertexBuffers[frameIndex].m_pBuffer, RHI::DescriptorTypeFlags::Buffer );
 

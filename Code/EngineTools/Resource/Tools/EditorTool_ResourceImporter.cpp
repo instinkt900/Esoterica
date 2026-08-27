@@ -8,6 +8,9 @@
 #include "Engine/Animation/AnimationClip.h"
 #include "Engine/Physics/PhysicsCollisionMesh.h"
 #include "Base/Platform/PlatformUtils_Win32.h"
+#if defined( __linux__ )
+#include "Base/Platform/PlatformUtils_Linux.h"
+#endif
 #include "Base/TypeSystem/TypeRegistry.h"
 #include "Base/Serialization/TypeSerialization.h"
 #include "Base/Math/MathUtils.h"

@@ -11,7 +11,9 @@ namespace EE
     {
         enum LogCategoryState : uint64_t
         {
-            SomeChildrenChecked = -1,
+            // -1 narrows to the uint64_t underlying type, which MSVC accepts and standard C++
+            // does not. The explicit conversion keeps the same bits, all ones.
+            SomeChildrenChecked = uint64_t( -1 ),
             Unchecked = 0,
             Checked = 1,
         };

@@ -33,9 +33,8 @@ Types/Platform/Types_Linux.cpp
 #   Imgui/Platform/ImguiX_Linux.cpp
 
 [Esoterica.Engine.Tools]
-# Phase 7 - SystemDialogs.cpp gets wrapped in #ifdef _WIN32 rather than excluded, because the
-# header is shared. This is its Linux implementation:
-#   Core/SystemDialogs_Linux.cpp
+Core/SystemDialogs_Linux.cpp
+FileSystem/FileSystemWatcher_Linux.cpp
 
 [Esoterica.Applications.Engine]
 # Phase 6:

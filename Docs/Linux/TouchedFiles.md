@@ -16,7 +16,7 @@ Status values: `planned` · `done` · `not needed` (checked, and confirmed unnec
 | Category | Count |
 |---|---|
 | Files needing a 2-line `#elif` or `\|\|` addition | 7 |
-| Files needing a whole-body guard wrap (2 lines) | 1 |
+| Files needing a whole-body guard wrap (2 lines) | 0 - the one candidate is an exclusion instead |
 | Files needing a real edit | 5 |
 | Files confirmed to need **no** change | 3 |
 | **New** files added (no upstream conflict possible) | ~40 |
@@ -77,6 +77,44 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
 | `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`, with an `#else` including `<immintrin.h>`. The MSVC header is where `_tzcnt_u64` and `_lzcnt_u64` come from on Windows; clang has them in `<immintrin.h>`. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
 
+## Phase 3 - Resource Compiler
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Engine/Entity/EntitySystem.h` | Forward-declare `class Entity;`. It is used in the inline body of `CreateAdditionalRequiredComponents` and never declared. MSVC's delayed lookup finds it; standard C++ needs it visible. 1 line added. | 3 | done |
+| `Code/Base/Resource/ResourcePtr.h` | Add `TResourcePtr<T>::operator=( ResourceID const& )`. Assigning a `ResourceID` was ambiguous: it converts to `ResourcePtr`, which then matches both the existing `operator=` and the implicit copy assignment reached through the converting constructor. An exact match removes the choice, with no behaviour change. | 3 | done |
+| `Code/Engine/Debug/Widgets/SystemLogWidget.cpp` | `SomeChildrenChecked = -1` to `uint64_t( -1 )`. The enum has a `uint64_t` underlying type, so `-1` narrows, which MSVC accepts and standard C++ does not. Same bits. | 3 | done |
+| `Code/Engine/Physics/Components/Component_PhysicsShape.h` | Forward-declare `class PhysicsWorld;`. Only `friend class PhysicsWorld;` declarations introduce the name elsewhere, and a friend declaration does not make a name findable by ordinary lookup. Fixed 5 files at once. | 3 | done |
+| `Code/Engine/Entity/EntityMap.h` | `#include "Entity.h"`. A template member dereferences `Entity*` in a non-dependent expression, so clang needs the complete type at the point of definition; MSVC defers to instantiation. No include cycle: `Entity.h` does not include `EntityMap.h`. | 3 | done |
+| `Code/Engine/Render/Imgui/ImguiRenderer.cpp` | Two sites: `T alignas( 32 ) x;` to `alignas( 32 ) T x;`. `alignas` is a declaration specifier and belongs before the type. MSVC accepts either order. | 3 | done |
+| `Code/Engine/Entity/EntityInitializationContext.h` | Forward-declare `class EntityMap;` inside `namespace EE::EntityModel`. `InitializationContext` says `friend EntityMap;`, and unqualified lookup escaped to the `class EntityMap;` in namespace `EE` at the top of the file - a phantom, since the real class is `EE::EntityModel::EntityMap`. The friendship applied to a class nobody defines. | 3 | done |
+| `Code/Engine/Render/Device/DeviceRenderView.cpp` | `"base/Render/RHI.h"` to `"Base/Render/RHI.h"`. Case mismatch. | 3 | done |
+| `Code/Engine/**`, `Code/EngineTools/**` (6 files) | `<eastl/...>` to `<EASTL/...>`. Case mismatches; the directory is `EASTL`. | 3 | done |
+| `Code/Base/Types/Path.h` | `TPath::IsParentOf` called `potentialChild.size()` and `potentialChild.m_path[i]`. `TPath` has neither: the accessor is `Size()` and the member is `m_elements`. The function has evidently never been instantiated, so MSVC never looked inside it. Fixing it cleared 96 of EngineTools' 110 errors. | 3 | done |
+| `Code/EngineTools/Entity/EntityEditor/EntityEditor_EntityItem.h`, `EntityEditor_UndoableAction.h`, `Code/EngineTools/Game/ResourceEditors/ResourceEditor_Hitbox.h` | Forward-declare `class EntityWorld;` in namespace `EE`. All three use it as a pointer without declaring it; MSVC finds it through another translation unit's includes. Declared rather than including `EntityWorld.h`, which would pull the whole engine world into a tools header. Cleared 20 errors. | 3 | done |
+| `Code/Base/FileSystem/FileSystemPath.h`, `DataPath.h`, `DataFileExtension.h` | `template<size_t S>` / `template<eastl_size_t S>` to `template<int S>` on the `TInlineString<S>` overloads. `eastl::fixed_string` declares its size parameter as `int`, so deducing any other type from a `TInlineString<N>` fails. Same fix as `ResourceTypeID.h` in Phase 2. | 3 | done |
+| `Code/Base/Resource/ResourcePtr.h` (2) | Add `TResourcePtr<T>::operator=( nullptr_t )`. Assigning `nullptr` was ambiguous for the same reason as `ResourceID`. | 3 | done |
+| `Code/Engine/Render/Device/DeviceRenderWorld.cpp` | `Math::Max( 1ULL, ...size() )` to `Math::Max( size_t( 1 ), ... )`. `Math::Max` deduces one type from both arguments; on Windows `size_t` *is* `unsigned long long` so they agree, and on LP64 Linux it is `unsigned long`. | 3 | done |
+| `Code/EngineTools/Game/ResourceEditors/ResourceEditor_Hitbox.h` (2) | Forward-declare `class Hitbox;`. Used as a pointer at line 163 and never declared, which broke the class and cascaded into a dozen "cannot initialize object parameter" errors that looked like a broken inheritance chain. | 3 | done |
+| `Code/EngineTools/Import/Formats/FBX.cpp` | `"EngineTools/Import/importedSkeleton.h"` to `ImportedSkeleton.h`. Case mismatch. | 3 | done |
+| `Code/Base/Math/MathUtils.cpp` | Drop `inline` from the three `ToString` definitions. `MathUtils.h` declares them `EE_BASE_API` without it, so the `.cpp` definition is the only one, and an `inline` function that no other TU can see is emitted nowhere. MSVC exports it anyway through `__declspec( dllexport )`. | 3 | done |
+| `Code/Base/Resource/ResourceRecord.h`, `Code/Base/Input/InputSystem.h`, `Code/Base/Imgui/ImguiX.h`, `Code/Engine/Animation/AnimationSkeleton.h`, `Animation_RuntimeGraph_Instance.h` (2), `Animation_RuntimeGraphNode_Blend1D.h`, `Code/EngineTools/Resource/ResourceCompilerContext.h` | The same defect, mirrored: 8 declarations marked `inline` whose only definition is out of line in the matching `.cpp`. That is ill-formed - an inline function must be defined in every TU that uses it - and clang emits nothing. Dropping `inline` is correct on both compilers. | 3 | done |
+| `Code/Base/Render/PageAllocator.h` | `TArrayView( ... )` to `TArrayView<T>( ... )`. Class template argument deduction through the alias makes clang build `eastl::span`'s implicit deduction guides with the alias's fixed extent, and `span( T (&)[N] ) -> span<T, N>` then forms an array of `size_t( -1 )` elements. `m_data` is `TArrayView<T>`, so nothing was being deduced. | 3 | done |
+| `Code/EngineTools/Resource/ResourceCompilerContext.cpp` | `va_copy` in `LogError`, `LogWarning` and `LogMessage`. Each reads one `va_list` twice, once for `SystemLog::AddEntryVarArgs` and once for `m_log.Log*`. On MSVC x64 a `va_list` is a pointer passed by value, so the second read works; in the System V ABI it is an array that decays, the callee advances the caller's own state, and the second read segfaults. This crashed every standalone resource compile. | 3 | done |
+| `Code/Base/Imgui/ImguiX.h` (2) | `va_copy` in both `DrawShadowedText` overloads, which draw twice from one `va_list`. Same defect as above; it would crash the editor on Linux rather than the compiler. | 3 | done |
+| `Code/EngineTools/Resource/Tools/EditorTool_ResourceBrowser.cpp`, `EditorTool_ResourceImporter.cpp`, `Code/EngineTools/Widgets/Pickers/DataPathPicker.cpp`, `ResourcePickers.cpp` | Add a 3-line `#if defined( __linux__ )` include of `PlatformUtils_Linux.h` next to the existing `PlatformUtils_Win32.h` include. The 5 `Platform::Win32::OpenInExplorer` call sites are left alone: `PlatformUtils_Linux.h` aliases `namespace Win32 = Linux`, which keeps the diff to the include block rather than putting a guard around every call in editor UI code. | 3 | done |
+| `Code/EngineTools/ThirdParty/delabella/delabella.cpp` | Add an `#else` branch including `<time.h>` beside the `#ifdef _WIN32` `<windows.h>` block. The non-Windows path of `uSec()` already calls `clock_gettime( CLOCK_MONOTONIC, ... )` and nothing declared it. Vendored third-party, but the fix is upstream-shaped. | 3 | done |
+
+## Phase 4 (brought forward) - Shader pipeline
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.h` | Replace the Phase 2 whole-body wrap with targeted guards. `d3d12shader.h` and `<wrl/client.h>` go behind `#if _WIN32`; Linux takes `ComPtr_Linux.h` instead. | 4 | done |
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.cpp` | Unwrapped. `-spirv -fspv-target-env=vulkan1.3` on Linux instead of DXC's default DXIL. `-Qembed_debug` and `-Fd` are DXIL-only and make libdxcompiler **segfault** on the SPIR-V path, so they are Windows-only. | 4 | done |
+| `Code/Applications/Reflector/ShaderReflection/ShaderReflection_CodeGenerator.cpp` | Replace `std::stable_sort( doc.begin(), doc.end(), ... )`. `pugi::xml_node_iterator` is bidirectional and `stable_sort` needs random access. **The comparator was also wrong**: it returned `stricmp`'s `int`, true for a difference in *either* direction, which is not a strict weak ordering and so was undefined behaviour on Windows too. | 4 | done |
+| `Code/Base/Render/RHI.esh` | `HLSL_STATIC_ASSERT` becomes a no-op under `__spirv__`. DXC's SPIR-V back end does not implement `_Static_assert`. **The plan predicted no `.esh` file would need edits; that was wrong.** | 4 | done |
+| `Code/Applications/Reflector/ShaderReflection/ComPtr_Linux.h` | **New file.** A minimal `Microsoft::WRL::ComPtr` replacement. DXC's own `CComPtr` lacks `Get`, `GetAddressOf` and `ReleaseAndGetAddressOf`, which is what the eleven call sites use. | 4 | done |
+
 ## Phase 2 - Reflector
 
 | File | Change | Phase | Status |
@@ -95,16 +133,23 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 
 ## Whole-body guard wrap
 
-Use "wrap, do not split" to make an unguarded Windows-only translation unit inert on Linux. Add
-`#ifdef _WIN32` as the first line and `#endif` as the last. That is **two lines added, zero
-modified**, which is the cheapest possible diff. Then add a `_Linux.cpp` sibling that implements
-the same interface.
+"Wrap, do not split" makes an unguarded Windows-only file inert on Linux: `#ifdef _WIN32` as
+the first line, `#endif` as the last. Two lines added, zero modified.
+
+**Use it only on a header.** A `.cpp` needs no edit at all - name it in
+[Exclusions.txt](../../Code/Scripts/NinjaGen/Exclusions.txt) and the Linux build never sees it,
+which is zero lines added. An exclusion is also self-checking: a pattern that stops matching is
+reported as a problem, whereas a stale `#ifdef` sits in the file forever. A header cannot be
+excluded, because nothing lists headers, so a header that must not be parsed on Linux is wrapped.
+
+A wrapped or excluded `.cpp` still needs a `_Linux.cpp` sibling, listed in
+[LinuxSources.txt](../../Code/Scripts/NinjaGen/LinuxSources.txt), to supply the symbols its
+shared header declares.
 
 | File | Change | Phase | Status |
 |---|---|---|---|
 | `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.h` | Wrap the body in `#ifdef _WIN32`. It includes `d3d12shader.h` and `dxcapi.h`, and it is the **only** shader reflection header that needs DXC. **Phase 4 reverses this.** | 2 | done |
 | `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.cpp` | As above. | 2 | done |
-| `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. It is 552 lines of COM `IFileDialog` code, with an unguarded `<windows.h>` and `<shobjidl.h>` include at line 5. New sibling: `SystemDialogs_Linux.cpp`. | 7 | planned |
 
 ## Confirmed to need no change
 

@@ -1,20 +1,21 @@
 #pragma once
-// Phase 4 reverses this. Shader reflection needs DXC, which the Linux build does not have yet:
-// this header includes d3d12shader.h and dxcapi.h. Wrapped whole rather than split, so undoing
-// it is deleting two lines. See Docs/Linux/Phases/Phase4-ShaderPipeline.md.
-#ifdef _WIN32
 #include "Base/Threading/TaskSystem.h"
 #include "Base/Threading/Threading.h"
 #include "Base/FileSystem/FileSystemPath.h"
 #include "Base/Types/String.h"
 
-#include "d3d12shader.h"
 #include "dxcapi.h"
+
+#if _WIN32
+// d3d12shader.h declares ID3D12ShaderReflection, which nothing in this directory uses: the
+// parameter reflection all comes from parsing the .esh source in ShaderReflection_ShaderParser.
+// Kept, and guarded, rather than deleted (Conventions rule 3).
+#include "d3d12shader.h"
 #include <wrl/client.h>
-
-//-------------------------------------------------------------------------
-
 using Microsoft::WRL::ComPtr;
+#else
+#include "ComPtr_Linux.h"
+#endif
 
 //-------------------------------------------------------------------------
 
@@ -73,4 +74,3 @@ namespace EE::Reflection
         mutable TVector<String>             m_warnings;
     };
 }
-#endif

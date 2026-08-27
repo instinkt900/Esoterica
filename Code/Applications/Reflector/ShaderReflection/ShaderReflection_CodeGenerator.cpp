@@ -1,4 +1,5 @@
 #include "ShaderReflection_CodeGenerator.h"
+#include <EASTL/sort.h>
 #include "Applications/Reflector/Reflector.h"
 #include "Base/ThirdParty/lzav/lzav.h"
 #include "Base/Encoding/Encoding.h"
@@ -522,10 +523,34 @@ namespace EE::Reflection
             }
         }
 
-        std::stable_sort( doc.begin(), doc.end(), [] ( xml_node node0, xml_node node1 )
+        // Sort the shader entries by name, so the generated metadata is stable across runs.
+        //
+        // This was `std::stable_sort( doc.begin(), doc.end(), ... )`, which does not compile off
+        // Windows: pugi::xml_node_iterator is bidirectional and stable_sort needs random access.
+        //
+        // The comparator was also wrong. It returned stricmp's int, which converts to true for
+        // *any* difference, in either direction. That is not a strict weak ordering, so the old
+        // sort was undefined behaviour on Windows too, not merely non-portable. Hence the
+        // explicit `< 0` below.
+        //
+        // pugixml has no sort of its own, so the nodes are collected, ordered, and then moved
+        // back in sequence. append_move on an existing child relocates it to the end, so
+        // appending in sorted order leaves the document sorted.
+        TVector<xml_node> shaderNodes;
+        for ( xml_node node : doc )
         {
-            return stricmp( node0.attribute( "Name" ).as_string(), node1.attribute( "Name" ).as_string() );
+            shaderNodes.emplace_back( node );
+        }
+
+        eastl::stable_sort( shaderNodes.begin(), shaderNodes.end(), [] ( xml_node const& node0, xml_node const& node1 )
+        {
+            return stricmp( node0.attribute( "Name" ).as_string(), node1.attribute( "Name" ).as_string() ) < 0;
         } );
+
+        for ( xml_node& node : shaderNodes )
+        {
+            doc.append_move( node );
+        }
 
         //-------------------------------------------------------------------------
 
