@@ -10,10 +10,15 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 3 (in progress).** `Esoterica.Engine.Runtime` compiles with zero failures.
-`Esoterica.Engine.Tools` is at 128 of 144. Shader *reflection* works and generates its 28 `.esh`
-headers; shader *compilation* is blocked on the D3D12 bindless model, which is a Phase 5 design
-question. See the Phase 3 entry below.
+**Phase: 3 (all build and compile criteria met).** `EsotericaResourceCompiler` builds, links and
+compiles 22 of the 27 real resources under `Data/`: every texture, mesh, physics mesh, physics
+material database and the map. All four libraries link. The file system watcher passes a 15-check
+scratch test, including a subdirectory created after watching started and `IN_Q_OVERFLOW`.
+
+The 5 that do not compile are the `.material` files, and they fail for one reason: they
+deserialize `EE::Render::Shaders::DefaultPBRParameters`, a type that only the Reflector's shader
+pass generates. That pass needs DXC to compile every `.esh` first, and DXC's SPIR-V back end
+crashes on the `ResourceDescriptorHeap` bindless model. Phases 4 and 5 own that.
 
 Previously: **Phase 2 (complete on Linux).** `./RunReflection.sh` generates reflection for all five modules
 and exits 0. 245 files, 238 of them `.cpp`. The run is idempotent, and clean plus rebuild
@@ -24,20 +29,23 @@ reproduces byte-identical output. The Windows build has not been run.
 | 0 - Build System | **done** |
 | 1 - Base Platform Layer | **done** (Tester itself still blocked on Phase 2) |
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
-| 3 - Resource Compiler | not started |
+| 3 - Resource Compiler | **done on Linux**, except the 5 materials and byte-comparison, both of which need Phase 4 or a Windows machine |
 | 4 - Shader Pipeline | not started |
 | 5 - Vulkan RHI | not started |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
-Linux build status: **`Esoterica.Base` builds and links.** Debug and Release produce
-`libEsoterica.Base.so`, Shipping produces `libEsoterica.Base.a`. Nothing downstream is built
-yet.
-Windows build status: **unchanged from upstream** (no edits landed yet).
+Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
+`libEsoterica.Engine.Tools.so`, `libEsoterica.Game.Runtime.so`, `libEsoterica.Game.Tools.so`,
+`Esoterica.Applications.Reflector` and `Esoterica.Applications.ResourceCompiler` all build.
+`Applications/Editor` and `Applications/ResourceServer` do not, and are Phase 7.
+`Applications/BuildGenerator` is excluded permanently.
+Windows build status: **not run.** 69 upstream files carry `+494 -71` lines across Phases 0-3.
 
 ## In flight
 
-**Phase 3, the Resource Compiler.** Reflection now unblocks it, and everything above it.
+Nothing. Phase 3 is finished to the extent Linux alone allows. Phase 4, the shader pipeline, is
+next, and it is what unblocks the 5 materials and the renderer.
 
 ---
 
@@ -53,6 +61,62 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-28 - P3.1-P3.7 Resource compiler builds, links and compiles data
+
+- All four libraries link, `EsotericaResourceCompiler` links, and it compiles 22 of the 27 real
+  resources under `Data/`: 15 textures, 4 meshes, 1 physics mesh, 1 physics material database,
+  1 map. No errors, no crashes.
+- `ctt` answered, and answered well. See the decision entry below.
+- The file system watcher passes a 15-check scratch test at
+  `$SCRATCH/watchertest/main.cpp`, not committed: create, modify, rename and delete in the
+  watched root; the same four in a subdirectory created **after** watching started; a directory
+  two levels below that; directory deletion; and `IN_Q_OVERFLOW` firing
+  `OnMassiveChangeDetected`.
+
+**Files added:** `Code/EngineTools/FileSystem/FileSystemWatcher_Linux.cpp`,
+`Code/EngineTools/Core/SystemDialogs_Linux.cpp`, `Code/Base/Render/ComPtr_Linux.h`, and the
+`fetch_ctt` function in `DownloadDependencies.sh`.
+
+**Upstream files edited:** see [TouchedFiles.md](TouchedFiles.md). The Phase 3 additions this
+session are 11 `inline` removals, 5 `va_copy` fixes, one CTAD fix in `PageAllocator.h`, one
+`<time.h>` in vendored `delabella`, and 3-line include switches in four EngineTools UI files.
+
+**Acceptance criteria:**
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Four libraries build | **met** |
+| 2 | `EsotericaResourceCompiler` builds and links | **met** (Debug; Release not run) |
+| 3 | Compiles the full `Data/` tree without errors | **partly.** 22 of 27 resources. The 5 `.material` files need shader-generated types. The other 13 files in `Data/` are `EE_DATA_FILE`, not resources: `.txtg`, `.meshgrp` and `.pml` have no compiler on any platform, and "failed to find a compiler" is the correct answer. |
+| 4 | Byte-identical to Windows output | **not checked.** Needs a Windows machine. |
+| 5 | Watcher works, including a subdirectory created after the start | **met** |
+| 6 | Reports `OnMassiveChangeDetected` on `IN_Q_OVERFLOW` | **met** |
+| 7 | `FileRegistry.cpp` compiles and its watcher handling works | **met** (compiles and links; the watcher itself is tested above) |
+| 8 | Open question 1 (`ctt`) answered and recorded | **met** |
+| 9 | Windows MSBuild still succeeds | **not run.** Every edit is either `__linux__`-guarded or standard C++ that MSVC already accepts. |
+| 10 | Every upstream file edited is in TouchedFiles.md | **met** |
+| 11 | `FileSystemWatcher.h` shows 1 line changed | **met** |
+
+## What the next session needs to know
+
+- **`RenderSystem.cpp` is in the build again, on a placeholder.** `NinjaGen.py` writes an empty
+  `Code/Engine/_Module/_AutoGenerated/Shaders/ShaderRegistration.{h,cpp}` when the Reflector has
+  not produced one, and prints a `problem:` line about it on **every** run. That is deliberate:
+  a stale placeholder is exactly the failure that leaves a green build behind. The Reflector
+  overwrites it the moment its shader pass works, and the placeholder is never written over real
+  output.
+- **`Applications/BuildGenerator` is excluded permanently.** It parses `Esoterica.slnx` to write
+  the reflection file lists MSBuild consumes; `NinjaGen.py` does that job here. Its only actual
+  compile error was `__debugbreak`, so a shim would have made it build - and building a `.sln`
+  parser on a platform with no `.sln` is pointless.
+- **`Applications/Editor` and `Applications/ResourceServer` do not build.** Editor hits
+  "member access into incomplete type `EE::EditorTool`" in `EditorUI.h`, which has the shape of
+  the missing-forward-declaration bug that showed up three times in Phase 3. ResourceServer wants
+  `shellapi.h`. Both are Phase 7.
+- **The two big DXC facts.** Shader reflection works. Shader *compilation* segfaults inside
+  `libdxcompiler.so` from `ShaderCompiler::CompileShaderStage`. Everything downstream of that -
+  the materials, the renderer, `Shaders::Initialize` - waits on the bindless decision.
 
 ### 2026-08-27 - P2.1-P2.5 Reflector builds, links and runs
 
@@ -427,6 +491,36 @@ the reasoning, not just the outcome.
 **Alternatives rejected:** ...
 -->
 
+### 2026-08-28 - `ctt` is open source, and is built from crates.io rather than substituted
+
+Open question 1 is answered, and it is the best of the three outcomes
+[Phase3-ResourceCompiler.md](Phases/Phase3-ResourceCompiler.md) lists: option 1, port it.
+
+It did not look that way at first. `CTT.props` links `ctt_capi.lib` alongside `ws2_32`, `bcrypt`
+and `ntdll`, upstream's `External.zip` contains only `ctt_capi.dll`, `ctt_capi.lib` and `ctt.h`,
+and there is no source anywhere in the tree. That is the shape of a closed Windows binary, and
+the plan document calls it "the least certain dependency in the whole port".
+
+The `README.md` inside the zip says otherwise. `ctt` is a Rust library with C bindings, published
+on crates.io as `ctt-c-api`, licensed MIT / Apache-2.0 / Zlib. It binds five open-source encoder
+backends - bc7enc-rdo, Intel ISPC Texture Compressor, etcpak, AMD Compressonator and astcenc -
+and it ships prebuilt ISPC static libraries for every supported platform, so a default build
+needs only a Rust toolchain and a C++ compiler.
+
+`DownloadDependencies.sh fetch_ctt` therefore downloads the `ctt-c-api` 0.5.0 crate tarball and
+runs `cargo build --release`, producing `libctt_capi.so` in the layout `CTT.props` expects.
+
+**Version pinning matters here.** 0.5.0 was published 2026-07-16 and the `ctt.h` in upstream's
+zip is dated 2026-07-19, so it is the matching release. All 64 `ctt_*` and `CTT_*` identifiers
+`ResourceCompiler_RenderTexture.cpp` uses are present in the 0.5.0 header. Check that again
+before bumping the pin; a mismatch would be silent API drift rather than a clean error.
+
+**Consequences:** none of the bad ones. This is the same library at the same version, not a
+substituted compressor, so compressed texture bytes stay comparable with Windows and the
+byte-identical criterion survives. The costs are a Rust toolchain of 1.90 or newer (the crate is
+edition 2024; the check is in `fetch_ctt` because cargo's own failure does not mention the
+version) and about four minutes of build time for the five C/C++ encoder backends.
+
 ### 2026-08-27 - DXC on Linux is blocked by clashing COM shims, not by DXC itself
 
 **Context:** Eight `Engine/Render` files include `.esf` shader sources, which include generated
@@ -626,7 +720,7 @@ question to "Decisions made" once you answer it.
 
 | # | Question | Blocks | Status |
 |---|---|---|---|
-| 1 | Does `ctt` (texture compression) build on Linux? | Phase 3 | open |
+| 1 | ~~Does `ctt` (texture compression) build on Linux?~~ | Phase 3 | **answered: yes, it is open source. Built from crates.io.** |
 | 2 | Which LLVM version does the Reflector need, and does `clangAST` compile against it on Linux? | Phase 2 | open |
 | 3 | Use `volk`, or the plain Vulkan loader? | Phase 5 | open |
 | 4 | Do the target distros package SDL3, or must we always build it? | Phase 6 | open |
@@ -668,6 +762,33 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### Eleven functions are `inline` on one side of the declaration only
+
+Eight headers declare a member `inline` whose only definition is out of line in the matching
+`.cpp` (`ResourceRecord.h`, `InputSystem.h`, `ImguiX.h`, `AnimationSkeleton.h`,
+`Animation_RuntimeGraph_Instance.h` twice, `Animation_RuntimeGraphNode_Blend1D.h`,
+`ResourceCompilerContext.h`). `MathUtils.cpp` has the mirror image: three `ToString` definitions
+marked `inline` where the header declares them `EE_BASE_API` without it.
+
+Both are ill-formed. An inline function has to be defined in every translation unit that uses it,
+and clang emits nothing for a definition no other TU can see. MSVC emits them anyway because
+`__declspec( dllexport )` forces it, so the bug is invisible on Windows. Fixed here by dropping
+`inline`, which is correct on both compilers. Worth an upstream PR: it is a one-word change per
+site and it costs Windows nothing.
+
+### `va_list` is read twice in five places
+
+`CompileContext::LogError`, `LogWarning` and `LogMessage` each `va_start` once and then hand the
+same `va_list` to two consumers - `SystemLog::AddEntryVarArgs` and `m_log.Log*`. `ImguiX.h`'s two
+`DrawShadowedText` overloads do the same to draw the shadow and then the text.
+
+On MSVC x64 a `va_list` is a pointer passed by value, so the callee's advance does not disturb the
+caller's copy and the second read happens to work. In the System V ABI it is a one-element array
+that decays to a pointer, the callee advances the *caller's* state, and the second read walks off
+the end of the argument area. This segfaulted every standalone resource compile, immediately after
+the resource had compiled successfully. Fixed here with `va_copy`. This one is a genuine latent
+bug on Windows too, not merely a portability difference, and is the better upstream PR of the two.
 
 ### The Reflector hardcodes Windows path separators in five places
 
