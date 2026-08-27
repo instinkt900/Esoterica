@@ -38,3 +38,15 @@ Code/Base/Render/RHI_Direct3D12.cpp
 # AMD's Direct3D 12 memory allocator, vendored by upstream. The Vulkan equivalent is VMA, which
 # arrives as an External/ dependency in Phase 5 rather than a vendored source.
 Code/Base/ThirdParty/D3D12MemoryAllocator/**
+
+#-------------------------------------------------------------------------
+# Shader reflection
+#-------------------------------------------------------------------------
+
+# The Reflector's shader reflection needs DXC, which arrives in Phase 4. Reflector.cpp's
+# ReflectShaders body is guarded out, so nothing calls into these and no symbol goes undefined.
+# The headers still compile; only the sources are dropped.
+#
+# **Phase 4 reverses this by deleting this one line.** See
+# Docs/Linux/Phases/Phase4-ShaderPipeline.md.
+Code/Applications/Reflector/ShaderReflection/**

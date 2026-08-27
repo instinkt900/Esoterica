@@ -16,7 +16,13 @@ namespace EE::Reflection::Settings
 
     constexpr static char const* const g_codeFolderPath = "Code\\";
     constexpr static char const* const g_buildFolderPath = "Build\\";
+    #if _WIN32
     constexpr static char const* const g_buildTempFolderPath = "Build\\_Temp\\";
+    #else
+    // The Windows spelling creates a directory literally named "Build\_Temp\" here, because a
+    // backslash is an ordinary filename character on Linux rather than a separator.
+    constexpr static char const* const g_buildTempFolderPath = "Build/_Temp/";
+    #endif
 
     constexpr static char const* const g_runtimeEngineProjectPath = "Code\\Engine";
     constexpr static char const* const g_toolsEngineProjectPath = "Code\\EngineTools";
