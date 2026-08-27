@@ -45,8 +45,10 @@ ResourceCompiler never uses it. There is no way to defer it to Phase 7.
 ### P3.1 - `FileSystemWatcher_Linux.cpp`
 
 **New:** `Code/EngineTools/FileSystem/FileSystemWatcher_Linux.cpp`
-**Edits:** `FileSystemWatcher.h:15`, and `FileSystemWatcher.cpp` to guard its `<windows.h>`
-block.
+**Edit:** `FileSystemWatcher.h:15`. `FileSystemWatcher.cpp` needs none - it is named in
+`Exclusions.txt`. Upstream already guards its namespace body with `#if _WIN32`, but the
+`<windows.h>` include above that is unguarded, so the file has to be dropped rather than left
+to compile to nothing.
 
 The header edit is one line:
 
