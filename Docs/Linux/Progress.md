@@ -78,7 +78,8 @@ Phase 0, and the error output is Phase 1's worklist. See below.
 Files added:
 
 - `Code/Scripts/NinjaGen/Toolchain.py` - the property sheet and flag translation.
-- `Code/Scripts/NinjaGen/NinjaGen_Test.py` - 49 checks, exits 0.
+- `Code/Scripts/NinjaGen/Checks.py` - 20 checks, exits 0. See the decision below on
+  what belongs there.
 
 `Code/Scripts/NinjaGen/NinjaGen.py` is rewritten. It is the one upstream file this port replaces
 wholesale; see [01-UpstreamMerges.md](01-UpstreamMerges.md).
@@ -173,7 +174,7 @@ Files added:
 - `Code/Scripts/NinjaGen/SourceLists.py` - the list format and the build model.
   `python3 Code/Scripts/NinjaGen/SourceLists.py` prints the model and reports problems.
 - `Code/Scripts/NinjaGen/SyncUpstream.py` - the only reader of the Visual Studio projects.
-- `Code/Scripts/NinjaGen/SourceLists_Test.py` - 42 checks, no test framework, exits 0.
+- `Code/Scripts/NinjaGen/Checks.py` - the generator's checks. No test framework.
 - The three list files above.
 
 Upstream files edited: **none.** `NinjaGen.py` is untouched and still stale. P0.5 rewrites it.
@@ -216,6 +217,36 @@ the reasoning, not just the outcome.
 **Rationale:** ...
 **Alternatives rejected:** ...
 -->
+
+### 2026-08-27 - The build is the test. Check only what a green build would hide
+
+**Context:** The first cut of the generator carried 520 lines of checks against 1441 lines of
+generator, 27% of the Python. Most of it re-checked things the build proves anyway: that a rule
+passes `-std=c++20`, that `Esoterica.Base` resolves to a `.so`, that link order is topological,
+that ninja parses the file.
+
+**Decision:** One `Code/Scripts/NinjaGen/Checks.py`, 192 lines, 20 checks. **Add a check only
+when the failure would leave a green build behind.** Everything else is the compiler's job.
+
+What that leaves:
+
+| Check | Why the build cannot catch it |
+|---|---|
+| Sync drift detection | The whole safety mechanism of the three-list design. It fails silently until an upstream merge, months later. |
+| Determinism of the ninja file | Building twice never reveals a non-deterministic build file. Acceptance criterion 6. |
+| Stale exclusion globs | A glob that stopped matching silently readmits a file. |
+| Glob semantics | A wrong glob silently includes or excludes sources, and the build may still succeed. |
+| Property sheet coverage | An unmapped sheet surfaces much later as a link error naming nothing useful. |
+| No `.vcxproj` modified | The prime directive. Nothing about a successful build says the project files are untouched. |
+| `-ffast-math` never appears | It changes float behaviour without failing anything. |
+
+**Rationale:** A compile error is louder, more specific and cheaper than any assertion that
+duplicates it. Time spent asserting what the compiler already tells you is time not spent
+getting Linux to build, which is the actual goal.
+
+**Alternatives rejected:** Full coverage of the generator, which is what the first cut drifted
+towards. No checks at all, which would drop the drift detection that makes the three-list design
+safe in the first place.
 
 ### 2026-08-27 - Sanitizers on Debug and Release, never on Shipping
 
