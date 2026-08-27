@@ -10,7 +10,12 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 2 (complete on Linux).** `./RunReflection.sh` generates reflection for all five modules
+**Phase: 3 (in progress).** `Esoterica.Engine.Runtime` compiles with zero failures.
+`Esoterica.Engine.Tools` is at 128 of 144. Shader *reflection* works and generates its 28 `.esh`
+headers; shader *compilation* is blocked on the D3D12 bindless model, which is a Phase 5 design
+question. See the Phase 3 entry below.
+
+Previously: **Phase 2 (complete on Linux).** `./RunReflection.sh` generates reflection for all five modules
 and exits 0. 245 files, 238 of them `.cpp`. The run is idempotent, and clean plus rebuild
 reproduces byte-identical output. The Windows build has not been run.
 

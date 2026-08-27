@@ -91,6 +91,7 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Engine/Render/Device/DeviceRenderView.cpp` | `"base/Render/RHI.h"` to `"Base/Render/RHI.h"`. Case mismatch. | 3 | done |
 | `Code/Engine/**`, `Code/EngineTools/**` (6 files) | `<eastl/...>` to `<EASTL/...>`. Case mismatches; the directory is `EASTL`. | 3 | done |
 | `Code/Base/Types/Path.h` | `TPath::IsParentOf` called `potentialChild.size()` and `potentialChild.m_path[i]`. `TPath` has neither: the accessor is `Size()` and the member is `m_elements`. The function has evidently never been instantiated, so MSVC never looked inside it. Fixing it cleared 96 of EngineTools' 110 errors. | 3 | done |
+| `Code/EngineTools/Entity/EntityEditor/EntityEditor_EntityItem.h`, `EntityEditor_UndoableAction.h`, `Code/EngineTools/Game/ResourceEditors/ResourceEditor_Hitbox.h` | Forward-declare `class EntityWorld;` in namespace `EE`. All three use it as a pointer without declaring it; MSVC finds it through another translation unit's includes. Declared rather than including `EntityWorld.h`, which would pull the whole engine world into a tools header. Cleared 20 errors. | 3 | done |
 | `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. 552 lines of COM `IFileDialog`. New sibling `SystemDialogs_Linux.cpp` provides the symbols. | 3 | done |
 
 ## Phase 4 (brought forward) - Shader pipeline
@@ -130,6 +131,7 @@ the same interface.
 |---|---|---|---|
 | `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.h` | Wrap the body in `#ifdef _WIN32`. It includes `d3d12shader.h` and `dxcapi.h`, and it is the **only** shader reflection header that needs DXC. **Phase 4 reverses this.** | 2 | done |
 | `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.cpp` | As above. | 2 | done |
+| `Code/EngineTools/Entity/EntityEditor/EntityEditor_EntityItem.h`, `EntityEditor_UndoableAction.h`, `Code/EngineTools/Game/ResourceEditors/ResourceEditor_Hitbox.h` | Forward-declare `class EntityWorld;` in namespace `EE`. All three use it as a pointer without declaring it; MSVC finds it through another translation unit's includes. Declared rather than including `EntityWorld.h`, which would pull the whole engine world into a tools header. Cleared 20 errors. | 3 | done |
 | `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. It is 552 lines of COM `IFileDialog` code, with an unguarded `<windows.h>` and `<shobjidl.h>` include at line 5. New sibling: `SystemDialogs_Linux.cpp`. | 7 | planned |
 
 ## Confirmed to need no change
