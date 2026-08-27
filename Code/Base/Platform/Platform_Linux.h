@@ -38,6 +38,13 @@ EE_FORCE_INLINE int _strnicmp( char const* pLHS, char const* pRHS, size_t count 
     return strncasecmp( pLHS, pRHS, count );
 }
 
+// The unprefixed spelling, which the Reflector's shader code generator uses. It is a deprecated
+// POSIX name that glibc does not declare under a strict -std=c++20.
+EE_FORCE_INLINE int stricmp( char const* pLHS, char const* pRHS )
+{
+    return strcasecmp( pLHS, pRHS );
+}
+
 // MSVC's strncpy_s always null-terminates and returns 0 on success. strncpy does neither, so
 // this is a bounded copy plus an explicit terminator rather than a straight forward.
 EE_FORCE_INLINE int strncpy_s( char* pDestination, size_t destinationSize, char const* pSource, size_t count )
@@ -51,6 +58,41 @@ EE_FORCE_INLINE int strncpy_s( char* pDestination, size_t destinationSize, char 
     memcpy( pDestination, pSource, numCharsToCopy );
     pDestination[numCharsToCopy] = 0;
     return 0;
+}
+
+// MSVC also supplies a template overload that deduces the destination size from an array, and
+// the call sites use both forms.
+template<size_t N>
+EE_FORCE_INLINE int strncpy_s( char ( &destination )[N], char const* pSource, size_t count )
+{
+    return strncpy_s( destination, N, pSource, count );
+}
+
+// MSVC's strcpy_s truncates nothing - it fails if the source does not fit. Mirror that, since
+// callers rely on the destination being untouched rather than silently cut short.
+EE_FORCE_INLINE int strcpy_s( char* pDestination, size_t destinationSize, char const* pSource )
+{
+    if ( pDestination == nullptr || pSource == nullptr || destinationSize == 0 )
+    {
+        return 22; // EINVAL, which is what the MSVC version returns
+    }
+
+    size_t const sourceLength = strlen( pSource );
+    if ( sourceLength >= destinationSize )
+    {
+        pDestination[0] = 0;
+        return 34; // ERANGE, which is what the MSVC version returns
+    }
+
+    memcpy( pDestination, pSource, sourceLength + 1 );
+    return 0;
+}
+
+// MSVC provides a template overload that deduces the size of a fixed array destination.
+template<size_t N>
+EE_FORCE_INLINE int strcpy_s( char ( &destination )[N], char const* pSource )
+{
+    return strcpy_s( destination, N, pSource );
 }
 
 EE_FORCE_INLINE int vsprintf_s( char* pBuffer, size_t bufferSize, char const* pFormat, va_list args )

@@ -120,7 +120,7 @@ namespace EE::Resource
 
         ~CompileContext();
 
-        inline bool HasValidArguments() const;
+        bool HasValidArguments() const;
         inline bool IsValid() const { return m_pResourceToCompile != nullptr; }
 
         EE_FORCE_INLINE bool IsCompilingForDevelopmentBuild() const { return !m_isCompilingForPackagedBuild; }

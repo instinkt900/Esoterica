@@ -729,7 +729,10 @@ namespace EE::Render
 
         m_initializeBuffers_MeshInstance[frameIndex].UpdateDeviceResources
         (
-            Math::Max( 1ULL, m_initializeCommands_MeshInstance.size() ) * sizeof( ShaderTypes::MeshInstanceInitializeCommand ),
+            // size_t( 1 ), not 1ULL. Math::Max deduces one type from both arguments, and on
+            // Windows size_t *is* unsigned long long so they agree. Linux is LP64, where size_t
+            // is unsigned long, and the deduction becomes ambiguous.
+            Math::Max( size_t( 1 ), m_initializeCommands_MeshInstance.size() ) * sizeof( ShaderTypes::MeshInstanceInitializeCommand ),
             UpdateBuffer_MeshInstanceInitialize
         );
     }

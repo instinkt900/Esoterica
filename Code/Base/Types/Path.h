@@ -34,14 +34,18 @@ namespace EE
 
         bool IsParentOf( TPath<T> const &potentialChild ) const
         {
-            if ( potentialChild.size() < m_elements.size() )
+            // Was potentialChild.size() and potentialChild.m_path[i]. TPath has neither: the
+            // accessor is Size() and the member is m_elements. This function has evidently never
+            // been instantiated, so the mistake is invisible on MSVC, which does not look inside
+            // an uninstantiated template.
+            if ( potentialChild.Size() < m_elements.size() )
             {
                 return false;
             }
 
             for ( int32_t i = 0; i < m_elements.size(); i++ )
             {
-                if ( m_elements[i] != potentialChild.m_path[i] )
+                if ( m_elements[i] != potentialChild.m_elements[i] )
                 {
                     return false;
                 }

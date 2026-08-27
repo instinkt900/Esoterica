@@ -115,7 +115,16 @@ namespace EE::ImGuiX
         ImVec2 const cursorPos = ImGui::GetCursorPos();
         ImGui::SetCursorPos( cursorPos + ImVec2( 0, 1 ) );
         ImGui::Indent( 1 );
-        ImGui::TextColoredV( shadowColor, pFormat, args );
+
+        // va_copy, because a va_list is consumed by the call that reads it. On MSVC x64 a va_list
+        // is a pointer passed by value, so drawing twice from one list happens to work; in the
+        // System V ABI it is an array that decays, the callee advances this function's own state,
+        // and the second draw walks off the end of the argument area.
+        va_list shadowArgs;
+        va_copy( shadowArgs, args );
+        ImGui::TextColoredV( shadowColor, pFormat, shadowArgs );
+        va_end( shadowArgs );
+
         ImGui::Unindent( 1 );
         ImGui::SetCursorPos( cursorPos );
         ImGui::TextColoredV( textColor, pFormat, args );
@@ -131,7 +140,16 @@ namespace EE::ImGuiX
         ImVec2 const cursorPos = ImGui::GetCursorPos();
         ImGui::SetCursorPos( cursorPos + ImVec2( 0, 1 ) );
         ImGui::Indent( 1 );
-        ImGui::TextColoredV( Colors::Black, pFormat, args );
+
+        // va_copy, because a va_list is consumed by the call that reads it. On MSVC x64 a va_list
+        // is a pointer passed by value, so drawing twice from one list happens to work; in the
+        // System V ABI it is an array that decays, the callee advances this function's own state,
+        // and the second draw walks off the end of the argument area.
+        va_list shadowArgs;
+        va_copy( shadowArgs, args );
+        ImGui::TextColoredV( Colors::Black, pFormat, shadowArgs );
+        va_end( shadowArgs );
+
         ImGui::Unindent( 1 );
         ImGui::SetCursorPos( cursorPos );
         ImGui::TextColoredV( textColor, pFormat, args );
@@ -540,7 +558,7 @@ namespace EE::ImGuiX
         void Update();
 
         // Clear the filter
-        inline void Clear();
+        void Clear();
 
         // Do we have a filter set?
         inline bool HasFilterSet() const { return !m_tokens.empty(); }

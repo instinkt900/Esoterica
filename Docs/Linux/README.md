@@ -103,5 +103,7 @@ These were decided at planning time. Change one only with a deliberate decision 
 
 ## Status
 
-See [Progress.md](Progress.md). **Phase 0 is in progress.** P0.1 to P0.4 are done: the source
-lists and the sync tool. The ninja emitter, P0.5 to P0.8, is next.
+See [Progress.md](Progress.md). **Phases 0, 1, 2 and 3 are done on Linux.** The resource compiler
+builds, links, and compiles the textures, meshes, physics data and map under `Data/`. Materials
+wait on the shader pipeline. **Phase 4, the shader pipeline, is next**, and it is the gate on both
+the remaining materials and the renderer.

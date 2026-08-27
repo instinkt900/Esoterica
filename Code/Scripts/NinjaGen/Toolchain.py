@@ -64,6 +64,16 @@ ESOTERICA_INCLUDE_DIRECTORIES = (
     # Esoterica.props imports Optick.props transitively, so every project gets this path even
     # though no .vcxproj names the sheet. Base/Profiling.h includes <optick.h> unconditionally.
     'External/Optick/include',
+
+    # The Linux stand-in for the Windows SDK.
+    #
+    # The Reflector includes <dxcapi.h> but imports neither DXC.props nor anything else that
+    # would supply it: on Windows it ships with the Windows SDK and is on the compiler's default
+    # search path. There is no such default here, so the path is global rather than attached to
+    # a property sheet, which is what makes it reachable the way the SDK is.
+    #
+    # The DXC *library* stays on DXC.props, where the .vcxproj files actually declare it.
+    'External/DirectXShaderCompiler/inc/dxc',
 )
 
 # EA.props: EASTL_USER_CONFIG_HEADER=$(EE_EASTL_USER_CONFIG_HEADER), whose value already
@@ -227,8 +237,12 @@ SHEETS = {
 
     'FreeType':              Sheet( pkg_config = 'freetype2' ),
     'SQLite':                Sheet( libraries = ( 'sqlite3', ) ),
-    'MeshOptimizer':         Sheet( libraries = ( 'meshoptimizer', ),
-                                    requires_path = 'External/meshoptimizer',
+    # MeshOptimizer.props points at src/ for headers and lib/ for the library, rather than a
+    # conventional include/ prefix. DownloadDependencies.sh lays it out to match.
+    'MeshOptimizer':         Sheet( include_directories = ( 'External/MeshOptimizer/src', ),
+                                    library_directories = ( 'External/MeshOptimizer/lib', ),
+                                    libraries = ( 'meshoptimizer', ),
+                                    requires_path = 'External/MeshOptimizer',
                                     deferred_to_phase = 'Phase 3' ),
     # The install puts headers under include/GameNetworkingSockets/steam, and the engine writes
     # #include <steam/...>, so the search path is one level deeper than the install prefix.
@@ -238,12 +252,25 @@ SHEETS = {
     'ixWebSocket':           Sheet( include_directories = ( 'External/ixwebsocket/include', ),
                                     library_directories = ( 'External/ixwebsocket/lib', ),
                                     libraries = ( 'ixwebsocket', 'z', 'ssl', 'crypto' ) ),
-    'CTT':                   Sheet( libraries = ( 'ctt_capi', ),
-                                    requires_path = 'External/CTT',
-                                    deferred_to_phase = 'Phase 3' ),
-    'DXC':                   Sheet( libraries = ( 'dxcompiler', ),
-                                    library_directories = ( 'External/DXC/lib', ),
-                                    requires_path = 'External/DXC',
+    # ctt is an open-source Rust crate with C bindings, not the closed Windows blob the layout
+    # suggests. The prebuilt External.zip ships only ctt_capi.dll, so DownloadDependencies.sh
+    # builds ctt-c-api 0.5.0 from crates.io instead - same library, same version, same ctt.h.
+    # Lower-case "ctt", to match CTT.props and the directory the Windows zip extracts. The path
+    # was spelled "External/CTT" before, which happens to work on Windows and never on Linux.
+    'CTT':                   Sheet( include_directories = ( 'External/ctt/include', ),
+                                    library_directories = ( 'External/ctt/lib', ),
+                                    libraries = ( 'ctt_capi', ),
+                                    requires_path = 'External/ctt' ),
+    # DXC.props points at External/DirectXShaderCompiler with inc/ and lib/x64/.
+    #
+    # Two include paths, not one. The Linux tarball nests its headers under inc/dxc, and
+    # ShaderReflection_ShaderCompiler.h also includes d3d12shader.h, which is a Windows SDK
+    # header that the tarball does not ship. DirectX-Headers supplies it; that is the project
+    # Microsoft publishes for exactly this gap.
+    # Include paths are global; see ESOTERICA_INCLUDE_DIRECTORIES for why.
+    'DXC':                   Sheet( library_directories = ( 'External/DirectXShaderCompiler/lib/x64', ),
+                                    libraries = ( 'dxcompiler', ),
+                                    requires_path = 'External/DirectXShaderCompiler',
                                     deferred_to_phase = 'Phase 4' ),
     'LLVM':                  Sheet( include_directories = ( 'External/LLVM/include', ),
                                     library_directories = ( 'External/LLVM/lib', ),

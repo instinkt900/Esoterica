@@ -25,6 +25,14 @@
 # directories later.
 **/Win32/**
 
+# Windows implementations that carry no suffix at all. Same rule as the two globs above - the
+# file is a Windows implementation and its _Linux sibling is listed in LinuxSources.txt - but
+# the name gives the generator nothing to match on, so each one needs a line of its own.
+
+# 552 lines of COM IFileDialog. The shared header is SystemDialogs.h, which both sides include;
+# excluding the .cpp drops only the Windows implementation. Sibling: SystemDialogs_Linux.cpp.
+Code/EngineTools/Core/SystemDialogs.cpp
+
 #-------------------------------------------------------------------------
 # Direct3D 12
 #-------------------------------------------------------------------------
@@ -39,14 +47,14 @@ Code/Base/Render/RHI_Direct3D12.cpp
 # arrives as an External/ dependency in Phase 5 rather than a vendored source.
 Code/Base/ThirdParty/D3D12MemoryAllocator/**
 
+
 #-------------------------------------------------------------------------
-# Shader reflection
+# Windows-only build tooling
 #-------------------------------------------------------------------------
 
-# The Reflector's shader reflection needs DXC, which arrives in Phase 4. Reflector.cpp's
-# ReflectShaders body is guarded out, so nothing calls into these and no symbol goes undefined.
-# The headers still compile; only the sources are dropped.
-#
-# **Phase 4 reverses this by deleting this one line.** See
-# Docs/Linux/Phases/Phase4-ShaderPipeline.md.
-Code/Applications/Reflector/ShaderReflection/**
+# BuildGeneratorApplication.cpp parses Esoterica.slnx and writes the per-module reflection file
+# lists that MSBuild consumes. It is the MSBuild half of the build system, and NinjaGen.py does
+# the same job here from the three source lists. Its only actual compile error is __debugbreak,
+# so a shim would make it build - but building a .sln parser on a platform with no .sln is
+# pointless, and the shim would be the first of many.
+Code/Applications/BuildGenerator/**

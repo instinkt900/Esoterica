@@ -58,6 +58,28 @@ requirements_llvm()
     require_command xz xz-utils
 }
 
+requirements_dxc()
+{
+    require_command curl curl
+    require_command tar tar
+}
+
+requirements_directx_headers() { :; }
+
+requirements_ctt()
+{
+    require_command curl curl
+    require_command tar tar
+    require_command cargo rustup
+    require_command c++ build-essential
+}
+
+requirements_meshoptimizer()
+{
+    require_command cmake cmake
+    require_command ninja ninja-build
+}
+
 requirements_ixwebsocket()
 {
     require_command cmake cmake
@@ -176,6 +198,118 @@ fetch_llvm()
     info "LLVM $( "${target}/bin/llvm-config" --version ) installed"
 }
 
+# DXC, the DirectX Shader Compiler. The Reflector's shader reflection pass and the shader
+# pipeline both need it, and eight Engine Render files include generated .esh reflection headers
+# that only exist once it has run.
+#
+# Microsoft ships official prebuilt Linux binaries, so this is a download rather than a build.
+# DXC is LLVM-based and building it from source takes tens of minutes.
+#
+# DXC.props expects External/DirectXShaderCompiler with inc/ and lib/x64/, so the tarball is
+# rearranged to match rather than inventing a second layout.
+DXC_VERSION="v1.10.2605.37"
+DXC_URL="https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_VERSION}/linux_dxc_2026_08_11.x86_64.tar.gz"
+
+# DirectX-Headers. Microsoft's cross-platform D3D12 headers.
+#
+# Not in the plan, and needed: shader reflection uses ID3D12ShaderReflection, declared in
+# d3d12shader.h, which is a Windows SDK header. The Linux DXC tarball does not ship it. This is
+# the project Microsoft publishes for exactly that gap, and it is what DXC's own Linux
+# consumers use.
+DIRECTX_HEADERS_REPO="https://github.com/microsoft/DirectX-Headers.git"
+DIRECTX_HEADERS_TAG="v1.619.5"
+
+fetch_directx_headers()
+{
+    local target="${EXTERNAL_DIR}/DirectX-Headers"
+
+    if [[ -f "${target}/include/directx/d3d12shader.h" ]]
+    then
+        info "DirectX-Headers already present"
+        return
+    fi
+
+    info "fetching DirectX-Headers ${DIRECTX_HEADERS_TAG}"
+    rm -rf "${target}"
+    git clone -q --depth 1 --branch "${DIRECTX_HEADERS_TAG}" "${DIRECTX_HEADERS_REPO}" "${target}"
+
+    # d3dcommon.h includes "rpc.h", which does not exist off Windows. DirectX-Headers ships a
+    # stub for it, but the whole wsl/stubs directory cannot go on the include path: its COM
+    # shims collide with the ones in DXC's own WinAdapter.h, which turns one missing header into
+    # twenty redefinition errors. Only rpc.h is needed, and it is an empty stub, so it gets a
+    # directory of its own.
+    mkdir -p "${target}/include/linux-shims"
+    cp "${target}/include/wsl/stubs/rpc.h" "${target}/include/linux-shims/"
+
+    info "DirectX-Headers installed"
+}
+
+fetch_dxc()
+{
+    local target="${EXTERNAL_DIR}/DirectXShaderCompiler"
+
+    if [[ -f "${target}/lib/x64/libdxcompiler.so" ]]
+    then
+        info "DXC already present"
+        return
+    fi
+
+    info "fetching DXC ${DXC_VERSION}"
+    rm -rf "${target}" "${target}.tar.gz" "${target}.tmp"
+    curl -fL --no-progress-meter -o "${target}.tar.gz" "${DXC_URL}"
+
+    mkdir -p "${target}.tmp"
+    tar -xzf "${target}.tar.gz" -C "${target}.tmp"
+    rm -f "${target}.tar.gz"
+
+    mkdir -p "${target}/inc" "${target}/lib/x64" "${target}/bin/x64"
+    cp -r "${target}.tmp"/include/* "${target}/inc/" 2>/dev/null || true
+    find "${target}.tmp" -name 'libdxcompiler.so*' -exec cp -P {} "${target}/lib/x64/" \;
+    find "${target}.tmp" -name 'libdxil.so*' -exec cp -P {} "${target}/lib/x64/" \;
+    find "${target}.tmp" -name 'dxc' -type f -exec cp {} "${target}/bin/x64/" \;
+    rm -rf "${target}.tmp"
+
+    info "DXC installed"
+}
+
+# MeshOptimizer. Engine and EngineTools use it for mesh simplification and vertex cache
+# optimisation. MeshOptimizer.props points at External/MeshOptimizer/src for headers and
+# External/MeshOptimizer/lib for the library, so the layout here matches that rather than
+# CMake's default install prefix.
+MESHOPT_REPO="https://github.com/zeux/meshoptimizer.git"
+# v1.2, not something older. Engine calls meshopt_buildMeshletsSpatial and
+# meshopt_computePositionExponent, neither of which exists before v0.24.
+MESHOPT_TAG="v1.2"
+
+fetch_meshoptimizer()
+{
+    local target="${EXTERNAL_DIR}/MeshOptimizer"
+
+    if [[ -f "${target}/src/meshoptimizer.h" && -f "${target}/lib/libmeshoptimizer.a" ]]
+    then
+        info "MeshOptimizer already present"
+        return
+    fi
+
+    info "fetching MeshOptimizer ${MESHOPT_TAG}"
+    rm -rf "${target}.src"
+    git clone -q --depth 1 --branch "${MESHOPT_TAG}" "${MESHOPT_REPO}" "${target}.src"
+
+    info "building MeshOptimizer"
+    cmake -S "${target}.src" -B "${target}.src/build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DMESHOPT_BUILD_DEMO=OFF
+    cmake --build "${target}.src/build" --parallel "${BUILD_JOBS}"
+
+    mkdir -p "${target}/src" "${target}/lib"
+    cp "${target}.src"/src/*.h "${target}/src/"
+    find "${target}.src/build" -name 'libmeshoptimizer.a' -exec cp {} "${target}/lib/" \;
+
+    rm -rf "${target}.src"
+    info "MeshOptimizer installed"
+}
+
 # ixWebSocket. Base/Network uses it for the resource server connection.
 IXWEBSOCKET_REPO="https://github.com/machinezone/IXWebSocket.git"
 # v12.0.1, not something older. Base/Network/Servers/NetworkServer_WebSockets.cpp constructs
@@ -246,9 +380,71 @@ fetch_gamenetworkingsockets()
     rm -rf "${target}.src"
 }
 
+# ctt, GPU texture compression. EngineTools/Render/ResourceCompilers/ResourceCompiler_RenderTexture.cpp
+# includes <ctt.h> and calls 64 of its symbols, so this is not optional for the resource compiler.
+#
+# The Windows path fetches a prebuilt ctt_capi.dll out of upstream's External.zip, and that zip
+# holds no Linux binary. ctt itself is open source though - a Rust crate with C bindings, MIT /
+# Apache-2.0 / Zlib - so this builds the same library rather than substituting a different
+# compressor. That distinction matters: swapping in ispc_texcomp or bc7enc would change the
+# compressed bytes and break byte-identical output between Linux and Windows. This does not.
+#
+# 0.5.0, to match what upstream ships. The header in External.zip is dated three days after
+# ctt-c-api 0.5.0 was published, and every ctt_* and CTT_* identifier the engine uses is present
+# in the 0.5.0 header. Bumping this without checking that again risks a silent API drift.
+#
+# The crates.io tarball is used rather than a git clone: it is the exact published artifact, it
+# carries a Cargo.lock, and it needs no submodules. Default features give the full encoder set
+# (bc7enc, Intel ISPC, etcpak, AMD Compressonator, astcenc) with prebuilt ISPC static libraries,
+# so no ispc compiler is needed on PATH.
+CTT_VERSION="0.5.0"
+CTT_URL="https://static.crates.io/crates/ctt-c-api/ctt-c-api-${CTT_VERSION}.crate"
+
+fetch_ctt()
+{
+    local target="${EXTERNAL_DIR}/ctt"
+
+    if [[ -f "${target}/lib/libctt_capi.so" && -f "${target}/include/ctt.h" ]]
+    then
+        info "ctt already present"
+        return
+    fi
+
+    # MSRV is 1.90 and the crate is edition 2024. An older toolchain fails deep inside cargo's
+    # resolver with a message that does not mention the version, so check it here instead.
+    local rustc_version
+    rustc_version=$( cargo --version | awk '{print $2}' )
+    if [[ "$( printf '%s\n1.90.0\n' "${rustc_version}" | sort -V | head -1 )" != "1.90.0" ]]
+    then
+        fail "ctt needs Rust 1.90 or newer, found ${rustc_version}. Update it:
+
+    rustup update stable
+"
+    fi
+
+    info "fetching ctt ${CTT_VERSION}"
+    rm -rf "${target}.src" "${target}.crate"
+    curl -fL --no-progress-meter -o "${target}.crate" "${CTT_URL}"
+    mkdir -p "${target}.src"
+    tar -xzf "${target}.crate" -C "${target}.src" --strip-components=1
+    rm -f "${target}.crate"
+
+    info "building ctt (this compiles five C/C++ encoder backends, so it takes a while)"
+    cargo build --release --manifest-path "${target}.src/Cargo.toml"
+
+    # CTT.props expects External/ctt/include and External/ctt/lib, which is also where the
+    # Windows zip puts them, so the same property sheet mapping works on both platforms.
+    mkdir -p "${target}/include" "${target}/lib"
+    cp "${target}.src/include/ctt.h" "${target}/include/"
+    cp "${target}.src/target/release/libctt_capi.so" "${target}/lib/"
+
+    rm -rf "${target}.src"
+    info "ctt installed"
+}
+
 #-------------------------------------------------------------------------
 
-ALL_DEPENDENCIES=( optick ixwebsocket gamenetworkingsockets llvm )
+ALL_DEPENDENCIES=( optick meshoptimizer ctt ixwebsocket gamenetworkingsockets directx_headers dxc llvm )
 
 list_dependencies()
 {
@@ -258,6 +454,10 @@ list_dependencies()
         local status="not fetched"
         case "${name}" in
             optick)                 [[ -f "${EXTERNAL_DIR}/Optick/include/optick.h" ]] && status="ready" ;;
+            meshoptimizer)          [[ -f "${EXTERNAL_DIR}/MeshOptimizer/lib/libmeshoptimizer.a" ]] && status="ready" ;;
+            ctt)                    [[ -f "${EXTERNAL_DIR}/ctt/lib/libctt_capi.so" ]] && status="ready (${CTT_VERSION})" ;;
+            dxc)                    [[ -f "${EXTERNAL_DIR}/DirectXShaderCompiler/lib/x64/libdxcompiler.so" ]] && status="ready" ;;
+            directx_headers)        [[ -f "${EXTERNAL_DIR}/DirectX-Headers/include/directx/d3d12shader.h" ]] && status="ready" ;;
             ixwebsocket)            [[ -f "${EXTERNAL_DIR}/ixwebsocket/include/ixwebsocket/IXWebSocket.h" ]] && status="ready" ;;
             gamenetworkingsockets)  [[ -f "${EXTERNAL_DIR}/GameNetworkingSockets/include/GameNetworkingSockets/steam/steamnetworkingsockets.h" ]] && status="ready" ;;
             llvm)                   [[ -f "${EXTERNAL_DIR}/LLVM/bin/llvm-config" ]] && status="ready ($( "${EXTERNAL_DIR}/LLVM/bin/llvm-config" --version ))" ;;
@@ -287,6 +487,10 @@ main()
     do
         case "${name}" in
             optick)                 fetch_optick ;;
+            meshoptimizer)          fetch_meshoptimizer ;;
+            ctt)                    fetch_ctt ;;
+            dxc)                    fetch_dxc ;;
+            directx_headers)        fetch_directx_headers ;;
             ixwebsocket)            fetch_ixwebsocket ;;
             gamenetworkingsockets)  fetch_gamenetworkingsockets ;;
             llvm)                   fetch_llvm ;;

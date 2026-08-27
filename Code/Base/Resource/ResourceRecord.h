@@ -74,7 +74,7 @@ namespace EE::Resource
         //-------------------------------------------------------------------------
 
         #if EE_DEVELOPMENT_TOOLS
-        inline ResourceLoadStage GetLoadStage() const;
+        ResourceLoadStage GetLoadStage() const;
 
         inline Milliseconds GetFileReadTime() const { return m_fileReadTime; }
         Milliseconds GetLoadStageTime( ResourceLoadStage stage ) const;

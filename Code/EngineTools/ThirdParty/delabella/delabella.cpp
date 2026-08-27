@@ -38,6 +38,8 @@ uint64_t sorting_bench = 0;
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <time.h>  // clock_gettime / CLOCK_MONOTONIC
 #endif
 
 static uint64_t uSec()

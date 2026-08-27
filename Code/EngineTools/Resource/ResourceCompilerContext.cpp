@@ -155,9 +155,16 @@ namespace EE::Resource
     {
         va_list args;
         va_start( args, pFormat );
+        // va_copy, because a va_list is consumed by the call that reads it. On MSVC x64 a va_list
+        // is a pointer passed by value, so a second use of the same list happens to work; in the
+        // System V ABI it is an array that decays, the callee advances the caller's own state,
+        // and the second read walks off the end of the argument area.
         if ( m_isStandaloneCompile )
         {
-            SystemLog::AddEntryVarArgs( Severity::Error, "Resource", m_compilerName.c_str(), __FILE__, __LINE__, pFormat, args );
+            va_list systemLogArgs;
+            va_copy( systemLogArgs, args );
+            SystemLog::AddEntryVarArgs( Severity::Error, "Resource", m_compilerName.c_str(), __FILE__, __LINE__, pFormat, systemLogArgs );
+            va_end( systemLogArgs );
         }
         m_log.LogError( pFormat, args );
         va_end( args );
@@ -169,9 +176,16 @@ namespace EE::Resource
     {
         va_list args;
         va_start( args, pFormat );
+        // va_copy, because a va_list is consumed by the call that reads it. On MSVC x64 a va_list
+        // is a pointer passed by value, so a second use of the same list happens to work; in the
+        // System V ABI it is an array that decays, the callee advances the caller's own state,
+        // and the second read walks off the end of the argument area.
         if ( m_isStandaloneCompile )
         {
-            SystemLog::AddEntryVarArgs( Severity::Warning, "Resource", m_compilerName.c_str(), __FILE__, __LINE__, pFormat, args );
+            va_list systemLogArgs;
+            va_copy( systemLogArgs, args );
+            SystemLog::AddEntryVarArgs( Severity::Warning, "Resource", m_compilerName.c_str(), __FILE__, __LINE__, pFormat, systemLogArgs );
+            va_end( systemLogArgs );
         }
         m_log.LogWarning( pFormat, args );
         va_end( args );
@@ -181,9 +195,16 @@ namespace EE::Resource
     {
         va_list args;
         va_start( args, pFormat );
+        // va_copy, because a va_list is consumed by the call that reads it. On MSVC x64 a va_list
+        // is a pointer passed by value, so a second use of the same list happens to work; in the
+        // System V ABI it is an array that decays, the callee advances the caller's own state,
+        // and the second read walks off the end of the argument area.
         if ( m_isStandaloneCompile )
         {
-            SystemLog::AddEntryVarArgs( Severity::Info, "Resource", m_compilerName.c_str(), __FILE__, __LINE__, pFormat, args );
+            va_list systemLogArgs;
+            va_copy( systemLogArgs, args );
+            SystemLog::AddEntryVarArgs( Severity::Info, "Resource", m_compilerName.c_str(), __FILE__, __LINE__, pFormat, systemLogArgs );
+            va_end( systemLogArgs );
         }
         m_log.LogInfo( pFormat, args );
         va_end( args );
