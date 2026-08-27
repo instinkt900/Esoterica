@@ -347,8 +347,8 @@ question to "Decisions made" once you answer it.
 | 2 | Which LLVM version does the Reflector need, and does `clangAST` compile against it on Linux? | Phase 2 | open |
 | 3 | Use `volk`, or the plain Vulkan loader? | Phase 5 | open |
 | 4 | Do the target distros package SDL3, or must we always build it? | Phase 6 | open |
-| 5 | Does `GameNetworkingSockets` block the first `Base` link, or can we defer it? | Phase 1 | open |
-| 6 | Does the `VirtualAlloc` region in `Memory.cpp` (`PageAllocator`, near line 234) have a working non-Windows path? | Phase 1 | open |
+| 5 | ~~Does `GameNetworkingSockets` block the first `Base` link?~~ | Phase 1 | **answered: yes, and at compile time, not link** |
+| 6 | ~~Does the `VirtualAlloc` region in `Memory.cpp` have a working non-Windows path?~~ | Phase 1 | **answered: no** |
 
 Answered:
 
