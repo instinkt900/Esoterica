@@ -53,7 +53,8 @@ the build system does.
 
 What it costs is worse. A source list derived from filenames needs rules to decide what is
 Windows-only, and those rules are guesses. The first implementation dropped
-`SystemDialogs_Linux.cpp` because nothing was excluded from its directory, and it kept
+`SystemDialogs_Linux.cpp`, because at the time nothing was excluded from its directory, and it
+kept
 `RHI_Direct3D12.cpp` and `ThirdParty/D3D12MemoryAllocator/` because neither carries a platform
 suffix. Every one of those is silent. An explicit list cannot make that class of mistake, and
 `Exclusions.txt` states *why* each file is dropped, which no heuristic can.

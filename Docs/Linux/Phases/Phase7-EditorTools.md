@@ -54,8 +54,9 @@ is the most visible part of the editor's UX.
 
 **New:** `Code/EngineTools/Core/SystemDialogs_Linux.cpp`
 
-**Edit:** `Code/EngineTools/Core/SystemDialogs.cpp`. Phase 3, P3.3 should already have wrapped it
-in `#ifdef _WIN32`. Confirm that.
+**No edit to `Code/EngineTools/Core/SystemDialogs.cpp`.** Phase 3 excluded it in
+`Code/Scripts/NinjaGen/Exclusions.txt` and wrote the halting sibling this task replaces. The
+upstream file stays byte-identical.
 
 The Windows implementation uses COM `IFileDialog` with `COMDLG_FILTERSPEC`. Read
 `Code/EngineTools/Core/SystemDialogs.h` for the interface to implement: `FileDialog::Result`,

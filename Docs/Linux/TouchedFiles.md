@@ -16,7 +16,7 @@ Status values: `planned` · `done` · `not needed` (checked, and confirmed unnec
 | Category | Count |
 |---|---|
 | Files needing a 2-line `#elif` or `\|\|` addition | 7 |
-| Files needing a whole-body guard wrap (2 lines) | 1 |
+| Files needing a whole-body guard wrap (2 lines) | 0 - the one candidate is an exclusion instead |
 | Files needing a real edit | 5 |
 | Files confirmed to need **no** change | 3 |
 | **New** files added (no upstream conflict possible) | ~40 |
@@ -97,7 +97,6 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Engine/Render/Device/DeviceRenderWorld.cpp` | `Math::Max( 1ULL, ...size() )` to `Math::Max( size_t( 1 ), ... )`. `Math::Max` deduces one type from both arguments; on Windows `size_t` *is* `unsigned long long` so they agree, and on LP64 Linux it is `unsigned long`. | 3 | done |
 | `Code/EngineTools/Game/ResourceEditors/ResourceEditor_Hitbox.h` (2) | Forward-declare `class Hitbox;`. Used as a pointer at line 163 and never declared, which broke the class and cascaded into a dozen "cannot initialize object parameter" errors that looked like a broken inheritance chain. | 3 | done |
 | `Code/EngineTools/Import/Formats/FBX.cpp` | `"EngineTools/Import/importedSkeleton.h"` to `ImportedSkeleton.h`. Case mismatch. | 3 | done |
-| `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. 552 lines of COM `IFileDialog`. New sibling `SystemDialogs_Linux.cpp` provides the symbols. | 3 | done |
 | `Code/Base/Math/MathUtils.cpp` | Drop `inline` from the three `ToString` definitions. `MathUtils.h` declares them `EE_BASE_API` without it, so the `.cpp` definition is the only one, and an `inline` function that no other TU can see is emitted nowhere. MSVC exports it anyway through `__declspec( dllexport )`. | 3 | done |
 | `Code/Base/Resource/ResourceRecord.h`, `Code/Base/Input/InputSystem.h`, `Code/Base/Imgui/ImguiX.h`, `Code/Engine/Animation/AnimationSkeleton.h`, `Animation_RuntimeGraph_Instance.h` (2), `Animation_RuntimeGraphNode_Blend1D.h`, `Code/EngineTools/Resource/ResourceCompilerContext.h` | The same defect, mirrored: 8 declarations marked `inline` whose only definition is out of line in the matching `.cpp`. That is ill-formed - an inline function must be defined in every TU that uses it - and clang emits nothing. Dropping `inline` is correct on both compilers. | 3 | done |
 | `Code/Base/Render/PageAllocator.h` | `TArrayView( ... )` to `TArrayView<T>( ... )`. Class template argument deduction through the alias makes clang build `eastl::span`'s implicit deduction guides with the alias's fixed extent, and `span( T (&)[N] ) -> span<T, N>` then forms an array of `size_t( -1 )` elements. `m_data` is `TArrayView<T>`, so nothing was being deduced. | 3 | done |
@@ -134,22 +133,23 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 
 ## Whole-body guard wrap
 
-Use "wrap, do not split" to make an unguarded Windows-only translation unit inert on Linux. Add
-`#ifdef _WIN32` as the first line and `#endif` as the last. That is **two lines added, zero
-modified**, which is the cheapest possible diff. Then add a `_Linux.cpp` sibling that implements
-the same interface.
+"Wrap, do not split" makes an unguarded Windows-only file inert on Linux: `#ifdef _WIN32` as
+the first line, `#endif` as the last. Two lines added, zero modified.
+
+**Use it only on a header.** A `.cpp` needs no edit at all - name it in
+[Exclusions.txt](../../Code/Scripts/NinjaGen/Exclusions.txt) and the Linux build never sees it,
+which is zero lines added. An exclusion is also self-checking: a pattern that stops matching is
+reported as a problem, whereas a stale `#ifdef` sits in the file forever. A header cannot be
+excluded, because nothing lists headers, so a header that must not be parsed on Linux is wrapped.
+
+A wrapped or excluded `.cpp` still needs a `_Linux.cpp` sibling, listed in
+[LinuxSources.txt](../../Code/Scripts/NinjaGen/LinuxSources.txt), to supply the symbols its
+shared header declares.
 
 | File | Change | Phase | Status |
 |---|---|---|---|
 | `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.h` | Wrap the body in `#ifdef _WIN32`. It includes `d3d12shader.h` and `dxcapi.h`, and it is the **only** shader reflection header that needs DXC. **Phase 4 reverses this.** | 2 | done |
 | `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.cpp` | As above. | 2 | done |
-| `Code/EngineTools/Entity/EntityEditor/EntityEditor_EntityItem.h`, `EntityEditor_UndoableAction.h`, `Code/EngineTools/Game/ResourceEditors/ResourceEditor_Hitbox.h` | Forward-declare `class EntityWorld;` in namespace `EE`. All three use it as a pointer without declaring it; MSVC finds it through another translation unit's includes. Declared rather than including `EntityWorld.h`, which would pull the whole engine world into a tools header. Cleared 20 errors. | 3 | done |
-| `Code/Base/FileSystem/FileSystemPath.h`, `DataPath.h`, `DataFileExtension.h` | `template<size_t S>` / `template<eastl_size_t S>` to `template<int S>` on the `TInlineString<S>` overloads. `eastl::fixed_string` declares its size parameter as `int`, so deducing any other type from a `TInlineString<N>` fails. Same fix as `ResourceTypeID.h` in Phase 2. | 3 | done |
-| `Code/Base/Resource/ResourcePtr.h` (2) | Add `TResourcePtr<T>::operator=( nullptr_t )`. Assigning `nullptr` was ambiguous for the same reason as `ResourceID`. | 3 | done |
-| `Code/Engine/Render/Device/DeviceRenderWorld.cpp` | `Math::Max( 1ULL, ...size() )` to `Math::Max( size_t( 1 ), ... )`. `Math::Max` deduces one type from both arguments; on Windows `size_t` *is* `unsigned long long` so they agree, and on LP64 Linux it is `unsigned long`. | 3 | done |
-| `Code/EngineTools/Game/ResourceEditors/ResourceEditor_Hitbox.h` (2) | Forward-declare `class Hitbox;`. Used as a pointer at line 163 and never declared, which broke the class and cascaded into a dozen "cannot initialize object parameter" errors that looked like a broken inheritance chain. | 3 | done |
-| `Code/EngineTools/Import/Formats/FBX.cpp` | `"EngineTools/Import/importedSkeleton.h"` to `ImportedSkeleton.h`. Case mismatch. | 3 | done |
-| `Code/EngineTools/Core/SystemDialogs.cpp` | Wrap the whole body in `#ifdef _WIN32`. It is 552 lines of COM `IFileDialog` code, with an unguarded `<windows.h>` and `<shobjidl.h>` include at line 5. New sibling: `SystemDialogs_Linux.cpp`. | 7 | planned |
 
 ## Confirmed to need no change
 
