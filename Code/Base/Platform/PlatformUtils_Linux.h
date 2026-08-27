@@ -36,4 +36,17 @@ namespace EE::Platform::Linux
     // Open a path in explorer
     EE_BASE_API void OpenInExplorer( char const* path );
 }
+
+//-------------------------------------------------------------------------
+// Win32 name alias
+//-------------------------------------------------------------------------
+// Shared tools code calls these helpers as "Platform::Win32::X", because upstream only ever had a
+// Win32 implementation. Aliasing the namespace keeps those call sites compiling unchanged, which
+// matters more than the name reading oddly here: the alternative is a platform guard around every
+// call, in exactly the editor UI code upstream edits most often.
+
+namespace EE::Platform
+{
+    namespace Win32 = Linux;
+}
 #endif

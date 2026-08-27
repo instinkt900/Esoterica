@@ -38,3 +38,15 @@ Code/Base/Render/RHI_Direct3D12.cpp
 # AMD's Direct3D 12 memory allocator, vendored by upstream. The Vulkan equivalent is VMA, which
 # arrives as an External/ dependency in Phase 5 rather than a vendored source.
 Code/Base/ThirdParty/D3D12MemoryAllocator/**
+
+
+#-------------------------------------------------------------------------
+# Windows-only build tooling
+#-------------------------------------------------------------------------
+
+# BuildGeneratorApplication.cpp parses Esoterica.slnx and writes the per-module reflection file
+# lists that MSBuild consumes. It is the MSBuild half of the build system, and NinjaGen.py does
+# the same job here from the three source lists. Its only actual compile error is __debugbreak,
+# so a shim would make it build - but building a .sln parser on a platform with no .sln is
+# pointless, and the shim would be the first of many.
+Code/Applications/BuildGenerator/**

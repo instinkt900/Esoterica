@@ -66,6 +66,14 @@ requirements_dxc()
 
 requirements_directx_headers() { :; }
 
+requirements_ctt()
+{
+    require_command curl curl
+    require_command tar tar
+    require_command cargo rustup
+    require_command c++ build-essential
+}
+
 requirements_meshoptimizer()
 {
     require_command cmake cmake
@@ -372,9 +380,71 @@ fetch_gamenetworkingsockets()
     rm -rf "${target}.src"
 }
 
+# ctt, GPU texture compression. EngineTools/Render/ResourceCompilers/ResourceCompiler_RenderTexture.cpp
+# includes <ctt.h> and calls 64 of its symbols, so this is not optional for the resource compiler.
+#
+# The Windows path fetches a prebuilt ctt_capi.dll out of upstream's External.zip, and that zip
+# holds no Linux binary. ctt itself is open source though - a Rust crate with C bindings, MIT /
+# Apache-2.0 / Zlib - so this builds the same library rather than substituting a different
+# compressor. That distinction matters: swapping in ispc_texcomp or bc7enc would change the
+# compressed bytes and break byte-identical output between Linux and Windows. This does not.
+#
+# 0.5.0, to match what upstream ships. The header in External.zip is dated three days after
+# ctt-c-api 0.5.0 was published, and every ctt_* and CTT_* identifier the engine uses is present
+# in the 0.5.0 header. Bumping this without checking that again risks a silent API drift.
+#
+# The crates.io tarball is used rather than a git clone: it is the exact published artifact, it
+# carries a Cargo.lock, and it needs no submodules. Default features give the full encoder set
+# (bc7enc, Intel ISPC, etcpak, AMD Compressonator, astcenc) with prebuilt ISPC static libraries,
+# so no ispc compiler is needed on PATH.
+CTT_VERSION="0.5.0"
+CTT_URL="https://static.crates.io/crates/ctt-c-api/ctt-c-api-${CTT_VERSION}.crate"
+
+fetch_ctt()
+{
+    local target="${EXTERNAL_DIR}/ctt"
+
+    if [[ -f "${target}/lib/libctt_capi.so" && -f "${target}/include/ctt.h" ]]
+    then
+        info "ctt already present"
+        return
+    fi
+
+    # MSRV is 1.90 and the crate is edition 2024. An older toolchain fails deep inside cargo's
+    # resolver with a message that does not mention the version, so check it here instead.
+    local rustc_version
+    rustc_version=$( cargo --version | awk '{print $2}' )
+    if [[ "$( printf '%s\n1.90.0\n' "${rustc_version}" | sort -V | head -1 )" != "1.90.0" ]]
+    then
+        fail "ctt needs Rust 1.90 or newer, found ${rustc_version}. Update it:
+
+    rustup update stable
+"
+    fi
+
+    info "fetching ctt ${CTT_VERSION}"
+    rm -rf "${target}.src" "${target}.crate"
+    curl -fL --no-progress-meter -o "${target}.crate" "${CTT_URL}"
+    mkdir -p "${target}.src"
+    tar -xzf "${target}.crate" -C "${target}.src" --strip-components=1
+    rm -f "${target}.crate"
+
+    info "building ctt (this compiles five C/C++ encoder backends, so it takes a while)"
+    cargo build --release --manifest-path "${target}.src/Cargo.toml"
+
+    # CTT.props expects External/ctt/include and External/ctt/lib, which is also where the
+    # Windows zip puts them, so the same property sheet mapping works on both platforms.
+    mkdir -p "${target}/include" "${target}/lib"
+    cp "${target}.src/include/ctt.h" "${target}/include/"
+    cp "${target}.src/target/release/libctt_capi.so" "${target}/lib/"
+
+    rm -rf "${target}.src"
+    info "ctt installed"
+}
+
 #-------------------------------------------------------------------------
 
-ALL_DEPENDENCIES=( optick meshoptimizer ixwebsocket gamenetworkingsockets directx_headers dxc llvm )
+ALL_DEPENDENCIES=( optick meshoptimizer ctt ixwebsocket gamenetworkingsockets directx_headers dxc llvm )
 
 list_dependencies()
 {
@@ -385,6 +455,7 @@ list_dependencies()
         case "${name}" in
             optick)                 [[ -f "${EXTERNAL_DIR}/Optick/include/optick.h" ]] && status="ready" ;;
             meshoptimizer)          [[ -f "${EXTERNAL_DIR}/MeshOptimizer/lib/libmeshoptimizer.a" ]] && status="ready" ;;
+            ctt)                    [[ -f "${EXTERNAL_DIR}/ctt/lib/libctt_capi.so" ]] && status="ready (${CTT_VERSION})" ;;
             dxc)                    [[ -f "${EXTERNAL_DIR}/DirectXShaderCompiler/lib/x64/libdxcompiler.so" ]] && status="ready" ;;
             directx_headers)        [[ -f "${EXTERNAL_DIR}/DirectX-Headers/include/directx/d3d12shader.h" ]] && status="ready" ;;
             ixwebsocket)            [[ -f "${EXTERNAL_DIR}/ixwebsocket/include/ixwebsocket/IXWebSocket.h" ]] && status="ready" ;;
@@ -417,6 +488,7 @@ main()
         case "${name}" in
             optick)                 fetch_optick ;;
             meshoptimizer)          fetch_meshoptimizer ;;
+            ctt)                    fetch_ctt ;;
             dxc)                    fetch_dxc ;;
             directx_headers)        fetch_directx_headers ;;
             ixwebsocket)            fetch_ixwebsocket ;;

@@ -2,6 +2,7 @@
 #include "SystemDialogs.h"
 #include "Base/TypeSystem/TypeRegistry.h"
 #include "ToolsContext.h"
+#include "Base/Logging/SystemLog.h"
 
 //-------------------------------------------------------------------------
 // Native file dialogs
@@ -69,6 +70,33 @@ namespace EE
     {
         EE_UNIMPLEMENTED_FUNCTION();
         return Result();
+    }
+
+    //-------------------------------------------------------------------------
+    // Message dialogs
+    //-------------------------------------------------------------------------
+
+    // The single funnel every MessageDialog::Info / Warning / Error / Confirmation call reaches.
+    // Those wrappers are non-virtual statics defined in the header, so EngineTools does not link
+    // without this even though the ResourceCompiler never shows a dialog.
+    //
+    // The message goes to the log rather than nowhere. Unlike the file dialogs, a message box is
+    // often the only report of an error a caller gives, and dropping it silently would hide real
+    // failures during data compilation. Halting is wrong here for the same reason: a warning
+    // dialog is not a programmer error.
+    MessageDialog::Result MessageDialog::ShowInternal( Severity severity, Type type, String const& title, String const& message )
+    {
+        switch ( severity )
+        {
+            case Severity::Warning : EE_LOG_WARNING( "Tools", "Dialog", "%s: %s", title.c_str(), message.c_str() ); break;
+            case Severity::Error :   EE_LOG_ERROR( "Tools", "Dialog", "%s: %s", title.c_str(), message.c_str() ); break;
+            default :                EE_LOG_MESSAGE( "Tools", "Dialog", "%s: %s", title.c_str(), message.c_str() ); break;
+        }
+
+        // Cancel, not Yes. Nobody confirmed anything, so a confirmation prompt with no user in
+        // front of it has to decline. Type::Ok callers ignore the result.
+        (void) type;
+        return Result::Cancel;
     }
 }
 #endif

@@ -215,7 +215,7 @@ namespace EE::Animation
         void DrawDebug( DebugDrawContext& ctx, Transform const& worldTransform, LOD lod, DrawOptions const& options = DrawOptions() ) const;
         inline ResourceID const& GetPreviewMeshID() const { return m_previewMeshID; }
         inline TVector<SecondarySkeleton> const& GetPotentialSecondarySkeletons() const { return m_secondarySkeletons; }
-        inline StringID GetPreviewAttachmentBoneIDForSecondarySkeleton( Skeleton const* pSkeleton ) const;
+        StringID GetPreviewAttachmentBoneIDForSecondarySkeleton( Skeleton const* pSkeleton ) const;
         #endif
 
     private:

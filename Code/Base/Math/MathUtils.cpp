@@ -21,19 +21,19 @@ namespace EE::Math
         return axesStrings[(int32_t) axis];
     }
 
-    inline InlineString ToString( Vector const& vector )
+    InlineString ToString( Vector const& vector )
     {
         return InlineString( InlineString::CtorSprintf(), "x=%.3f, y=%.3f, z=%.3f", vector.GetX(), vector.GetY(), vector.GetZ() );
     }
 
-    inline InlineString ToString( Quaternion const& q )
+    InlineString ToString( Quaternion const& q )
     {
         EulerAngles const angles = q.ToEulerAngles();
         Float3 const anglesInDegrees = angles.GetAsDegrees();
         return InlineString( InlineString::CtorSprintf(), "x=%.3f, y=%.3f, z=%.3f", anglesInDegrees.m_x, anglesInDegrees.m_y, anglesInDegrees.m_z );
     }
 
-    inline InlineString ToString( Transform const& t )
+    InlineString ToString( Transform const& t )
     {
         EulerAngles const angles = t.GetRotation().ToEulerAngles();
         Float3 const anglesInDegrees = angles.GetAsDegrees();
