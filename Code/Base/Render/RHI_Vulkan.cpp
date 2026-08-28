@@ -177,6 +177,15 @@ namespace EE::Render::RHI
     static uint64_t g_leakedDeviceAllocations = 0;
     static uint64_t g_leakedDeviceAllocationBytes = 0;
 
+    // **VK_EXT_mesh_shader is optional, and a barrier has to know.** VulkanPipelineStage maps
+    // PipelineStage::NonPixelShader onto every shader stage, and the task and mesh stage bits are
+    // only legal once the extension is enabled. That function is handed flags and no Context, so
+    // the answer lives here, next to the other file static the same problem produced.
+    //
+    // One context at a time, which is what the engine creates. CreateContext sets it and
+    // DestroyContext clears it.
+    static bool g_meshShaderEnabled = false;
+
     struct VulkanContext : Context
     {
         VkInstance                                                      m_instance = VK_NULL_HANDLE;
@@ -265,6 +274,16 @@ namespace EE::Render::RHI
 
         // Optional, unlike everything in the required feature list. See CreateQueryPool.
         bool                                                            m_pipelineStatisticsQuery = false;
+
+        // **VK_EXT_mesh_shader is optional too, and for a harder reason.** The engine has no
+        // capability flag for mesh shaders and no fallback path - `RenderPass_DebugDraw` calls
+        // `CmdDispatchMesh` outright - so Direct3D 12 simply assumes the hardware has them.
+        // Requiring the extension here would refuse a device the rest of the engine renders on
+        // perfectly well, so it is asked for when present and asserted at the point of use.
+        bool                                                            m_meshShader = false;
+        PFN_vkCmdDrawMeshTasksEXT                                       m_vkCmdDrawMeshTasks = nullptr;
+        PFN_vkCmdDrawMeshTasksIndirectEXT                               m_vkCmdDrawMeshTasksIndirect = nullptr;
+        PFN_vkCmdDrawMeshTasksIndirectCountEXT                          m_vkCmdDrawMeshTasksIndirectCount = nullptr;
 
         void*                                                           m_pRenderDocLibrary = nullptr;
         RENDERDOC_API_1_0_0*                                            m_pRenderDocAPI = nullptr;
@@ -934,12 +953,51 @@ namespace EE::Render::RHI
         pVulkanContext->m_pipelineStatisticsQuery = availableFeatures.m_features2.features.pipelineStatisticsQuery == VK_TRUE;
         enabledFeatures.m_features2.features.pipelineStatisticsQuery = availableFeatures.m_features2.features.pipelineStatisticsQuery;
 
+        // Optional device extensions
+        //-------------------------------------------------------------------------
+        // The required list is the binding model's and a device missing any of it is refused.
+        // These are asked for when the device has them and asserted at the point of use, because
+        // refusing a whole device over a feature the engine only needs for one pass would be
+        // worse than halting in that pass.
+        TInlineVector<char const*, MaxDeviceExtensions> deviceExtensions;
+        for ( char const* pRequiredExtension : g_requiredDeviceExtensions )
+        {
+            deviceExtensions.emplace_back( pRequiredExtension );
+        }
+
+        TVector<VkExtensionProperties> const availableDeviceExtensions = EnumerateDeviceExtensions( pVulkanContext->m_physicalDevice );
+
+        VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT };
+        if ( HasExtension( availableDeviceExtensions, VK_EXT_MESH_SHADER_EXTENSION_NAME ) )
+        {
+            VkPhysicalDeviceFeatures2 meshShaderQuery = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+            meshShaderQuery.pNext = &meshShaderFeatures;
+            vkGetPhysicalDeviceFeatures2( pVulkanContext->m_physicalDevice, &meshShaderQuery );
+
+            // Both, because the engine's debug draw uses a task stage as well as a mesh one.
+            if ( meshShaderFeatures.meshShader && meshShaderFeatures.taskShader )
+            {
+                deviceExtensions.emplace_back( VK_EXT_MESH_SHADER_EXTENSION_NAME );
+                enabledFeatures.m_mutableDescriptorType.pNext = &meshShaderFeatures;
+
+                pVulkanContext->m_meshShader = true;
+                g_meshShaderEnabled = true;
+            }
+        }
+
+        if ( !pVulkanContext->m_meshShader )
+        {
+            // Loud, because the engine has no fallback: RenderPass_DebugDraw will halt in
+            // CmdDispatchMesh the first time a development build draws anything debug.
+            EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "This device has no VK_EXT_mesh_shader, so the mesh shader path will halt if the engine reaches it." );
+        }
+
         VkDeviceCreateInfo deviceCreateInfo = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         deviceCreateInfo.pNext = &enabledFeatures.m_features2;
         deviceCreateInfo.queueCreateInfoCount = uint32_t( queueCreateInfos.size() );
         deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
-        deviceCreateInfo.enabledExtensionCount = uint32_t( eastl::size( g_requiredDeviceExtensions ) );
-        deviceCreateInfo.ppEnabledExtensionNames = g_requiredDeviceExtensions;
+        deviceCreateInfo.enabledExtensionCount = uint32_t( deviceExtensions.size() );
+        deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
         result = vkCreateDevice( pVulkanContext->m_physicalDevice, &deviceCreateInfo, nullptr, &pVulkanContext->m_device );
         EE_ASSERT( result == VK_SUCCESS );
@@ -949,6 +1007,14 @@ namespace EE::Render::RHI
         pVulkanContext->m_vkSetDebugUtilsObjectName = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkSetDebugUtilsObjectNameEXT" ) );
         pVulkanContext->m_vkCmdBeginDebugUtilsLabel = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdBeginDebugUtilsLabelEXT" ) );
         pVulkanContext->m_vkCmdEndDebugUtilsLabel = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdEndDebugUtilsLabelEXT" ) );
+
+        if ( pVulkanContext->m_meshShader )
+        {
+            pVulkanContext->m_vkCmdDrawMeshTasks = reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdDrawMeshTasksEXT" ) );
+            pVulkanContext->m_vkCmdDrawMeshTasksIndirect = reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdDrawMeshTasksIndirectEXT" ) );
+            pVulkanContext->m_vkCmdDrawMeshTasksIndirectCount = reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectCountEXT>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdDrawMeshTasksIndirectCountEXT" ) );
+            EE_ASSERT( pVulkanContext->m_vkCmdDrawMeshTasks != nullptr );
+        }
         pVulkanContext->m_vkCmdPushDescriptorSet = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdPushDescriptorSetKHR" ) );
         EE_ASSERT( pVulkanContext->m_vkCmdPushDescriptorSet != nullptr );
 
@@ -1116,6 +1182,9 @@ namespace EE::Render::RHI
 
         pVulkanContext->m_resourceHeapAllocator.Shutdown();
         pVulkanContext->m_samplerHeapAllocator.Shutdown();
+
+        // The barrier mapping reads this and outlives no context. See its declaration.
+        g_meshShaderEnabled = false;
 
         if ( pVulkanContext->m_heapDescriptorPool != VK_NULL_HANDLE )
         {
@@ -1400,6 +1469,12 @@ namespace EE::Render::RHI
         // absent, and every marker call then does nothing.
         PFN_vkCmdBeginDebugUtilsLabelEXT                    m_vkCmdBeginDebugUtilsLabel = nullptr;
         PFN_vkCmdEndDebugUtilsLabelEXT                      m_vkCmdEndDebugUtilsLabel = nullptr;
+
+        // Mesh shader draws, same reason. Null when VK_EXT_mesh_shader is absent, and every one
+        // of them asserts rather than doing nothing: the engine has no fallback path.
+        PFN_vkCmdDrawMeshTasksEXT                           m_vkCmdDrawMeshTasks = nullptr;
+        PFN_vkCmdDrawMeshTasksIndirectEXT                   m_vkCmdDrawMeshTasksIndirect = nullptr;
+        PFN_vkCmdDrawMeshTasksIndirectCountEXT              m_vkCmdDrawMeshTasksIndirectCount = nullptr;
 
         // The same two fields Direct3D12CommandBuffer carries at RHI_Direct3D12.cpp:1526, with
         // the same starting value, so a marker gets the same colour on both backends.
@@ -2327,6 +2402,9 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_vkCmdPushDescriptorSet = pVulkanContext->m_vkCmdPushDescriptorSet;
         pVulkanCommandBuffer->m_vkCmdBeginDebugUtilsLabel = pVulkanContext->m_vkCmdBeginDebugUtilsLabel;
         pVulkanCommandBuffer->m_vkCmdEndDebugUtilsLabel = pVulkanContext->m_vkCmdEndDebugUtilsLabel;
+        pVulkanCommandBuffer->m_vkCmdDrawMeshTasks = pVulkanContext->m_vkCmdDrawMeshTasks;
+        pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirect = pVulkanContext->m_vkCmdDrawMeshTasksIndirect;
+        pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirectCount = pVulkanContext->m_vkCmdDrawMeshTasksIndirectCount;
         pVulkanCommandBuffer->m_pQueue = parameters.m_pCommandPool->m_pQueue;
         pVulkanCommandBuffer->m_pCommandPool = parameters.m_pCommandPool;
         pVulkanCommandBuffer->m_nodeIndex = parameters.m_pCommandPool->m_pQueue->m_nodeIndex;
@@ -2903,7 +2981,21 @@ namespace EE::Render::RHI
 
     void CmdDispatchMesh( CommandBuffer* pCommandBuffer, uint32_t numGroupsX, uint32_t numGroupsY, uint32_t numGroupsZ )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        // **A mesh dispatch is a draw, not a dispatch.** DispatchMesh is Direct3D's name for it;
+        // it rasterises, it runs inside a render pass, and it wants exactly what an ordinary
+        // draw wants. Leaving the pass here, the way CmdDispatchCompute does, would be wrong.
+        PrepareDraw( pVulkanCommandBuffer );
+
+        // Null when the device has no VK_EXT_mesh_shader. CreateContext warns about it and this
+        // is where it bites, because the engine has no capability check and no fallback:
+        // RenderPass_DebugDraw calls this outright.
+        EE_ASSERT( pVulkanCommandBuffer->m_vkCmdDrawMeshTasks != nullptr );
+
+        EE_ASSERT( numGroupsX <= MaxDispatchSize && numGroupsY <= MaxDispatchSize && numGroupsZ <= MaxDispatchSize );
+
+        pVulkanCommandBuffer->m_vkCmdDrawMeshTasks( pVulkanCommandBuffer->m_commandBuffer, numGroupsX, numGroupsY, numGroupsZ );
     }
 
     void CmdDispatchRays( CommandBuffer* pCommandBuffer, RaytracingShaderTable* pShaderTable, AccelerationStructure* pAccelerationStructure, uint32_t width, uint32_t height )
@@ -3046,9 +3138,20 @@ namespace EE::Render::RHI
 
             case IndirectArgumentType::DispatchMesh:
             {
-                // vkCmdDrawMeshTasksIndirectEXT, once P5.14 enables VK_EXT_mesh_shader. The
-                // entry point does not exist until the extension is, so it cannot be called yet.
-                EE_UNIMPLEMENTED_FUNCTION();
+                EE_ASSERT( pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirect != nullptr );
+
+                if ( pVulkanCounterBuffer != nullptr )
+                {
+                    EE_ASSERT( pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirectCount != nullptr );
+
+                    pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirectCount( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset,
+                                                                             pVulkanCounterBuffer->m_buffer, counterBufferOffset, maxNumCommands, pVulkanCommandSignature->m_stride );
+                }
+                else
+                {
+                    pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset,
+                                                                        maxNumCommands, pVulkanCommandSignature->m_stride );
+                }
             }
             break;
 
@@ -3265,13 +3368,19 @@ namespace EE::Render::RHI
         if ( pipelineStages.IsFlagSet( PipelineStage::Draw ) ) { stageMask |= VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT; }
         if ( pipelineStages.IsFlagSet( PipelineStage::PixelShader ) ) { stageMask |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT; }
         // D3D12_BARRIER_SYNC_NON_PIXEL_SHADING includes compute, so this does too. The task and
-        // mesh stages belong in here as well and are left out on purpose: their stage bits are
-        // only legal once VK_EXT_mesh_shader is enabled, which is P5.14's job.
+        // mesh stage bits go in with it, but only when VK_EXT_mesh_shader is enabled: naming a
+        // stage from a disabled extension is a validation error. Without them, a barrier before
+        // a mesh draw would not cover the stage that reads the result.
         if ( pipelineStages.IsFlagSet( PipelineStage::NonPixelShader ) )
         {
             stageMask |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
                          VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT | VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            if ( g_meshShaderEnabled )
+            {
+                stageMask |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
+            }
         }
         if ( pipelineStages.IsFlagSet( PipelineStage::ComputeShader ) ) { stageMask |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT; }
         if ( pipelineStages.IsFlagSet( PipelineStage::AllShader ) )
@@ -3279,6 +3388,11 @@ namespace EE::Render::RHI
             stageMask |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
                          VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT | VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
                          VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            if ( g_meshShaderEnabled )
+            {
+                stageMask |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
+            }
         }
         // ALL_TRANSFER rather than COPY, because Direct3D's SYNC_COPY sits next to SYNC_CLEAR
         // and SYNC_RESOLVE and the RHI has no separate flag for either, so a clear arrives here
@@ -5843,7 +5957,12 @@ namespace EE::Render::RHI
         }
     }
 
-    Pipeline* CreatePipeline( Context* pContext, GraphicsPipelineParameters const& parameters )
+    // **One body for both the graphics and the mesh pipeline.** MeshPipelineParameters derives
+    // from GraphicsPipelineParameters and adds nothing, and Vulkan builds both with
+    // vkCreateGraphicsPipelines. The whole delta is which shader stages are wanted and whether
+    // there is an input assembler, so a second copy of two hundred lines of blend, depth,
+    // raster and dynamic rendering state would only be a place for the two to drift apart.
+    static Pipeline* CreateGraphicsOrMeshPipeline( Context* pContext, GraphicsPipelineParameters const& parameters, bool isMeshPipeline )
     {
         VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
         VulkanPipelineCache* pVulkanPipelineCache = static_cast<VulkanPipelineCache*>( parameters.m_pPipelineCache );
@@ -5859,9 +5978,21 @@ namespace EE::Render::RHI
                                              ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
                                              : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-        ShaderStage const wantedStages[2] = { ShaderStage::Vertex, ShaderStage::Pixel };
+        // A task stage is optional even on a mesh pipeline, and BuildGraphicsPipelineStages
+        // skips a stage the shader does not carry, so asking for all three is safe.
+        ShaderStage const wantedGraphicsStages[2] = { ShaderStage::Vertex, ShaderStage::Pixel };
+        ShaderStage const wantedMeshStages[3] = { ShaderStage::Task, ShaderStage::Mesh, ShaderStage::Pixel };
+
         TInlineVector<VkPipelineShaderStageCreateInfo, 3> stages;
-        BuildGraphicsPipelineStages( pVulkanShader, stages, TArrayView<ShaderStage const>( wantedStages, 2 ) );
+        if ( isMeshPipeline )
+        {
+            EE_ASSERT( pVulkanShader->m_stages.IsFlagSet( ShaderStage::Mesh ) );
+            BuildGraphicsPipelineStages( pVulkanShader, stages, TArrayView<ShaderStage const>( wantedMeshStages, 3 ) );
+        }
+        else
+        {
+            BuildGraphicsPipelineStages( pVulkanShader, stages, TArrayView<ShaderStage const>( wantedGraphicsStages, 2 ) );
+        }
 
         // No vertex input state. GraphicsPipelineParameters carries no input layout, because the
         // engine pulls vertices out of buffers in the shader rather than binding them. An empty
@@ -6013,8 +6144,11 @@ namespace EE::Render::RHI
         pipelineCreateInfo.pNext = &renderingCreateInfo;
         pipelineCreateInfo.stageCount = uint32_t( stages.size() );
         pipelineCreateInfo.pStages = stages.data();
-        pipelineCreateInfo.pVertexInputState = &vertexInputState;
-        pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
+        // **Null on a mesh pipeline.** There is no input assembler in front of a mesh shader, so
+        // Vulkan ignores both structures there and the spec says to leave them out. Direct3D 12
+        // says the same by using a stream description with no input layout element.
+        pipelineCreateInfo.pVertexInputState = isMeshPipeline ? nullptr : &vertexInputState;
+        pipelineCreateInfo.pInputAssemblyState = isMeshPipeline ? nullptr : &inputAssemblyState;
         pipelineCreateInfo.pViewportState = &viewportState;
         pipelineCreateInfo.pRasterizationState = &rasterizationState;
         pipelineCreateInfo.pMultisampleState = &multisampleState;
@@ -6033,17 +6167,19 @@ namespace EE::Render::RHI
         return pVulkanPipeline;
     }
 
+    Pipeline* CreatePipeline( Context* pContext, GraphicsPipelineParameters const& parameters )
+    {
+        return CreateGraphicsOrMeshPipeline( pContext, parameters, false );
+    }
+
     Pipeline* CreatePipeline( Context* pContext, MeshPipelineParameters const& parameters )
     {
-        // P5.14. It is a small delta on the graphics path above: the same state, with task and
-        // mesh stages instead of vertex, and no vertex input state at all.
-        //
-        // It needs two things this backend does not have yet, both at device creation time in
-        // CreateContext: the VK_EXT_mesh_shader extension, and
-        // VkPhysicalDeviceMeshShaderFeaturesEXT with meshShader and taskShader enabled. Adding
-        // them there is the first step of P5.14.
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        // The device has to have been created with VK_EXT_mesh_shader, which is optional. The
+        // engine has no capability flag to check first, so this is where a device without it is
+        // named. CreateContext warns at startup as well.
+        EE_ASSERT( static_cast<VulkanContext*>( pContext )->m_meshShader );
+
+        return CreateGraphicsOrMeshPipeline( pContext, parameters, true );
     }
 
     Pipeline* CreatePipeline( Context* pContext, ComputePipelineParameters const& parameters )
