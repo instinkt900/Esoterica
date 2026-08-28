@@ -171,6 +171,29 @@ namespace EE::Render::RHI
         EE_UNIMPLEMENTED_FUNCTION();
     }
 
+    // Clip-space Y is inverted HERE, and nowhere else. This is Phase 4's criterion 9 decision;
+    // the full reasoning is in Docs/Linux/Progress.md.
+    //
+    // The engine builds its projection matrices with DirectXMath's right-handed conventions
+    // (Math::CreatePerspectiveProjectionMatrix, "Taken from DirectXMath: XMMatrixPerspectiveFovRH"),
+    // so NDC is Y-up with a 0..1 depth range. Vulkan shares the depth range and disagrees on Y.
+    //
+    //     vkViewport.x        = x;
+    //     vkViewport.y        = y + height;   // flip
+    //     vkViewport.width    = width;
+    //     vkViewport.height   = -height;      // flip
+    //     vkViewport.minDepth = minDepth;
+    //     vkViewport.maxDepth = maxDepth;
+    //
+    // The shader compiler does NOT flip: the Reflector deliberately does not pass -fvk-invert-y.
+    // Do not add it, and do not flip the projection matrices. Doing this twice is the classic
+    // porting bug, and the second flip is silent.
+    //
+    // A negative viewport height needs no extension; it is core Vulkan since 1.1 and the baseline
+    // here is 1.3.
+    //
+    // CONSEQUENCE FOR CreatePipeline: mirroring the viewport inverts triangle winding in
+    // framebuffer space, so the front-face mapping has to absorb it. See the note there.
     void CmdSetViewport( CommandBuffer* pCommandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth )
     {
         EE_UNIMPLEMENTED_FUNCTION();
@@ -467,6 +490,23 @@ namespace EE::Render::RHI
         return TArrayView<uint8_t>();
     }
 
+    // FrontFace, and why it maps literally here while Direct3D 12 maps it inverted.
+    //
+    // RHI_Direct3D12.cpp:5287 sets FrontCounterClockwise = ( m_frontFace == FrontFace::ClockWise ),
+    // which reads backwards and is upstream's business, not ours. Taking it at face value:
+    // FrontFace::CounterClockWise, the default, means front faces are CLOCKWISE in screen space
+    // on Direct3D.
+    //
+    // Two inversions apply on the way to Vulkan and they cancel:
+    //
+    //   1. To match Direct3D with no Y flip, VkFrontFace would have to be the opposite of the
+    //      enum's name, exactly as the Direct3D mapping is.
+    //   2. CmdSetViewport flips Y with a negative viewport height, which mirrors winding in
+    //      framebuffer space and inverts it again.
+    //
+    // So the mapping here is the literal one, FrontFace::ClockWise -> VK_FRONT_FACE_CLOCKWISE,
+    // and it is only correct BECAUSE of the viewport flip. If anyone ever removes that flip,
+    // this has to be swapped in the same commit.
     Pipeline* CreatePipeline( Context* pContext, GraphicsPipelineParameters const& parameters )
     {
         EE_UNIMPLEMENTED_FUNCTION();
