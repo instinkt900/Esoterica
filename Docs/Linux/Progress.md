@@ -12,7 +12,8 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 **Phase: 4 (in progress).** DXC is now built from source with a patch that fixes its SPIR-V back
 end, and the four material mesh shaders compile to SPIR-V. Five shaders still fail, on a second
-and unrelated DXC limitation. See the 2026-08-28 entries below.
+and unrelated DXC limitation. **The P4.3 bindless binding model is decided and recorded**, which
+closes acceptance criterion 8 and unblocks Phase 5. See the 2026-08-28 entries below.
 
 Previously: **Phase 3 (all build and compile criteria met).** `EsotericaResourceCompiler` builds,
 links and compiles 22 of the 27 real resources under `Data/` into 38 output files: every texture,
@@ -54,24 +55,36 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 4, on `linux/p4-shader-pipeline`.** P4.1 is done: DXC is built from source, patched, and
-compiles the four material mesh shaders to SPIR-V.
+**Phase 4, on `linux/p4.3-binding-model`.** P4.1 is done: DXC is built from source, patched, and
+compiles the four material mesh shaders to SPIR-V. **P4.3's binding model is now decided**, and
+the Reflector passes the flags that implement it. The full decision is in the 2026-08-28 "P4.3
+The bindless binding model" entry below, written for Phase 5 to implement against.
 
-The next thing to settle is the counter-variable blocker described below. It stops five shaders,
-and the obvious fix for it needs the P4.3 binding model decision first, which the phase document
-says to make jointly with Phase 5. That decision has **not** been made.
+What is left is the counter-variable blocker that stops five shaders. **It does not depend on
+the binding model after all.** No shader in this repository uses a hidden append/consume counter,
+and DXC only emits the counter array when one is used, so there is no counter heap to bind and
+nothing about set or binding numbers left to settle. The blocker is an eager check in
+`tryToAssignCounterVar`, which demands that source and destination agree about a counter even
+when neither has one and neither ever will. The correct fix is on the destination side, and
+`DeclResultIdMapper.cpp:1289` says implementing counters inside structures is non-trivial. See
+the corrected note under the defect 2 entry.
 
 **P4.4 is closed as not applicable and P4.2 is moved to Phase 5**, both recorded below. The plan
 called P4.4 the bulk of the phase, so what is actually left is smaller than the task list
 suggests: the five shaders, the two decisions, and P4.5 and P4.6. P4.5 and P4.6 both need the
 shader pass to exit 0 first, so the five shaders gate everything remaining.
 
-**Two Phase 4 decisions are still unmade, and both are acceptance criteria.** Criterion 8, the
-bindless binding model, described above. And criterion 9, clip-space Y: the DXC argument list in
-`ShaderReflection_ShaderCompiler.cpp` passes neither `-fvk-invert-y` nor `-fvk-use-dx-position-w`,
-so nothing inverts Y today and no layer has been chosen to do it. Doing it in both the shader
-compiler and the Vulkan viewport, or in neither, is the classic porting bug the phase document
-warns about.
+**One Phase 4 decision is still unmade, and it is an acceptance criterion.** Criterion 9,
+clip-space Y: the DXC argument list in `ShaderReflection_ShaderCompiler.cpp` passes neither
+`-fvk-invert-y` nor `-fvk-use-dx-position-w`, so nothing inverts Y today and no layer has been
+chosen to do it. Doing it in both the shader compiler and the Vulkan viewport, or in neither, is
+the classic porting bug the phase document warns about.
+
+Criterion 8, the bindless binding model, is **done**. Two related P4.3 items are also still
+open and neither has been investigated: the constant buffer layout rule
+(`-fvk-use-dx-layout` against Vulkan-native, which the phase document asks to settle in this
+phase because a mismatch is silently wrong), and the shader stage mapping for the raytracing
+stages.
 
 ---
 
@@ -577,6 +590,194 @@ the reasoning, not just the outcome.
 **Alternatives rejected:** ...
 -->
 
+### 2026-08-28 - P4.3 The bindless binding model
+
+This is acceptance criterion 8, and Phase 5's hard prerequisite. It is written to be implemented
+against, so it names every set, binding, descriptor type and feature bit.
+
+**Context.** Direct3D 12 gives the engine two shader-visible descriptor heaps and a root
+signature that holds nothing else. `CreateRootSignature` (`RHI_Direct3D12.cpp:4938`) builds only
+root constants and root descriptors, never a descriptor table, and sets
+`CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | SAMPLER_HEAP_DIRECTLY_INDEXED`. `SetDescriptorHeaps` is
+called once per command buffer (`:2917`). `GetBufferHandle`, `GetTextureHandle` and
+`GetSamplerStateHandle` return a `uint16_t` offset into one of those two heaps, and the shaders
+index them through the `GetBuffer` / `GetTexture` / `GetSamplerState` macros in `RHI.esh`, which
+are `ResourceDescriptorHeap[i]` and `SamplerDescriptorHeap[i]`.
+
+Vulkan has to reproduce that exactly, because the handle is the shared currency: the Reflector's
+generated resource tables pack these same `uint16_t` values (see
+`_AutoGenerated/ShaderReflection/WorldUpdate.esh`), and `InvalidResourceHandle` is `UINT16_MAX`.
+
+#### How DXC maps SM6.6 heaps onto Vulkan
+
+Established by compiling reduced shaders and by reading
+`tools/clang/lib/SPIRV/DeclResultIdMapper.cpp` and `docs/SPIR-V.rst`, not from memory:
+
+- The default is the **emulated** heap (`-fspv-use-emulated-heap`). Every distinct HLSL resource
+  type read out of `ResourceDescriptorHeap` becomes its own SPIR-V `OpTypeRuntimeArray`
+  variable, and **all of them are decorated with the same set and binding**. The heap index is
+  the array index, unchanged. `SamplerDescriptorHeap` gets a second binding.
+- Aliasing several descriptor types on one binding is what **`VK_EXT_mutable_descriptor_type`**
+  exists for. DXC's own documentation names the extension as a requirement.
+- The alternative native path, `-fspv-use-descriptor-heap`, emits `SPV_EXT_descriptor_heap`.
+  DXC warns "SPV_EXT_descriptor_heap support is incomplete" on this engine's shaders, and the
+  build treats warnings as errors. **Ruled out.**
+- Heap bindings are otherwise allocated **lazily, from the first free binding numbers in set 0**,
+  after every other resource is placed. That makes them a function of which registers a given
+  shader happens to use, which is not something a backend can bind against. They must be pinned.
+
+**Decision.** Two descriptor sets.
+
+**Set 1 - the heaps.** One layout, identical for every pipeline in the engine, allocated once
+and bound once.
+
+| Binding | Vulkan descriptor type | Count | Source |
+|---|---|---|---|
+| 0 | `VK_DESCRIPTOR_TYPE_MUTABLE_EXT` | 65472 | `ResourceDescriptorHeap` |
+| 1 | `VK_DESCRIPTOR_TYPE_SAMPLER` | 2048 | `SamplerDescriptorHeap` |
+| 2 | reserved for the counter heap; do not create it | - | see below |
+
+The counts are D3D12's, from `CreateContext`: `64 * 1023` for the CBV/SRV/UAV heap and `2048`
+for the sampler heap (`RHI_Direct3D12.cpp:2229` and `:2236`). Keeping them identical is what
+makes a handle mean the same thing on both backends. Both fit under `UINT16_MAX`, so
+`InvalidResourceHandle` stays outside either heap.
+
+The mutable type list for binding 0, taken from every `OpTypeImage` and buffer type that the
+engine's shaders actually pull out of the heap:
+
+| Vulkan descriptor type | HLSL that produces it |
+|---|---|
+| `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE` | `Texture2D`, `Texture2DArray`, `Texture3D`, `TextureCube` |
+| `VK_DESCRIPTOR_TYPE_STORAGE_IMAGE` | `RWTexture2D` |
+| `VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER` | `Buffer<T>` |
+| `VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER` | `RWBuffer<T>` |
+| `VK_DESCRIPTOR_TYPE_STORAGE_BUFFER` | `StructuredBuffer<T>`, `RWStructuredBuffer<T>`, `ByteAddressBuffer` |
+| `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER` | no shader today, but `GetBufferHandle` accepts `DescriptorTypeFlags::ConstantBuffer` and returns a heap offset, so the heap must be able to hold one |
+
+Binding 0 and binding 1 both take `PARTIALLY_BOUND` and `VARIABLE_DESCRIPTOR_COUNT`, and the
+layout takes `UPDATE_AFTER_BIND_POOL`, because the engine writes handles into the heap while
+command buffers that reference the heap are recording, exactly as
+`CopyDescriptorsSimple` does on Direct3D 12.
+
+Sampler heap slots 0 to 5 are the engine's common samplers, at the fixed indices in
+`CommonSamplers.esh`. There are no Vulkan immutable samplers in this model, and no static
+samplers in the pipeline layout: `CreateRootSignature`'s static sampler path finds no matching
+shader resource in any current shader.
+
+**Set 0 - the root parameters.** Per-pipeline layout, derived from reflection, created with
+`VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT`.
+
+| HLSL register | Set 0 binding | Vulkan descriptor type |
+|---|---|---|
+| `b<N>` | `N` | `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER` |
+| `t<N>` | `8 + N` | `VK_DESCRIPTOR_TYPE_STORAGE_BUFFER` |
+| `u<N>` | `16 + N` | `VK_DESCRIPTOR_TYPE_STORAGE_BUFFER` or `STORAGE_IMAGE` |
+| `s<N>` | `24 + N` | `VK_DESCRIPTOR_TYPE_SAMPLER` |
+
+The shifts exist because DXC ignores the register **type** when it derives a binding from
+`register( xN, spaceY )`, so `b2` and `t2` would otherwise both be binding 2. Nothing in the
+engine trips that today, and DXC does not diagnose the overlap when it happens, so the shifts
+are there to make a future collision impossible rather than to fix a present one.
+
+`CmdSetRootConstants` cannot become Vulkan push constants: the shader declares the block as
+`ConstantBuffer<T> RootConstants : register( b0 )` through `EE_DECLARE_ROOT_CONSTANTS`, so DXC
+emits a uniform buffer, and turning it into a push constant block needs `[[vk::push_constant]]`
+in `RHI.esh`, which Phase 4 rule 4 forbids. Implement it instead as a copy into a per-frame
+upload ring buffer followed by `vkCmdPushDescriptorSetKHR`. `CmdSetRootParameter` is the same
+call with the caller's buffer and offset, and `VK_WHOLE_SIZE` for the range, which matches a
+Direct3D 12 root descriptor: an address, with no size.
+
+**The DXC flags.** Added to `DXC_ARG_BINDING_MODEL` in `ShaderReflection_ShaderCompiler.cpp`,
+Linux only:
+
+```
+-fvk-auto-shift-bindings
+-fvk-b-shift 0 0    -fvk-t-shift 8 0    -fvk-u-shift 16 0    -fvk-s-shift 24 0
+-fvk-bind-resource-heap 0 1
+-fvk-bind-sampler-heap  1 1
+-fvk-bind-counter-heap  2 1
+```
+
+`-fvk-auto-shift-bindings` applies the same shifts to any resource that carries no `register()`,
+which no shader has today; it is insurance against one arriving from upstream.
+
+**There is no counter heap, and the engine needs none.** This corrects the previous entry.
+`IncrementCounter`, `DecrementCounter`, `AppendStructuredBuffer` and `ConsumeStructuredBuffer`
+appear in **no** `.esh` or `.esf` file in the repository. `AppendBuffer<T>` in `AppendBuffer.esh`
+carries its own explicit `RWBuffer<uint> m_counterBuffer` and does its own `InterlockedAdd`, so
+the hidden Direct3D counter is dead weight. DXC only emits the counter array when a counter is
+actually used - `docs/SPIR-V.rst` says so, and compiling all 41 shader stages that build today
+produces **zero** `counter_var` variables. Binding 2 of set 1 is therefore reserved and never
+created; the flag is passed only so that a counter, if one ever appears, lands somewhere known
+instead of displacing the sampler heap.
+
+**Rationale for set 1 holding the heaps, rather than set 0.**
+
+The Vulkan-idiomatic ordering is the opposite: the most stable set should be set 0, because
+binding a pipeline whose layout differs from set N onwards disturbs every set from N up. Here
+set 0 varies per shader and set 1 does not, so the heap set is disturbed whenever a pipeline
+with a different root-parameter layout is bound, and the backend must re-bind set 1 on a
+pipeline-layout change. **`CmdSetPipeline` is where that belongs**, next to the existing
+`ResetRootSignature` call. One `vkCmdBindDescriptorSets` per pipeline change is a rounding error.
+
+The reason for accepting that is the alternative. Putting the heaps in set 0 needs the root
+parameters moved to set 1, and the only way to move a *set* without editing a `.esh` file is
+`-fvk-bind-register`, which "requires all source code resources have `:register()` attribute and
+all registers have corresponding Vulkan descriptors specified using this option". That makes the
+Linux build fail the day upstream adds a global resource without a register, or with a register
+outside our table, and upstream is active. The prime directive is cheap upstream merges. A
+redundant descriptor-set bind is a much smaller price than a shader-compiler flag list that has
+to track every register upstream ever writes.
+
+**Verified.** Not asserted:
+
+- All four heap and shift schemes were compared by compiling **every `.esf` in the repository**
+  across `cs/ps/vs/ms/as_6_6` entry points. 41 stages compile; the flags introduce **no new
+  failure**. The 5 that fail are exactly the known defect-2 shaders: `DebugDraw` MS,
+  `DebugDrawMesh` MS, `DebugDrawResolve` CS, `InstancePickingResolve` CS, `WorldUpdate` CS.
+- The set and binding decorations of every compiled stage were dumped and grouped. The result is
+  the table above: set 0 binding 0 and 1 hold only uniform buffers, set 1 binding 0 holds the
+  five aliased array types, set 1 binding 1 holds the sampler array.
+- A real shader (`DefaultPBR` MS) shows nine aliased runtime arrays on set 1 binding 0.
+- `spirv-val --target-env vulkan1.3` passes on the reduced heap shaders.
+- The Reflector was rebuilt with the flags and run. `strings -eL` confirms the flags reach the
+  binary, and the shader pass produces the same five failures and no others.
+- Both GPUs in this machine (Intel UHD 620 on Mesa 25.2.8, NVIDIA driver 580.173) expose
+  `VK_EXT_mutable_descriptor_type` with `mutableDescriptorType = true`, `VK_KHR_push_descriptor`
+  with `maxPushDescriptors = 32`, and `runtimeDescriptorArray`,
+  `descriptorBindingPartiallyBound`, `descriptorBindingVariableDescriptorCount`, the
+  `*UpdateAfterBind` bits and the `*ArrayNonUniformIndexing` bits for sampled image, storage
+  image, storage buffer and uniform texel buffer. The update-after-bind limits are six orders of
+  magnitude above 65472.
+
+**Required of the Vulkan device, so P5.1 can check it up front:** Vulkan 1.3, plus
+`VK_EXT_mutable_descriptor_type` and `VK_KHR_push_descriptor` (core in 1.4), plus the descriptor
+indexing feature bits listed above. Refuse the device if any is missing; there is no fallback
+path, because the shaders are compiled for this model.
+
+**One thing left open, for P5.16.** `RHI.esh` maps
+`GetRaytracingAccelerationStructure( index )` to `ResourceDescriptorHeap[index]`, and
+`GetAccelerationStructureHandle` returns `GetBufferHandle( ..., DescriptorTypeFlags::Buffer )`,
+so on Direct3D 12 an acceleration structure is just another heap slot. On Vulkan it needs
+`VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR`, and whether that type may appear in a mutable
+descriptor type list has **not** been checked here. No current shader reads an acceleration
+structure from the heap, so this blocks nothing before raytracing. Settle it with the validation
+layers on, in the `Tester` harness, before writing P5.16.
+
+**Alternatives rejected:**
+
+- `-fspv-use-descriptor-heap`, the native `SPV_EXT_descriptor_heap` path. DXC itself reports its
+  support as incomplete on these shaders.
+- Leaving the heap bindings to DXC's lazy allocation. The heap binding then depends on how many
+  registers the individual shader used, so no two shaders agree, and the backend has nothing
+  fixed to bind against.
+- `-fvk-bind-register` to put the heaps in set 0 and the root parameters in set 1. Correct set
+  ordering, but it requires an exhaustive register table and fails on any unregistered resource.
+  See the rationale above.
+- One descriptor set for everything. A push descriptor set layout cannot also hold the
+  unbounded, update-after-bind heap arrays, so the root parameters and the heaps have to be in
+  different sets whichever way round they go.
+
 ### 2026-08-28 - DXC is built from source and patched, rather than forked or vendored
 
 **Context:** two defects in DXC's SPIR-V back end stop nine of this engine's shaders. We are on
@@ -655,6 +856,16 @@ the bulk of the phase, so what is really left in Phase 4 is the five shaders, th
 and P4.5 and P4.6.
 
 ### 2026-08-28 - Defect 2 stops here, because the fix needs the binding model decision
+
+**Correction, same day.** The premise in this title is wrong. The fix does **not** need the
+binding model decision, and option 1 below is not the work Phase 5 needs. No `.esh` or `.esf`
+file in this repository uses `IncrementCounter`, `DecrementCounter`, `AppendStructuredBuffer` or
+`ConsumeStructuredBuffer`; `AppendBuffer<T>` carries its own explicit `RWBuffer<uint>` counter.
+DXC emits the counter array only when a counter is used, so all 41 shader stages that compile
+today produce zero `counter_var` variables, and there is no counter heap to bind or to number.
+`-fvk-bind-counter-heap` is passed now, but only to reserve a binding. What is left is the
+destination half described at the end of this entry, and that half is unchanged. See the
+"P4.3 The bindless binding model" entry above.
 
 **Context:** assigning a counter-bearing resource from a descriptor heap fails with "cannot
 handle associated counter variable assignment". It stops `DebugDraw` MS, `DebugDrawMesh` MS, and

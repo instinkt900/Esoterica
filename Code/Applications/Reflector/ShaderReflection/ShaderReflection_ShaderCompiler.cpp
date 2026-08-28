@@ -29,7 +29,28 @@ namespace EE::Reflection
     #if _WIN32
     #define DXC_ARG_TARGET_BACKEND
     #else
-    #define DXC_ARG_TARGET_BACKEND L"-spirv", L"-fspv-target-env=vulkan1.3",
+    #define DXC_ARG_TARGET_BACKEND L"-spirv", L"-fspv-target-env=vulkan1.3", DXC_ARG_BINDING_MODEL
+    #endif
+
+    // The bindless binding model. Direct3D 12 has one shader-visible CBV/SRV/UAV heap and one
+    // sampler heap, and a root signature that holds only root constants and root descriptors.
+    // Vulkan needs both halves of that named explicitly, because DXC otherwise picks heap
+    // bindings per shader from whichever numbers are still free, which is not a contract the
+    // backend can bind against. Set 1 holds the two heaps at fixed bindings. Set 0 holds the
+    // root parameters, at the register index plus a per-register-type shift, so that b2, t2 and
+    // u2 cannot land on one binding. See the P4.3 entry in Docs/Linux/Progress.md for the whole
+    // decision, and for what the Vulkan backend has to build to match it.
+    #if _WIN32
+    #define DXC_ARG_BINDING_MODEL
+    #else
+    #define DXC_ARG_BINDING_MODEL   L"-fvk-auto-shift-bindings",\
+                                    L"-fvk-b-shift", L"0", L"0",\
+                                    L"-fvk-t-shift", L"8", L"0",\
+                                    L"-fvk-u-shift", L"16", L"0",\
+                                    L"-fvk-s-shift", L"24", L"0",\
+                                    L"-fvk-bind-resource-heap", L"0", L"1",\
+                                    L"-fvk-bind-sampler-heap", L"1", L"1",\
+                                    L"-fvk-bind-counter-heap", L"2", L"1",
     #endif
 
     #define COMMON_DXC_ARGUMENTS( filename, sourceDir, codeDir )\
