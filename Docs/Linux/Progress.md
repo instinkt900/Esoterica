@@ -19,11 +19,14 @@ P5.10, all unverified.** P5.7 covers graphics and compute pipelines, with mesh a
 left to P5.14 and P5.16. Phase 5's own note says this count is the single most important piece
 of state, so it leads this section.
 
-**Correction to the P5.10 entry, which said the frame only needed the swapchain after it.** That
-is wrong. `CmdExecuteIndirect` is P5.13 and the frame is built on it - `RenderPass_ForwardShading`
-uses it six times, `RenderPass_CascadedShadow` twice and `RenderPass_DebugDraw` six times - and
-debug draw calls `CmdDispatchMesh`, which is P5.14. **P5.13 is the next thing a frame needs**,
-then P5.11 and P5.12 for the profile scopes a development build records every frame.
+**The frame cannot draw, and closing that needs a decision nobody has made yet.** Every render
+pass is built on `CmdExecuteIndirect` - `RenderPass_ForwardShading` uses it six times,
+`RenderPass_CascadedShadow` twice, `RenderPass_DebugDraw` six times - and **the engine's command
+signatures cannot be expressed by any Vulkan indirect draw.** A Direct3D 12 command signature sets
+root constants and binds root descriptors per command; Vulkan's indirect draws read draw arguments
+and nothing else, and a compute pre-pass does not help because a pre-pass cannot bind a descriptor
+either. **The answer needs a shader change, which is Phase 4's.** P5.13 landed its mechanical half
+by decision and refuses the rest at the line; see the P5.13 entry and open question 7.
 
 **`m_pNativeWindowHandle` is a `VkSurfaceKHR` on Linux, and the application owns it.** That is
 the surface-creation requirement Phase 5 owes Phase 6, and `SDL_Vulkan_CreateSurface` returns
@@ -102,7 +105,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.10 written, never run**; 32 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 32 are markers rather than RHI functions: the custom sampler border colour, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **10 of the 16 groups are real, all unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.10 written, never run**, and P5.13 is half written. 32 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Six of the 32 are markers rather than whole RHI functions: the custom sampler border colour, the static-sampler path, the mesh and raytracing `CreatePipeline` overloads, and two inside `CmdExecuteIndirect`. **10 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -115,23 +118,26 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.3-swapchain`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.13-indirect-draws`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
 `p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
-`p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34), then this.
-None merged yet. Nothing has run any of it.
+`p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34),
+`p5.3-swapchain` (#35), then this. None merged yet. Nothing has run any of it.
 
-**Next: P5.13, indirect draws and command signatures.** Every render pass in the frame is built
-on `CmdExecuteIndirect`, so nothing draws without it. After that P5.12 for debug names and
-markers, which the phase document says to do early and which makes everything else easier to
-debug, then P5.11 for the query pools the development build's profile scopes use.
+**Next: P5.12, debug names and markers.** The phase document says to do it early, it is cheap, and
+named objects and markers make every remaining group easier to debug. Then P5.11 for the query
+pools a development build's profile scopes use every frame.
+
+**Open question 7 blocks the frame and is not scheduled.** It is the indirect-draw decision
+described above and in the P5.13 entry.
 
 **Still owed to other groups**, each asserted or commented at the line rather than silently
 skipped:
 
 | Owed by | What |
 |---|---|
-| P5.13 | `CmdExecuteIndirect` must call `PrepareTransfer`, which P5.10 added, and then `BeginRenderingIfPending`. That is what `PrepareDraw` does for the ordinary draws, with the pass left open. |
+| P5.14 | `CmdExecuteIndirect` on a `DispatchMesh` signature is `vkCmdDrawMeshTasksIndirectEXT`, which cannot be named until `VK_EXT_mesh_shader` is enabled. It halts at the line today. |
+| P5.16 | The same for a `DispatchRays` signature, which is `vkCmdTraceRaysIndirect2KHR`. |
 
 **Owed by later groups, recorded so they are not forgotten:**
 
@@ -167,6 +173,99 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.13 Indirect draws. The engine's command signatures do not fit Vulkan
+
+**`CreateCommandSignature` and `DestroyCommandSignature` are implemented. `CmdExecuteIndirect` is
+implemented for a signature that carries only a draw or dispatch argument, and refuses the rest at
+the line.** **P5.13 is not a real group**, because no engine call site takes the path that works.
+Nothing has run.
+
+The `EE_UNIMPLEMENTED_FUNCTION` count is unchanged at 32, and that is the honest number: two whole
+functions became real and `CmdExecuteIndirect` gained two named refusals in place of one blanket
+one.
+
+#### Why it does not fit, in one picture
+
+A Direct3D 12 command signature can set root constants and bind root descriptors per command.
+**Vulkan's indirect draws read draw arguments and nothing else.** `EngineShader.cpp:108` walks the
+root signature's descriptor reflections and emits one argument per root parameter ahead of the draw
+argument, so one material command is laid out like this:
+
+```
+[ root constants   40 bytes ]   set 0 binding b0, a uniform buffer on Vulkan
+[ root CBV address  8 bytes ]   set 0 binding b1, a uniform buffer on Vulkan
+[ dispatch args    12 bytes ]   VkDispatchIndirectCommand
+```
+
+`vkCmdDrawIndirect` takes a stride, so it reads the last block out of the fat struct without help.
+It cannot rebind the first two per command, and `BucketResolve.esf:36` writes a different value
+into them for each command in the buffer.
+
+**A compute pre-pass does not cover it**, which answers the question Phase 4 left open when it set
+`m_indirectRootConstant` to `false`. A pre-pass can repack the draw arguments, and repacking is not
+needed because of the stride. A pre-pass cannot bind a descriptor.
+
+**Every engine signature carries root data.** `MaterialShader`, `SurfaceShader` and `ComputeShader`
+all build theirs the same way, and the two argument-writing shaders, `BucketResolve.esf` and
+`InstanceCulling.esf`, both fill in a per-command root CBV address. Nothing reads the
+`m_indirectRootConstant` capability, so the engine does not offer a narrower path.
+
+#### The decision taken
+
+**Land the mechanical half and refuse the rest, by decision.** The alternative shapes both need a
+change on the shader side, which is Phase 4's and not this file's:
+
+| Shape | What it costs |
+|---|---|
+| The shader reads its own command's root data by indexing the argument buffer with `SV_DrawIndex`, which Vulkan has as core `gl_DrawID`. One indirect call then covers the whole buffer. | No extension. Changes `RHI.esh` and the renderer shaders, so all 46 stages recompile and revalidate, and Windows sees the change too. |
+| Root constants become Vulkan push constants and root descriptors become buffer device addresses, driven by `VK_EXT_device_generated_commands`. | That extension sets push constants per command and still cannot bind a descriptor set, so it needs the same shader change **plus** a device requirement the Phase 4 list does not have. |
+
+Recorded as open question 7.
+
+#### What is real
+
+- **`CreateCommandSignature`** records the byte layout of one command: the argument type, the
+  stride, the offset of the draw argument inside the command, and whether root arguments are
+  present. The arithmetic accumulates the same byte sizes `RHI_Direct3D12.cpp:3746` does, because
+  both backends read one buffer a shader wrote and have to agree on where every field is. There is
+  no Vulkan object to create.
+- **`CmdExecuteIndirect`** maps `Draw` and `DrawIndexed` onto `vkCmdDrawIndirect` and
+  `vkCmdDrawIndexedIndirect`, or their `Count` forms when a counter buffer is passed, reading the
+  draw argument at its offset with the signature's stride. `DispatchCompute` maps onto
+  `vkCmdDispatchIndirect`.
+
+#### Three things the working path still cannot do, each asserted at the line
+
+| Case | Why |
+|---|---|
+| A `DispatchCompute` signature with a counter buffer, or `maxNumCommands` above 1 | `vkCmdDispatchIndirect` runs exactly one dispatch and reads no count buffer, where Direct3D 12 runs `min( maxNumCommands, count )`. A caller would silently get one dispatch, so both are refused. |
+| A `DispatchMesh` signature | `vkCmdDrawMeshTasksIndirectEXT`, which cannot be named until P5.14 enables `VK_EXT_mesh_shader`. |
+| A `DispatchRays` signature | `vkCmdTraceRaysIndirect2KHR`, which is P5.16's. |
+
+#### A correction to what P5.10 recorded as owed here
+
+That entry said `CmdExecuteIndirect` should call `PrepareTransfer` and then
+`BeginRenderingIfPending`, which would end the render pass and immediately restart it. **An
+indirect draw wants exactly what `PrepareDraw` gives an ordinary one**, and only an indirect
+dispatch has to leave the pass. It now branches on the signature's argument type.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 104 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved.
+- Every engine `CmdExecuteIndirect` and `CreateCommandSignature` call site was read, along with the
+  two shaders that write the argument buffers and the `DrawArgument` and `DebugDrawMeshArgument`
+  layouts. That is what established that no call site takes the working path.
+
+#### Not verified
+
+Nothing indirect has been drawn. There is no point checking the working path against the engine
+until open question 7 is answered, because no engine call site reaches it.
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.3 Swapchain. A Vulkan queue does not run its submits in order
 
@@ -2938,6 +3037,7 @@ question to "Decisions made" once you answer it.
 | 4 | Do the target distros package SDL3, or must we always build it? | Phase 6 | open |
 | 5 | ~~Does `GameNetworkingSockets` block the first `Base` link?~~ | Phase 1 | **answered: yes, and at compile time, not link** |
 | 6 | ~~Does the `VirtualAlloc` region in `Memory.cpp` have a working non-Windows path?~~ | Phase 1 | **answered: no** |
+| 7 | How do the engine's indirect draws reach Vulkan? Every command signature sets root constants and binds root descriptors per command, and no Vulkan indirect draw can do either. Both candidate answers change the shaders, which is Phase 4's. | Phase 5, and the whole frame | **open, and it blocks the frame.** See the P5.13 entry |
 
 Answered:
 
