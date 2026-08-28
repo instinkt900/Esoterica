@@ -45,9 +45,9 @@ Taken from `Code/PropertySheets/*.props` and the `.lib` files they reference.
 | Dependency | Purpose | How to get it |
 |---|---|---|
 | **SDL3** | Windowing, input, gamepad, and the X11 or Wayland abstraction | Build from source, or use a distro package where SDL3 (not SDL2) exists. Pin the version. |
-| **Vulkan headers and loader** | Vulkan API | `vulkan-headers`, `libvulkan-dev`. `volk` can load the functions and skip the loader's dispatch overhead. Decide in Phase 5. |
-| **VulkanMemoryAllocator (VMA)** | GPU allocator. Replaces `D3D12MemoryAllocator`. | Header-only. Vendor it into `External/VMA/`. |
-| **SPIRV-Reflect** | Shader reflection. Replaces `ID3D12ShaderReflection`. | Small, one header and one source file. Vendor it into `External/SPIRV-Reflect/`. |
+| **Vulkan headers and loader** | Vulkan API | `libvulkan-dev`. Not fetched into `External/`: the loader carries an ICD layer that has to match the installed drivers. **Plain loader, not `volk`** - see open question 3. |
+| **VulkanMemoryAllocator (VMA)** | GPU allocator. Replaces `D3D12MemoryAllocator`. | Header only. `./DownloadDependencies.sh vma` puts `vk_mem_alloc.h` in `External/VMA/include/`. Pinned to `v3.4.0`. |
+| **SPIRV-Reflect** | Shader reflection. Replaces `ID3D12ShaderReflection`. | `./DownloadDependencies.sh spirv_reflect` builds one C file into `External/SPIRV-Reflect/lib/libspirv-reflect.a`. Pinned to `vulkan-sdk-1.4.357.0`. |
 | **libunwind and libdw** | Stack walking. Replaces DbgHelp. | `libunwind-dev`, `libdw-dev`. |
 | **inotify** | File watching. Replaces `ReadDirectoryChangesW`. | Kernel API. No dependency. |
 | **libuuid** *(optional)* | UUID generation. Replaces `CoCreateGuid`. | `uuid-dev`. The alternative is `getrandom(2)` plus a hand-written v4 UUID format, which needs no dependency. The engine only needs uniqueness, so prefer `getrandom`. |
@@ -77,7 +77,7 @@ elements to decide what to link. This is the table it implements.
 | `ixWebSocket.props` | `-lixwebsocket -lz -lssl -lcrypto` | |
 | `MeshOptimizer.props` | `-lmeshoptimizer` | |
 | `CTT.props` | `-lctt_capi` | Waiting on the Linux build question below |
-| `RenderDoc.props` | *(none)* | Header only. Loaded with `dlopen` at runtime. |
+| `RenderDoc.props` | *(none)* | Header only. `./DownloadDependencies.sh renderdoc` fetches `renderdoc_app.h` from tag `v1.45`. The library is found at runtime with `dlopen`. |
 | `AmdAgs.props` | *(skipped)* | Dropped |
 | `WinPixEventRuntime.props` | *(skipped)* | Dropped |
 | `Optick.props` | *(skipped)* | Dropped |
@@ -85,7 +85,9 @@ elements to decide what to link. This is the table it implements.
 | `LivePP.props` | *(skipped)* | Dropped |
 | `NavPower.props` | *(skipped)* | Dropped |
 | *(new)* SDL3 | `pkg-config --libs sdl3` | `Base` needs it from Phase 6 |
-| *(new)* Vulkan | `-lvulkan` | `Base` needs it from Phase 5 |
+| *(new)* Vulkan | `pkg-config --libs vulkan` | `Base` needs it from Phase 5 |
+| *(new)* VMA | *(none)* | Header only. `Base` needs it from Phase 5 |
+| *(new)* SPIRVReflect | `-lspirv-reflect` | `Base` needs it from Phase 5 |
 | *(new)* unwind | `-lunwind -ldw` | `Base` needs it from Phase 1 |
 
 `DXC.props` also has MSBuild `Copy` targets (`DXC_CopyDLL`) that stage `dxcompiler.dll` and
@@ -137,8 +139,9 @@ Answer each question in the phase that first needs it, then record the answer he
 2. **LLVM version pinning.** *(Phase 2)* Read the exact version from `LLVM.props`, and confirm
    that the Reflector's use of `clangAST` compiles against it on Linux. Clang's AST C++ API is
    not stable across major versions.
-3. **`volk` or the Vulkan loader.** *(Phase 5)* Decide from measured dispatch overhead. Default
-   to the plain loader for simplicity. Adopt `volk` only if profiling justifies it.
+3. ~~**`volk` or the Vulkan loader.**~~ *(Phase 5)* **Answered: the plain loader.** Nothing has
+   been profiled yet, and nothing can be until the backend renders, so the default stands. It is
+   one line in `Toolchain.SHEETS` plus an include if a profile ever argues otherwise.
 4. **SDL3 availability.** *(Phase 6)* Confirm whether the target distributions package SDL3, or
    whether `DownloadDependencies.sh` must always build it.
 5. **Does GameNetworkingSockets block the early phases?** *(Phase 1)* `Esoterica.Base` imports

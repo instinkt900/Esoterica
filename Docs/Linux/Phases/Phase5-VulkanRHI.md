@@ -225,7 +225,13 @@ their `VK_KHR_acceleration_structure` equivalents, so it is more mechanical than
 (`Code/Engine/Render/`, 55 files that call `RHI::`) exercises everything at once, and a
 first-light failure there is nearly impossible to diagnose.
 
-Use `Esoterica.Applications.Tester` as a harness, and build up:
+**The `Tester` harness in this section does not exist.** `Code/Applications/Tester/Main.cpp` is
+114 lines of upstream scratch code, and no Linux binary can reach `RHI::CreateContext` before
+Phase 6. Read the ladder below as the order to *implement* in, not as a thing that runs today.
+The engine's own initialisation order matches it: `RenderSystem::Initialize` runs before any
+window handle is needed, so steps 1 to 8 map onto the real engine when Phase 6 arrives.
+
+The ladder, in the order the phase document intended it to run:
 
 1. Create the context, enumerate the device, report the capabilities. No rendering.
 2. Timeline semaphore round-trip. Submit an empty command buffer, and wait on the host.
@@ -250,7 +256,12 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    remains** in `RHI_Vulkan.cpp`.
 2. `RHI.h` is unmodified. `git diff upstream/main -- Code/Base/Render/RHI.h` is empty.
 3. `RHI_Direct3D12.cpp` is unmodified.
-4. Bring-up steps 1 to 8 all pass in the `Tester` harness, and the tests are committed.
+4. ~~Bring-up steps 1 to 8 all pass in the `Tester` harness, and the tests are committed.~~
+   **Cannot be met as written.** `Esoterica.Applications.Tester` is an upstream scratchpad, not a
+   test framework, and nothing on Linux can call into the RHI until Phase 6 lands. The backend is
+   being written verified by compile and link only. See the 2026-08-28 decision entry in
+   [Progress.md](../Progress.md). Re-state this criterion against the real engine once Phase 6
+   provides an entry point.
 5. The full engine frame produces no Vulkan validation errors and no warnings.
 6. All 26 shaders from Phase 4 load and execute.
 7. The full engine frame renders correctly, checked against Windows Direct3D 12 screenshots of
