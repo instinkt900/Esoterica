@@ -292,7 +292,45 @@ SHEETS = {
     'LivePP':                Sheet( note = 'dropped. Do not define EE_ENABLE_LPP' ),
     'NavPower':              Sheet( note = 'dropped. Do not define EE_ENABLE_NAVPOWER' ),
     'FBXSDK':                Sheet( note = 'dropped, no .vcxproj imports it' ),
+
+    #---------------------------------------------------------------------
+    # Linux-only. These have no Code/PropertySheets/*.props sibling and never will, because the
+    # Windows build has no use for them: Vulkan replaces Direct3D 12, VMA replaces
+    # D3D12MemoryAllocator, and SPIRV-Reflect replaces ID3D12ShaderReflection. They reach a
+    # project through LINUX_ONLY_SHEETS rather than through a .vcxproj import.
+    #---------------------------------------------------------------------
+
+    # The loader and headers come from the distribution, not External/. pkg-config supplies both
+    # the include path and -lvulkan. Open question 3 is answered here: the plain loader, not
+    # volk. Phase 5 can revisit it if dispatch overhead ever shows up in a profile, and that is
+    # a one-line change in this table plus an include.
+    'Vulkan':                Sheet( pkg_config = 'vulkan' ),
+    # Header only. One translation unit in the Vulkan backend defines VMA_IMPLEMENTATION.
+    'VMA':                   Sheet( include_directories = ( 'External/VMA/include', ),
+                                    requires_path = 'External/VMA',
+                                    deferred_to_phase = 'Phase 5' ),
+    # The include directory is the dependency root, not an include/ subdirectory: spirv_reflect.h
+    # includes "./include/spirv/unified1/spirv.h" relative to itself, so the layout has to mirror
+    # the source tree. DownloadDependencies.sh lays it out to match.
+    'SPIRVReflect':          Sheet( include_directories = ( 'External/SPIRV-Reflect', ),
+                                    library_directories = ( 'External/SPIRV-Reflect/lib', ),
+                                    libraries = ( 'spirv-reflect', ),
+                                    requires_path = 'External/SPIRV-Reflect',
+                                    deferred_to_phase = 'Phase 5' ),
 }
+
+# Sheets that attach to a project by name, because no .vcxproj imports them. Everything else in
+# SHEETS arrives through UpstreamProjects.txt, which SyncUpstream.py regenerates from the
+# .vcxproj files, so a hand-written entry there would not survive the next sync.
+#
+# Only Esoterica.Base needs these. It holds RHI_Vulkan.cpp, and every other project reaches the
+# RHI through it.
+LINUX_ONLY_SHEETS = {
+    'Esoterica.Base': ( 'Vulkan', 'VMA', 'SPIRVReflect' ),
+}
+
+def linux_only_sheets( project_name ):
+    return LINUX_ONLY_SHEETS.get( project_name, () )
 
 # Sheets whose libraries do not exist yet, by the phase that brings them in. Linking a target
 # that needs one of these will fail until then, which is expected and is not a generator bug.

@@ -133,6 +133,21 @@ def test_property_sheets_are_mapped():
     unmapped = sorted( imported - set( Toolchain.SHEETS ) )
     check( unmapped == [], f'every imported property sheet has a Linux mapping ({unmapped})' )
 
+    # LINUX_ONLY_SHEETS attaches a sheet by project name, so a typo in either name silently
+    # contributes nothing. The build stays green until something needs the symbols, and the link
+    # error then names a Vulkan function rather than the misspelling that caused it.
+    project_names = { project.name for project in solution.projects }
+
+    unknown_projects = sorted( set( Toolchain.LINUX_ONLY_SHEETS ) - project_names )
+    check( unknown_projects == [],
+           f'every LINUX_ONLY_SHEETS key names a real project ({unknown_projects})' )
+
+    unknown_sheets = sorted( { name
+                               for names in Toolchain.LINUX_ONLY_SHEETS.values()
+                               for name in names } - set( Toolchain.SHEETS ) )
+    check( unknown_sheets == [],
+           f'every LINUX_ONLY_SHEETS value is in SHEETS ({unknown_sheets})' )
+
     # Conventions rule 4: a dropped middleware stays off by leaving its define unset, never by
     # editing a call site. None of these may contribute anything.
     for name in ( 'LivePP', 'SuperLuminal', 'NavPower', 'Optick' ):
