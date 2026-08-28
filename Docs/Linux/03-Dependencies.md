@@ -110,6 +110,19 @@ This mirrors `DownloadDependencies.bat`, but it builds instead of unzipping. It 
 Build LLVM and DXC last. Each takes tens of minutes, and everything else is fast, so failing
 early on the cheap dependencies gives better feedback.
 
+### DXC is pinned to a tag, and patched
+
+`DXC_VERSION="v1.10.2605.37"`, which is commit `c4d8f4f9`. It is built from source rather than
+downloaded, because its SPIR-V back end crashes on this engine's mesh shaders. The fixes live in
+`Code/Scripts/DXCPatches/` and `fetch_dxc` applies them, in name order, before configuring. **A
+patch that fails to apply is fatal**, because that means the pin moved and nobody re-checked the
+fix.
+
+The tag is the one the official prebuilt Linux binaries were built from, so the only difference
+between this compiler and Microsoft's is the patches. See the 2026-08-28 decision entries in
+[Progress.md](Progress.md) for why it is patched here rather than in a fork, and for the two
+configure settings that keep a re-run incremental.
+
 ---
 
 ## Open questions to resolve during implementation
