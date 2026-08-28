@@ -11,13 +11,16 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8 and P5.9 are
-written and have never been run.**
+answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9 and
+P5.10 are written and have never been run.**
 
-**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8 and P5.9, all
+**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9 and P5.10, all
 unverified.** P5.2 is complete except `QueuePresent`, which needs P5.3's swapchain; P5.7 covers
 graphics and compute pipelines, with mesh and raytracing left to P5.14 and P5.16. Phase 5's own
 note says this count is the single most important piece of state, so it leads this section.
+
+**Every group the engine needs to record a frame is now written except the swapchain.** P5.3 is
+the last one before Phase 6 can try to run anything.
 
 **The render pass is opened by the first draw, not by `CmdSetRenderTargets`.** The engine records
 image layout barriers between the two and a barrier may not run inside dynamic rendering, so the
@@ -87,7 +90,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8 and P5.9 written, never run**; 42 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 42 are markers rather than RHI functions: the custom sampler border colour, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **8 of the 16 groups are real, all unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9 and P5.10 written, never run**; 37 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 37 are markers rather than RHI functions: the custom sampler border colour, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **9 of the 16 groups are real, all unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -100,28 +103,27 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.9-barriers`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.10-copies-clears`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
 `p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
-`p5.6-textures-samplers` (#32), then this. None merged yet. Nothing has run any of it.
+`p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), then this. None merged yet. Nothing has
+run any of it.
 
-**Next: P5.10, copies and clears.** With it, every group `RenderSystem` needs on a frame is
-written except the swapchain, and P5.3 is the last one before Phase 6 can try to run anything.
+**Next: P5.3, the swapchain.** It is the last group Phase 6 needs before the engine can try to
+record and present a frame.
 
 **Still owed to other groups**, each asserted or commented at the line rather than silently
 skipped:
 
 | Owed by | What |
 |---|---|
-| P5.10 | Every copy and clear must call `FlushBarriers` and then `SuspendRendering`, in that order, exactly as `CmdDispatchCompute` does. A copy may not run inside dynamic rendering, and a barrier the copy depends on has to reach the device first. |
-| P5.13 | The same two calls in `CmdExecuteIndirect`, plus `BeginRenderingIfPending` after them, which is what `PrepareDraw` does for the ordinary draws. |
+| P5.13 | `CmdExecuteIndirect` must call `PrepareTransfer`, which P5.10 added, and then `BeginRenderingIfPending`. That is what `PrepareDraw` does for the ordinary draws, with the pass left open. |
 
 **Owed by later groups, recorded so they are not forgotten:**
 
 | Group | What it owes |
 |---|---|
 | P5.3 | `QueuePresent`, which is still a stub. `VkPresentInfoKHR` takes binary semaphores only, so the swapchain has to carry one per image, the submit before the present must signal it next to the timeline value, and the present waits on it. Acquire needs the mirror of the same thing. |
-| P5.10 | `vkCmdCopyBufferToImage`'s `bufferRowLength` must come from `GetTextureCopyRowStride`. The engine writes its staging rows at that stride and the copy has to read them at it. |
 | P5.9, P5.12 | Two `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT` sites in `QueueDeviceWait` and `QueueSubmit`, listed below. P5.12 builds its nine `SetDebugName` overloads on `SetVulkanObjectName`, which P5.2 wrote. |
 
 ## `ALL_COMMANDS` sites
@@ -135,6 +137,7 @@ to be found later. All four sites are in `RHI_Vulkan.cpp`:
 | `QueueSubmit`, signal `stageMask` (P5.2) | The signalled timeline value has to mean "everything in this submit finished". | Nothing. `ALL_COMMANDS` is arguably correct here rather than lazy, since that is the semantic. |
 | `VulkanPipelineStage`, `PipelineStage::All` (P5.9) | `D3D12_BARRIER_SYNC_ALL` means every stage, and so does this. The reference returns it the same way, as an early return rather than one bit among many. | Nothing. It is the meaning of the flag. |
 | `VulkanAccess`, `ResourceAccess::Common` (P5.9) | `D3D12_BARRIER_ACCESS_COMMON` is "any access", which Vulkan spells `MEMORY_READ` plus `MEMORY_WRITE`. `DeviceTextureState` starts every texture at `Common`, so this is the source mask of the first barrier on any texture. | The engine would have to say what it actually did, which the tracker does not record. Narrowing it is a change on the engine side, not here. |
+| `RecordClearVisibilityBarrier`, destination masks (P5.10) | A clear has to be visible to whatever reads it next, and the engine's own barrier after a clear names a shader write as the source, which does not cover a Vulkan transfer write. Nothing at the call site says who the reader is. | The reader. In practice it is a compute dispatch, an indirect argument fetch or a copy to a host buffer, and naming those three would narrow it. Confirm against a captured frame first. |
 
 ---
 
@@ -150,6 +153,81 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.10 Copies and clears. A clear needs a barrier the engine does not record
+
+**`CmdCopyBuffer`, both `CmdCopyTexture` overloads, `CmdClearTexture` and `CmdClearBuffer` are
+implemented.** 37 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 42. Nothing has run.
+
+The five commands are short. Three things around them are not, and each is a place where Direct3D
+12 needs nothing and Vulkan needs something.
+
+#### A Direct3D clear is a shader write, and a Vulkan clear is a transfer write
+
+`ClearUnorderedAccessViewUint` writes through an unordered access view, so
+`Renderer_ForwardShading.cpp:753` follows its clears with a barrier whose source is
+`ResourceAccess::UnorderedAccess`. That is a shader storage write. `vkCmdFillBuffer` is a transfer
+write, which that barrier does not cover at all, so **the culling counters would be read stale and
+no validation layer would say a word**.
+
+So every clear records the transfer half of its own visibility barrier, batched like the rest and
+flushed with them at the next dispatch. `RecordClearVisibilityBarrier` is the one place it lives.
+Its destination is `ALL_COMMANDS` and it is listed in the table above as a site to narrow.
+
+#### A copy needs a layout the engine never asks for
+
+`D3D12_BARRIER_LAYOUT_COMMON` is already a legal copy source, copy destination and unordered
+access view clear target, so **the engine issues no layout barrier before a texture upload**. It
+issues a global memory barrier and nothing else: `RenderSystem.cpp:489` and `:759` are the two
+sites. Vulkan needs `GENERAL` or one of the `TRANSFER` layouts, and the image is still in the
+`UNDEFINED` that `vkCreateImage` gave it, which is P5.6's recorded obligation.
+
+`TransitionTextureForTransfer` records that barrier, once per texture, into `GENERAL` and not
+`TRANSFER_DST_OPTIMAL`. `GENERAL` is what `TextureState::Common` maps to, so the engine's belief
+about this texture stays true and the next barrier it records still passes `CmdBarrier`'s assert.
+Every texture the engine copies into is created `Common`; `RenderSystem.cpp:650` asserts it.
+
+#### The staging row stride, which P5.6 left to this task
+
+`vkCmdCopyBufferToImage` takes its row length in texels and the engine lays out its staging rows
+at the byte stride `GetTextureCopyRowStride` reports. `CopyRowLengthInTexels` converts the one
+into the other, and **both** copy overloads use it, so the readback direction reads rows at the
+stride the upload direction writes them. Direct3D 12 uses the destination buffer's own footprint
+for the readback, which for a buffer resource is the whole buffer as a single row and says nothing
+about texture rows.
+
+#### Two clear-value divergences, and nothing calls either path today
+
+- `CmdClearTexture` has **no caller anywhere in the engine**. `vkCmdClearColorImage` converts the
+  clear value to the image format and `ClearUnorderedAccessViewUint` writes the raw bits, so the
+  two agree on an integer format and disagree on a normalised one.
+- `CmdClearBuffer` fills 32-bit words. Direct3D fills components of the view's format. Every
+  buffer the engine clears is a counter or a 32-bit typed buffer, so the two agree; a 16-bit
+  format would not.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 91 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. The five this task adds -
+  `vkCmdCopyBuffer`, `vkCmdCopyBufferToImage`, `vkCmdCopyImageToBuffer`, `vkCmdFillBuffer` and
+  `vkCmdClearColorImage` - are all among them.
+- Every engine `CmdClearBuffer`, `CmdCopyBuffer` and `CmdCopyTexture` call site was read, along
+  with the barriers around it, which is what found the clear visibility hole.
+
+#### Not verified
+
+No copy issued, no buffer filled. The order to check things in:
+
+1. **The clear visibility barrier.** If it is wrong the culling counters are garbage and the frame
+   is empty or wildly wrong. Sync validation is the tool that names it.
+2. **The staging row stride.** A wrong stride skews every uploaded texture, which looks like a
+   decode bug rather than a copy bug.
+3. That `TransitionTextureForTransfer` leaves `m_currentLayout` agreeing with the engine's
+   tracker. `CmdBarrier`'s assert is what says otherwise.
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.9 Barriers. The render pass now opens at the draw, not at the bind
 
