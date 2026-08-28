@@ -10,12 +10,19 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 5 (started).** The Vulkan dependencies are fetched, mapped and linked, and open
-question 3 is answered: the plain loader, not `volk`. **No RHI function is implemented yet.**
-`RHI_Vulkan.cpp` is unchanged from Phase 1, so all 16 task groups are still stubs. P5.1 is next.
+**Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
+answered: the plain loader, not `volk`. **P5.1 is written and has never been run.**
 
-**Which of the 16 groups are real: none.** Phase 5's own note says that is the single most
-important piece of state, so it leads this section until it stops being zero.
+**Which of the 16 groups are real: P5.1 only, and it is unverified.** Phase 5's own note says
+that is the single most important piece of state, so it leads this section.
+
+**Nothing on Linux can execute an RHI call yet, and that is a deliberate decision.** The engine
+binary does not exist on Linux, and building one is blocked behind all of Phase 6: `BaseModule::
+InitializeModule` halts in `InputSystem::Initialize` and `ImguiSystem::InitializePlatform`, both
+Phase 6 stubs, before `EngineModule::InitializeModule` ever reaches `RHI::CreateContext`. The
+decision was to write Phase 5 against the compiler and link only, and to first execute it when
+Phase 6 lands. See the 2026-08-28 decision entry. **Treat every P5.x entry as compile-verified
+and run-unverified until that changes.**
 
 Previously: **Phase 4 (done on Linux).** DXC is built from source with three patches that fix its SPIR-V back
 end, and **all 46 shader stages compile and pass `spirv-val`**. `./CompileShaders.sh` exits 0 and
@@ -59,7 +66,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place: Vulkan, VMA, SPIRV-Reflect and the RenderDoc header all reach `Esoterica.Base`. `RHI_Vulkan.cpp` is still 607 lines of halting stubs, so **0 of the 16 groups are real** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 written, never run**; 95 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. **1 of the 16 groups is real, and it is unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -72,25 +79,26 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.0-vulkan-deps`.** The dependency plumbing only. No RHI code.
+**Phase 5, on `linux/p5.1-device-context`.** Stacked on `linux/p5.0-vulkan-deps`, which is PR #24
+and not merged yet. P5.1 is written; nothing has run it.
 
-**Next: P5.1**, device, context and memory. Read these before writing any of it:
+**Next: P5.2, queues and synchronization.** It is the group the phase document says to get right
+first, and P5.1 already chose the queue families that `vkCreateDevice` needed, so P5.2 turns
+`VulkanContext::m_graphicsQueueFamily`, `m_computeQueueFamily` and `m_transferQueueFamily` into
+`Queue` objects. The monotonic counter model in `RHI.h` maps onto timeline semaphores, which the
+device already enables. Read the note at the top of
+[Phase5-VulkanRHI.md](Phases/Phase5-VulkanRHI.md) before writing any of it.
 
-- The **bindless binding model** entry below. It names every set, binding, descriptor type and
-  feature bit, and P5.1 owes it a device check: Vulkan 1.3, `VK_EXT_mutable_descriptor_type`,
-  `VK_KHR_push_descriptor`, `scalarBlockLayout`, and the descriptor indexing bits. Refuse the
-  device if any is missing. There is no fallback; the shaders are compiled for this model.
-- The **clip-space Y** entry. The Vulkan viewport inverts Y with a negative height. The shader
-  compiler does not. Apply it once, in `CmdSetViewport`, and never a second time.
-- `RHI_Direct3D12.cpp` `CreateContext`, for what `DeviceCapabilities` and `DeviceVendorInfo`
-  have to be filled with, and for the two heap sizes the binding model copies.
+`RenderSystem::Initialize` is the order that matters for what to write next. It is straight-line
+with no early exit: `CreateContext`, three `CreateQueue`, `CreateBuffer`, `InitializeShaders`,
+then `CreateCommandPool` and `CreateCommandBuffer` in loops. The first engine run therefore needs
+**P5.1, P5.2, P5.4, P5.5 and P5.7** together. Each group moves the halt one function along.
 
-**The `Tester` harness shape is still undecided.** Phase 5's bring-up strategy wants steps 1 to 8
-run there, but `Code/Applications/Tester/Main.cpp` is an upstream file that
-[TouchedFiles.md](TouchedFiles.md) does not list, so putting the bring-up steps in it is an
-escalation, not a decision. The options are a new `.cpp` in the Tester project plus a two-line
-`#ifdef __linux__` call in `Main.cpp`, or a separate Linux-only executable that edits nothing.
-Settle it at the start of P5.1, with a human.
+**P5.6 owes P5.1 something.** `DeviceCapabilities::m_canShaderReadFrom`, `m_canShaderWriteTo` and
+`m_canRenderTargetWriteTo` are left all-false, because filling them needs the complete
+`DataFormat` to `VkFormat` mapping, which is P5.6's largest piece. Fill them there, in the same
+task as the mapping. A second partial mapping here is exactly the disagreement the phase document
+warns corrupts textures in a way that looks like a bug somewhere else.
 
 ---
 
@@ -106,6 +114,113 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-28 - P5.1 Device, context and memory. Written, never run
+
+**P5.1 is implemented and has never executed a single instruction.** `CreateContext`,
+`DestroyContext`, `GetTotalAllocatedDeviceMemory`, `GetDetailedMemoryStatistics`,
+`GetResourceAllocationStatistics` and `ReportDeviceMemoryLeaks` are real, and so are
+`BeginFrameCapture` and `EndFrameCapture`, which are P5.12's but are four lines each once
+`CreateContext` has the RenderDoc API pointer. 95 `EE_UNIMPLEMENTED_FUNCTION` remain, down from
+103.
+
+Read every claim below as "the compiler and linker agree", never as "this works".
+
+**What `CreateContext` does.** Instance with `VK_LAYER_KHRONOS_validation` and
+`VK_EXT_debug_utils` when validation is asked for; physical device selection; device with the
+binding model's features; VMA. Device selection honours `DeviceSelectionPreference`:
+`UseProvidedIndex` takes the index and refuses it if it does not qualify, and the other two score
+discrete against integrated in opposite directions, which mirrors what `DXGI_GPU_PREFERENCE` asks
+the factory for rather than inventing a different notion of "best".
+
+**The device is refused rather than worked around.** `GetDeviceRejectionReason` checks Vulkan 1.3,
+the three required extensions, and 20 feature bits, and returns the **name of the first missing
+one** so the log says what is wrong instead of "no suitable device". The list is the binding
+model's, not a guess: `mutableDescriptorType`, `VK_KHR_push_descriptor`, `scalarBlockLayout`, the
+descriptor indexing bits, the four `*UpdateAfterBind` bits and the four `*ArrayNonUniformIndexing`
+bits, plus `timelineSemaphore`, `bufferDeviceAddress`, `drawIndirectCount`, `dynamicRendering` and
+`synchronization2`. There is no fallback path, because the shaders are compiled for this model.
+
+`VK_KHR_swapchain` is enabled here even though P5.3 owns the swapchain. A device is created once,
+and adding the extension later would mean recreating it.
+
+**Two symbols moved here that had no home on Linux.** `RHI_Direct3D12.cpp` defines both, and
+exactly one backend compiles per platform:
+
+- `Memory::Allocators::g_RHI`, named by seven `TVector` and `THashMap` members in `RHI.h`.
+- `GenericResource::~GenericResource`, which `Context` derives from.
+
+Neither was referenced before, because no Linux code instantiated the types that need them. The
+link error for the second one is worth remembering: `undefined reference: vtable for
+EE::Render::RHI::GenericResource`, which names the base class and not the derived one that caused
+it.
+
+**A validation error halts.** The debug messenger logs through `EE_LOG_FATAL_ERROR`, which
+carries `EE_HALT()`. Phase 5 says to treat any validation error as a build break; this is what
+makes that true rather than aspirational. The callback initialises the thread heap first, because
+the layers call it from whichever thread tripped the check, exactly as the Direct3D 12 info queue
+callback does.
+
+**RenderDoc uses `RTLD_NOLOAD`.** `dlopen( "librenderdoc.so", RTLD_NOW | RTLD_NOLOAD )` attaches
+to a RenderDoc that already injected itself and never loads one that is not there, which is what
+`GetModuleHandleA` does on Windows. It still takes a reference, so `DestroyContext` calls
+`dlclose`. The Vulkan device pointer is `RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE`, the dispatch
+table at the start of the instance, not the instance handle.
+
+**`ReportDeviceMemoryLeaks` had to be inverted.** Direct3D 12 asks DXGI for live objects, and
+Vulkan has no global registry. It is also called from `BaseModule::ShutdownModule`, *after* the
+context is destroyed, so the allocator that knows the answer is already gone. `DestroyContext`
+therefore runs `vmaCalculateStatistics` while the allocator still exists and records any surviving
+allocations in two file statics, which `ReportDeviceMemoryLeaks` then reports. Leaked Vulkan
+*handles*, as opposed to memory, are the validation layers' job.
+
+**What is deliberately not filled in, and why.**
+
+| Left alone | Reason |
+|---|---|
+| `m_canShaderReadFrom`, `m_canShaderWriteTo`, `m_canRenderTargetWriteTo` | All three need the complete `DataFormat` to `VkFormat` mapping, which is P5.6's largest piece. Two partial mappings that disagree is the failure the phase document says corrupts textures in a way that looks like a bug somewhere else. |
+| `m_shadingRate`, `m_shadingRateCaps` | `NotSupported`, matching the Direct3D 12 backend, which sets the same with a TODO. P5.15 owns them, and reporting a capability the backend cannot honour makes the engine issue calls that halt. |
+| `m_indirectRootConstant` | `false`. Direct3D 12 command signatures set root constants per draw and Vulkan's indirect draws cannot. P5.13 decides whether a compute pre-pass covers it. |
+| `m_breadcrumbs` | `false`. DRED's equivalents are `VK_AMD_buffer_marker` and `VK_NV_device_diagnostic_checkpoints`, neither wired up. |
+| `m_rasterizerOrderViews` | `false`. `VK_EXT_fragment_shader_interlock` is the equivalent and nothing enables it. |
+| `m_hdr` | `false`. It needs a swapchain colour space, which is P5.3. |
+| `m_numRaytracingCores` | `0`. No Vulkan query exposes it, and nothing in the engine reads it. |
+
+`m_optimalRootSignatureSizeInDWORDs` is copied from Direct3D 12 as 13 rather than derived. It is
+an AMD packet-size heuristic with no Vulkan meaning, and it feeds the engine's own root signature
+sizing, which has to agree across both backends.
+
+**Queue families are chosen here, which looks like P5.2's work.** `vkCreateDevice` takes the queue
+create infos, so it cannot be deferred. A device with no dedicated async compute or transfer
+family falls back to the graphics family, which is correct rather than degraded: every
+graphics-capable family also supports compute and transfer.
+
+**`DeviceMode` is always `Single`.** Vulkan has no equivalent of a Direct3D 12 linked-node
+adapter; multi-GPU is explicit device groups, which the engine never asks for. `m_numLinkedNodes`
+is 1.
+
+**Verified, in the only sense available:**
+
+- All eight Linux targets compile and link: the five `.so` files, `Reflector`,
+  `ResourceCompiler`, `Tester`. `ninja` exits 0 and a re-run reports "no work to do".
+- `nm -DC libEsoterica.Base.so` shows `EE::Render::RHI::CreateContext` as a defined exported
+  symbol and `EE::Memory::Allocators::g_RHI` in BSS. 37 `vk*` symbols are undefined and resolve
+  against `libvulkan.so.1`.
+- `Checks.py` passes.
+- Every Vulkan extension macro, feature bit and struct name was read out of
+  `/usr/include/vulkan/vulkan_core.h` before use, not recalled.
+
+**Not verified, and not verifiable here:** that any of it produces a working device. No
+instance has been created, no device enumerated, no capability read. The two GPUs in this machine
+were surveyed during Phase 4 and both expose everything the binding model needs, so the
+requirement list is not speculative, but the code that reads it has never executed.
+
+**One `#pragma clang diagnostic` is used**, around the `vk_mem_alloc.h` include, to silence about
+200 `-Wnullability-completeness` warnings. It is a new Linux-only file, so no upstream file is
+touched, and the suppression is scoped to that include.
+
+**Upstream files edited: none.** `RHI_Vulkan.cpp` is a file this fork added; it is listed in
+`LinuxSources.txt` and does not appear in [TouchedFiles.md](TouchedFiles.md), which is correct.
 
 ### 2026-08-28 - P5.0 The Vulkan dependencies, and open question 3
 
@@ -846,6 +961,59 @@ the reasoning, not just the outcome.
 **Rationale:** ...
 **Alternatives rejected:** ...
 -->
+
+### 2026-08-28 - Phase 5 is written blind, because nothing on Linux can run it
+
+**Decision: implement the Vulkan backend verified by compile and link only, and first execute it
+when Phase 6 lands.** Recorded because it makes every Phase 5 entry weaker than it looks, and a
+later session reading "P5.1 done" needs to know what "done" meant.
+
+**The blocker, verified rather than assumed.** Nothing on Linux can reach `RHI::CreateContext`:
+
+- Of the seven applications, `BuildGenerator` is excluded permanently, `Editor` and
+  `ResourceServer` do not compile and are Phase 7, `Reflector` and `ResourceCompiler` are offline
+  tools that never touch the RHI, and `Tester` is an upstream scratchpad.
+- `Esoterica.Applications.Engine` has exactly one source file, `Win32/EngineApplication_Win32.cpp`,
+  which the `**/Win32/**` exclusion glob drops. There is no Linux engine binary.
+- Writing one does not help on its own. `BaseModule::InitializeModule` calls
+  `m_inputSystem.Initialize()` at `:151`, which calls `Initialize()` on a `KeyboardMouseDevice`
+  and four `XBoxControllerInputDevice`s, and `m_imguiSystem.Initialize()` at `:157`, which calls
+  `InitializePlatform()`. All three are Phase 6 stubs that halt. `RHI::CreateContext` lives at
+  `RenderSystem.cpp:45`, inside `EngineModule::InitializeModule`, which runs after both.
+
+So running the engine needs P6.1 through P6.5 real first - SDL3, `LinuxApplication`, the imgui
+SDL3 backend, keyboard and mouse, gamepad. That is essentially all of Phase 6, whose own estimate
+is 3-4 weeks, before a line of Vulkan is written. Phase 6's stated prerequisite is "Phase 5
+through bring-up step 8", so the two phases are circular.
+
+**Rejected: the `Tester` harness the phase document names.** `Code/Applications/Tester/Main.cpp`
+is 114 lines, roughly 90 of them commented-out experiments, and the live code loads and saves an
+ini file from a hardcoded `D:\Esoterica\...` path. `int numTestFailures` is returned and never
+incremented. It is a scratchpad, not a test framework, and it is an upstream file that
+[TouchedFiles.md](TouchedFiles.md) does not list. **Acceptance criterion 4 cannot be met as
+written**, and the bring-up steps 1 to 8 it asks for have no home.
+
+**Rejected: a small Linux-only bring-up binary.** It would have verified P5.1 today, at the cost
+of a target with no Windows counterpart.
+
+**Rejected: the `EE_SHIPPING` loophole.** `EE_UNIMPLEMENTED_FUNCTION` compiles to nothing when
+`EE_DEVELOPMENT_TOOLS` is off, so a Shipping build walks past all three Phase 6 stubs silently.
+It also disables every assert and the validation layers, which Phase 5's "do not" list rules out
+explicitly.
+
+**What this costs, stated plainly.** Device feature checks, capability reporting, memory
+statistics and the whole binding model are unexercised. A wrong assumption in any of them
+surfaces at Phase 6 on top of several finished task groups rather than immediately. The
+mitigation available is that every extension name, feature bit and struct name is read out of the
+system Vulkan headers rather than recalled, and the two GPUs in this machine were surveyed during
+Phase 4 against the binding model's requirement list.
+
+**One thing that makes this less bad than it looks.** The engine's own initialisation order is
+already headless-first: `EngineModule::InitializeModule` calls `m_renderSystem.Initialize()`
+*before* `m_renderWindow.SetNativeWindowHandle( Platform::GetMainWindowHandle() )` at `:135`, and
+`Platform::GetMainWindowHandle` is a plain `void*` global with no Win32 types in it. When Phase 6
+lands, bring-up steps 1 to 8 map onto the real engine with no window needed, and step 9 is where
+the swapchain arrives. The ladder the phase document wanted still exists; it just runs later.
 
 ### 2026-08-28 - P4.6 is deferred to a Windows machine, with the Linux half done in advance
 
