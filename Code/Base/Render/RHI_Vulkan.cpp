@@ -5,6 +5,7 @@
 
 #include "Base/Math/Math.h"
 #include "Base/Types/HashMap.h"
+#include "Base/Render/HandleAllocator.h"
 
 #include "EASTL/algorithm.h"
 
@@ -85,6 +86,30 @@ namespace EE::Render::RHI
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     };
 
+    // The two heaps, in set 1. The counts are Direct3D 12's, from its CreateContext at
+    // RHI_Direct3D12.cpp:2229 and :2236. Keeping them identical is what makes a handle mean the
+    // same thing on both backends, and both fit under UINT16_MAX so InvalidResourceHandle stays
+    // outside either heap.
+    static constexpr uint32_t g_resourceHeapSize = 64 * 1023;
+    static constexpr uint32_t g_samplerHeapSize = 2048;
+
+    static constexpr uint32_t g_heapSet = 1;
+    static constexpr uint32_t g_resourceHeapBinding = 0;
+    static constexpr uint32_t g_samplerHeapBinding = 1;
+
+    // Every type the engine's shaders pull out of ResourceDescriptorHeap. DXC's emulated heap
+    // emits one OpTypeRuntimeArray per HLSL resource type, all decorated with this one binding,
+    // which is what VK_EXT_mutable_descriptor_type exists for.
+    static constexpr VkDescriptorType g_resourceHeapMutableTypes[] =
+    {
+        VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,           // Texture2D, Texture2DArray, Texture3D, TextureCube
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,           // RWTexture2D
+        VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,    // Buffer<T>
+        VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,    // RWBuffer<T>
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,          // StructuredBuffer<T>, RWStructuredBuffer<T>, ByteAddressBuffer
+        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,          // no shader today, but GetBufferHandle accepts ConstantBuffer
+    };
+
     // Vulkan 1.3 is the baseline, so dynamic rendering, synchronization2, timeline semaphores,
     // descriptor indexing and buffer device address are all core. Only the feature bits that
     // are optional within core need asking for.
@@ -112,6 +137,10 @@ namespace EE::Render::RHI
     // compiled per platform, so the definition has to exist here too: Context derives from it,
     // and instantiating VulkanContext emits references to its vtable, typeinfo and destructor.
     EE_BASE_API GenericResource::~GenericResource() = default;
+
+    // Defined in the queues section below, next to the first caller that needed it.
+    struct VulkanContext;
+    static void SetVulkanObjectName( VulkanContext* pVulkanContext, VkObjectType objectType, uint64_t objectHandle, StringView debugName );
 
     //-------------------------------------------------------------------------
 
@@ -142,6 +171,19 @@ namespace EE::Render::RHI
 
         // VMA holds this by pointer for the allocator's whole life, so it cannot be a local.
         VkAllocationCallbacks                                           m_hostAllocationCallbacks = {};
+
+        // Set 1 of the Phase 4 binding model: one layout for every pipeline in the engine,
+        // allocated once and bound once. CmdSetPipeline binds it, because a pipeline with a
+        // different set 0 layout disturbs it.
+        VkDescriptorSetLayout                                           m_heapSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool                                                m_heapDescriptorPool = VK_NULL_HANDLE;
+        VkDescriptorSet                                                 m_heapDescriptorSet = VK_NULL_HANDLE;
+
+        // Index allocators for the two heaps. HandleAllocator is platform-neutral and is the
+        // same one the Direct3D 12 backend uses for its descriptor heaps, so a handle is
+        // allocated the same way on both sides.
+        HandleAllocator<GenericResourceHandle>                          m_resourceHeapAllocator;
+        HandleAllocator<GenericResourceHandle>                          m_samplerHeapAllocator;
 
         // Chosen here because vkCreateDevice takes the queue create infos. P5.2 turns these
         // into Queue objects. An index of ~0U means the device exposes no such family and the
@@ -785,6 +827,10 @@ namespace EE::Render::RHI
         result = vkCreateDevice( pVulkanContext->m_physicalDevice, &deviceCreateInfo, nullptr, &pVulkanContext->m_device );
         EE_ASSERT( result == VK_SUCCESS );
 
+        // Resolved here rather than later, because everything created from this point on names
+        // itself and SetVulkanObjectName reads it.
+        pVulkanContext->m_vkSetDebugUtilsObjectName = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkSetDebugUtilsObjectNameEXT" ) );
+
         // VMA
         //-------------------------------------------------------------------------
 
@@ -820,9 +866,98 @@ namespace EE::Render::RHI
         result = vmaCreateAllocator( &allocatorCreateInfo, &pVulkanContext->m_resourceAllocator );
         EE_ASSERT( result == VK_SUCCESS );
 
+        // Descriptor heaps
         //-------------------------------------------------------------------------
+        // Set 1 of the Phase 4 binding model. See the binding model entry in
+        // Docs/Linux/Progress.md, which fixes every number here.
 
-        pVulkanContext->m_vkSetDebugUtilsObjectName = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkSetDebugUtilsObjectNameEXT" ) );
+        VkMutableDescriptorTypeListEXT mutableTypeLists[2] = {};
+        mutableTypeLists[g_resourceHeapBinding].descriptorTypeCount = uint32_t( eastl::size( g_resourceHeapMutableTypes ) );
+        mutableTypeLists[g_resourceHeapBinding].pDescriptorTypes = g_resourceHeapMutableTypes;
+        // Binding 1 is a plain sampler array, so it has no mutable list.
+        mutableTypeLists[g_samplerHeapBinding].descriptorTypeCount = 0;
+        mutableTypeLists[g_samplerHeapBinding].pDescriptorTypes = nullptr;
+
+        VkMutableDescriptorTypeCreateInfoEXT mutableTypeCreateInfo = { VK_STRUCTURE_TYPE_MUTABLE_DESCRIPTOR_TYPE_CREATE_INFO_EXT };
+        mutableTypeCreateInfo.mutableDescriptorTypeListCount = 2;
+        mutableTypeCreateInfo.pMutableDescriptorTypeLists = mutableTypeLists;
+
+        VkDescriptorSetLayoutBinding heapBindings[2] = {};
+        heapBindings[g_resourceHeapBinding].binding = g_resourceHeapBinding;
+        heapBindings[g_resourceHeapBinding].descriptorType = VK_DESCRIPTOR_TYPE_MUTABLE_EXT;
+        heapBindings[g_resourceHeapBinding].descriptorCount = g_resourceHeapSize;
+        heapBindings[g_resourceHeapBinding].stageFlags = VK_SHADER_STAGE_ALL;
+
+        heapBindings[g_samplerHeapBinding].binding = g_samplerHeapBinding;
+        heapBindings[g_samplerHeapBinding].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        heapBindings[g_samplerHeapBinding].descriptorCount = g_samplerHeapSize;
+        heapBindings[g_samplerHeapBinding].stageFlags = VK_SHADER_STAGE_ALL;
+
+        // PARTIALLY_BOUND because most of a 65472-slot heap is empty at any moment, and
+        // UPDATE_AFTER_BIND because the engine writes handles into the heap while command
+        // buffers that reference it are recording, exactly as CopyDescriptorsSimple does on
+        // Direct3D 12.
+        //
+        // No VARIABLE_DESCRIPTOR_COUNT. The binding model entry lists it for both bindings and
+        // Vulkan does not allow that: only the highest-numbered binding in a set may carry it.
+        // It is also not needed, because both heaps are allocated at their full declared size.
+        // See the correction recorded in Docs/Linux/Progress.md.
+        VkDescriptorBindingFlags const heapBindingFlags[2] =
+        {
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+        };
+
+        VkDescriptorSetLayoutBindingFlagsCreateInfo heapBindingFlagsCreateInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO };
+        heapBindingFlagsCreateInfo.pNext = &mutableTypeCreateInfo;
+        heapBindingFlagsCreateInfo.bindingCount = 2;
+        heapBindingFlagsCreateInfo.pBindingFlags = heapBindingFlags;
+
+        VkDescriptorSetLayoutCreateInfo heapSetLayoutCreateInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+        heapSetLayoutCreateInfo.pNext = &heapBindingFlagsCreateInfo;
+        heapSetLayoutCreateInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+        heapSetLayoutCreateInfo.bindingCount = 2;
+        heapSetLayoutCreateInfo.pBindings = heapBindings;
+
+        result = vkCreateDescriptorSetLayout( pVulkanContext->m_device, &heapSetLayoutCreateInfo, nullptr, &pVulkanContext->m_heapSetLayout );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        // One pool holding exactly one set. The mutable pool size covers binding 0 whatever
+        // type each slot ends up holding, which is the point of a mutable descriptor.
+        VkDescriptorPoolSize heapPoolSizes[2] = {};
+        heapPoolSizes[0].type = VK_DESCRIPTOR_TYPE_MUTABLE_EXT;
+        heapPoolSizes[0].descriptorCount = g_resourceHeapSize;
+        heapPoolSizes[1].type = VK_DESCRIPTOR_TYPE_SAMPLER;
+        heapPoolSizes[1].descriptorCount = g_samplerHeapSize;
+
+        VkDescriptorPoolCreateInfo heapPoolCreateInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+        heapPoolCreateInfo.pNext = &mutableTypeCreateInfo;
+        heapPoolCreateInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        heapPoolCreateInfo.maxSets = 1;
+        heapPoolCreateInfo.poolSizeCount = 2;
+        heapPoolCreateInfo.pPoolSizes = heapPoolSizes;
+
+        result = vkCreateDescriptorPool( pVulkanContext->m_device, &heapPoolCreateInfo, nullptr, &pVulkanContext->m_heapDescriptorPool );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        VkDescriptorSetAllocateInfo heapSetAllocateInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        heapSetAllocateInfo.descriptorPool = pVulkanContext->m_heapDescriptorPool;
+        heapSetAllocateInfo.descriptorSetCount = 1;
+        heapSetAllocateInfo.pSetLayouts = &pVulkanContext->m_heapSetLayout;
+
+        result = vkAllocateDescriptorSets( pVulkanContext->m_device, &heapSetAllocateInfo, &pVulkanContext->m_heapDescriptorSet );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_DESCRIPTOR_SET, uint64_t( pVulkanContext->m_heapDescriptorSet ), "BindlessHeaps" );
+
+        // HandleAllocator works in 64-slot pages, so the capacities round up to whole pages.
+        pVulkanContext->m_resourceHeapAllocator.Initialize( ( g_resourceHeapSize + 63 ) / 64 );
+        pVulkanContext->m_samplerHeapAllocator.Initialize( ( g_samplerHeapSize + 63 ) / 64 );
+
+        EE_LOG_MESSAGE( LogCategory::Render, "RHI/CreateContext", "ShaderResource descriptor pool size: %i", g_resourceHeapSize );
+        EE_LOG_MESSAGE( LogCategory::Render, "RHI/CreateContext", "Sampler descriptor pool size: %i", g_samplerHeapSize );
+
+        //-------------------------------------------------------------------------
 
         pVulkanContext->m_hostValidation = parameters.m_enableHostValidation && validationLayerAvailable;
         pVulkanContext->m_deviceValidation = parameters.m_enableDeviceValidation && validationLayerAvailable;
@@ -856,6 +991,20 @@ namespace EE::Render::RHI
         {
             EE_ASSERT( pair.second.m_numAllocations == 0 );
             EE_ASSERT( pair.second.m_numBytes == 0 );
+        }
+
+        pVulkanContext->m_resourceHeapAllocator.Shutdown();
+        pVulkanContext->m_samplerHeapAllocator.Shutdown();
+
+        if ( pVulkanContext->m_heapDescriptorPool != VK_NULL_HANDLE )
+        {
+            // Destroying the pool frees the set allocated from it.
+            vkDestroyDescriptorPool( pVulkanContext->m_device, pVulkanContext->m_heapDescriptorPool, nullptr );
+        }
+
+        if ( pVulkanContext->m_heapSetLayout != VK_NULL_HANDLE )
+        {
+            vkDestroyDescriptorSetLayout( pVulkanContext->m_device, pVulkanContext->m_heapSetLayout, nullptr );
         }
 
         if ( pVulkanContext->m_resourceAllocator != VK_NULL_HANDLE )
@@ -1678,43 +1827,529 @@ namespace EE::Render::RHI
         return AccelerationStructureHandle();
     }
 
-    Buffer* CreateBuffer( Context* pContext, BufferParameters const& parameters )
+    //-------------------------------------------------------------------------
+    // Buffers
+    //-------------------------------------------------------------------------
+
+    struct VulkanBuffer final : Buffer
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VkBuffer                                            m_buffer = VK_NULL_HANDLE;
+        VmaAllocation                                       m_allocation = VK_NULL_HANDLE;
+        uint64_t                                            m_allocationSize = 0;
+
+        // Typed buffers, Buffer<T> and RWBuffer<T>, are texel buffers in Vulkan and a texel
+        // buffer descriptor takes a view rather than a range. Null for structured and raw
+        // buffers, which take the buffer directly.
+        VkBufferView                                        m_uniformTexelBufferView = VK_NULL_HANDLE;
+        VkBufferView                                        m_storageTexelBufferView = VK_NULL_HANDLE;
+
+        // BufferFlags::SubAllocations. The Direct3D 12 backend uses a D3D12MA virtual block for
+        // exactly this, and VMA has the same thing.
+        VmaVirtualBlock                                     m_virtualBlock = VK_NULL_HANDLE;
+
+        // A contiguous run in the resource heap, laid out the way Direct3D 12 lays it out:
+        // constant buffer first if present, then the read view, then the read-write view.
+        HandleAllocator<GenericResourceHandle>::Handle      m_descriptorHandles = {};
+        int8_t                                              m_srvDescriptorOffset = -1;
+        int8_t                                              m_uavDescriptorOffset = -1;
+
+        ReadRange                                           m_mappedRange = {};
+    };
+
+    //-------------------------------------------------------------------------
+
+    // The one DataFormat to VkFormat mapping. **P5.6 completes this function; it must never
+    // write a second one.** The phase document warns that two mappings which disagree corrupt
+    // textures in a way that looks like a bug somewhere else, so the entries buffers need are
+    // filled in here and everything else asserts rather than guessing.
+    //
+    // Only three formats reach a buffer today, all typed texel buffers: R32_UInt, RG32_UInt and
+    // R32_SFloat. Measured by reading every BufferParameters::m_format assignment in
+    // Code/Engine, not assumed.
+    static VkFormat VulkanFormat( DataFormat format )
+    {
+        switch ( format )
+        {
+            case DataFormat::Undefined:     return VK_FORMAT_UNDEFINED;
+
+            case DataFormat::R32_UInt:      return VK_FORMAT_R32_UINT;
+            case DataFormat::R32_SInt:      return VK_FORMAT_R32_SINT;
+            case DataFormat::R32_SFloat:    return VK_FORMAT_R32_SFLOAT;
+            case DataFormat::RG32_UInt:     return VK_FORMAT_R32G32_UINT;
+            case DataFormat::RG32_SInt:     return VK_FORMAT_R32G32_SINT;
+            case DataFormat::RG32_SFloat:   return VK_FORMAT_R32G32_SFLOAT;
+
+            default:
+            {
+                // P5.6 fills in the remaining ~109 entries, in the same task as the texture
+                // work that needs them.
+                EE_UNIMPLEMENTED_FUNCTION();
+                return VK_FORMAT_UNDEFINED;
+            }
+        }
     }
 
-    void DestroyBuffer( Context* pContext, Buffer*&& buffer )
+    static void TrackResourceAllocation( VulkanContext* pVulkanContext, TBitFlags<DescriptorTypeFlags> descriptorTypes, bool isTexture, bool isAllocation, uint64_t numBytes )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( numBytes == 0 )
+        {
+            return;
+        }
+
+        auto& stats = isTexture ? pVulkanContext->m_textureStats : pVulkanContext->m_bufferStats;
+        auto it = stats.find( descriptorTypes );
+        if ( it == stats.end() )
+        {
+            ResourceAllocStats entry;
+            entry.m_numAllocations = isAllocation ? 1 : 0;
+            entry.m_numBytes = isAllocation ? numBytes : 0;
+            stats.insert( { descriptorTypes, entry } );
+        }
+        else
+        {
+            if ( isAllocation )
+            {
+                it->second.m_numAllocations++;
+                it->second.m_numBytes += numBytes;
+            }
+            else
+            {
+                it->second.m_numAllocations--;
+                it->second.m_numBytes -= numBytes;
+            }
+        }
+    }
+
+    // Writes one slot of the resource heap. Writing a mutable descriptor uses the *actual*
+    // type in VkWriteDescriptorSet, never VK_DESCRIPTOR_TYPE_MUTABLE_EXT, which only ever
+    // appears in the layout.
+    static void WriteResourceHeapSlot( VulkanContext* pVulkanContext, uint32_t heapIndex, VkDescriptorType descriptorType, VkDescriptorBufferInfo const* pBufferInfo, VkBufferView const* pTexelBufferView )
+    {
+        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = pVulkanContext->m_heapDescriptorSet;
+        write.dstBinding = g_resourceHeapBinding;
+        write.dstArrayElement = heapIndex;
+        write.descriptorCount = 1;
+        write.descriptorType = descriptorType;
+        write.pBufferInfo = pBufferInfo;
+        write.pTexelBufferView = pTexelBufferView;
+
+        vkUpdateDescriptorSets( pVulkanContext->m_device, 1, &write, 0, nullptr );
+    }
+
+    //-------------------------------------------------------------------------
+
+    Buffer* CreateBuffer( Context* pContext, BufferParameters const& parameters )
+    {
+        EE_ASSERT( pContext != nullptr );
+
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanBuffer* pVulkanBuffer = pVulkanContext->CreateObject<VulkanBuffer>();
+
+        uint64_t allocationSize = parameters.m_bufferSize;
+        if ( parameters.m_descriptorTypes.IsFlagSet( DescriptorTypeFlags::ConstantBuffer ) )
+        {
+            allocationSize = Math::RoundUpToNearestMultiple64( allocationSize, pVulkanContext->m_deviceCapabilities.m_constantBufferAlignment );
+        }
+
+        EE_ASSERT( allocationSize > 0 );
+
+        uint64_t bufferStride = parameters.m_bufferStride;
+        if ( parameters.m_format != DataFormat::Undefined )
+        {
+            bufferStride = FormatBlockBitSize( parameters.m_format ) / 8;
+        }
+
+        if ( parameters.m_descriptorTypes.IsFlagSet( DescriptorTypeFlags::Raw ) )
+        {
+            EE_ASSERT( parameters.m_format == DataFormat::Undefined ||
+                       parameters.m_format == DataFormat::R32_UInt ||
+                       parameters.m_format == DataFormat::R32_SInt ||
+                       parameters.m_format == DataFormat::R32_SFloat );
+            bufferStride = sizeof( uint32_t );
+        }
+
+        TBitFlags<DescriptorTypeFlags> descriptorTypes = parameters.m_descriptorTypes;
+        if ( parameters.m_flags.IsFlagSet( BufferFlags::NoDescriptors ) )
+        {
+            descriptorTypes = {};
+        }
+
+        // Usage flags
+        //-------------------------------------------------------------------------
+        // Direct3D 12 needs almost none of this: a buffer is a buffer and the view decides what
+        // it is. Vulkan wants the usage up front, so it is derived from the descriptor types
+        // the caller asked for, plus the transfer bits, which every buffer here can need.
+
+        VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::ConstantBuffer ) )         { usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT; }
+        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::IndexBuffer ) )            { usage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT; }
+        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::IndirectArgumentBuffer ) ) { usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT; }
+
+        bool const isTypedBuffer = parameters.m_format != DataFormat::Undefined && !descriptorTypes.IsFlagSet( DescriptorTypeFlags::Raw );
+
+        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::Buffer ) )
+        {
+            usage |= isTypedBuffer ? VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        }
+
+        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::RWBuffer ) )
+        {
+            usage |= isTypedBuffer ? VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        }
+
+        // bufferDeviceAddress is a device feature CreateContext requires, and Buffer holds an
+        // m_deviceAddress the engine reads, so every buffer carries the bit.
+        usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+        VkBufferCreateInfo bufferCreateInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        bufferCreateInfo.size = allocationSize;
+        bufferCreateInfo.usage = usage;
+        // Direct3D 12 buffers have no queue ownership at all. CONCURRENT would let any queue
+        // touch this without an ownership transfer and reproduce that, at a cost on some
+        // hardware; EXCLUSIVE is the faster and stricter choice. P5.9 owns barriers, so the
+        // ownership transfers belong there. This is EXCLUSIVE because most buffers never move
+        // between queues, and P5.9 has to get the transfers right regardless.
+        bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo allocationCreateInfo = {};
+        switch ( parameters.m_memoryType )
+        {
+            case ResourceMemoryType::HostToDevice:
+            {
+                // D3D12_HEAP_TYPE_UPLOAD. Write-combined host memory the GPU reads.
+                allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+                allocationCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+            }
+            break;
+
+            case ResourceMemoryType::DeviceToHost:
+            {
+                // D3D12_HEAP_TYPE_READBACK. Cached host memory the CPU reads back.
+                allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+                allocationCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+            }
+            break;
+
+            case ResourceMemoryType::DeviceLocal:
+            {
+                allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+            }
+            break;
+        }
+
+        if ( parameters.m_flags.IsFlagSet( BufferFlags::OwnMemory ) )
+        {
+            // D3D12MA::ALLOCATION_FLAG_COMMITTED.
+            allocationCreateInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        }
+
+        if ( parameters.m_flags.IsFlagSet( BufferFlags::PersistentMap ) && parameters.m_memoryType != ResourceMemoryType::DeviceLocal )
+        {
+            allocationCreateInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        }
+
+        VmaAllocationInfo allocationInfo = {};
+        VkResult result = vmaCreateBuffer( pVulkanContext->m_resourceAllocator, &bufferCreateInfo, &allocationCreateInfo, &pVulkanBuffer->m_buffer, &pVulkanBuffer->m_allocation, &allocationInfo );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanBuffer->m_allocationSize = allocationInfo.size;
+        TrackResourceAllocation( pVulkanContext, descriptorTypes, false, true, allocationInfo.size );
+
+        VkBufferDeviceAddressInfo deviceAddressInfo = { VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+        deviceAddressInfo.buffer = pVulkanBuffer->m_buffer;
+        pVulkanBuffer->m_deviceAddress = vkGetBufferDeviceAddress( pVulkanContext->m_device, &deviceAddressInfo );
+        EE_ASSERT( pVulkanBuffer->m_deviceAddress != 0 );
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_BUFFER, uint64_t( pVulkanBuffer->m_buffer ), parameters.m_debugName );
+
+        // VMA_ALLOCATION_CREATE_MAPPED_BIT already mapped it, so there is no second Map call
+        // the way Direct3D 12 needs one.
+        if ( parameters.m_flags.IsFlagSet( BufferFlags::PersistentMap ) && parameters.m_memoryType != ResourceMemoryType::DeviceLocal )
+        {
+            pVulkanBuffer->m_pMappedAddress_WriteCombined = allocationInfo.pMappedData;
+            EE_ASSERT( pVulkanBuffer->m_pMappedAddress_WriteCombined != nullptr );
+        }
+
+        // Descriptors
+        //-------------------------------------------------------------------------
+        // One contiguous run in the resource heap, in the same order Direct3D 12 uses, because
+        // the handle arithmetic in GetBufferHandle has to match on both backends.
+
+        if ( !parameters.m_flags.IsFlagSet( BufferFlags::NoDescriptors ) && descriptorTypes.AreAnyFlagsSet( DescriptorTypeFlags::ConstantBuffer, DescriptorTypeFlags::Buffer, DescriptorTypeFlags::RWBuffer ) )
+        {
+            uint16_t numDescriptors = 0;
+            if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::ConstantBuffer ) ) { numDescriptors++; }
+            if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::Buffer ) ) { numDescriptors++; }
+            if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::RWBuffer ) ) { numDescriptors++; }
+
+            pVulkanBuffer->m_descriptorHandles = pVulkanContext->m_resourceHeapAllocator.Allocate( numDescriptors );
+            EE_ASSERT( pVulkanBuffer->m_descriptorHandles.IsValid() );
+
+            VkDescriptorBufferInfo descriptorBufferInfo = {};
+            descriptorBufferInfo.buffer = pVulkanBuffer->m_buffer;
+            descriptorBufferInfo.offset = 0;
+            descriptorBufferInfo.range = VK_WHOLE_SIZE;
+
+            if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::ConstantBuffer ) )
+            {
+                pVulkanBuffer->m_srvDescriptorOffset = 1;
+
+                VkDescriptorBufferInfo constantBufferInfo = descriptorBufferInfo;
+                constantBufferInfo.range = allocationSize;
+
+                WriteResourceHeapSlot( pVulkanContext, pVulkanBuffer->m_descriptorHandles.m_offset, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &constantBufferInfo, nullptr );
+            }
+            else
+            {
+                pVulkanBuffer->m_srvDescriptorOffset = 0;
+            }
+
+            if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::Buffer ) )
+            {
+                EE_ASSERT( bufferStride > 0 && ( allocationSize % bufferStride ) == 0 );
+                pVulkanBuffer->m_uavDescriptorOffset = int8_t( pVulkanBuffer->m_srvDescriptorOffset + int8_t( 1 ) );
+
+                uint32_t const heapIndex = uint32_t( pVulkanBuffer->m_descriptorHandles.m_offset ) + uint32_t( pVulkanBuffer->m_srvDescriptorOffset );
+
+                if ( isTypedBuffer )
+                {
+                    VkBufferViewCreateInfo viewCreateInfo = { VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO };
+                    viewCreateInfo.buffer = pVulkanBuffer->m_buffer;
+                    viewCreateInfo.format = VulkanFormat( parameters.m_format );
+                    viewCreateInfo.offset = parameters.m_firstElement * bufferStride;
+                    viewCreateInfo.range = VK_WHOLE_SIZE;
+
+                    result = vkCreateBufferView( pVulkanContext->m_device, &viewCreateInfo, nullptr, &pVulkanBuffer->m_uniformTexelBufferView );
+                    EE_ASSERT( result == VK_SUCCESS );
+
+                    WriteResourceHeapSlot( pVulkanContext, heapIndex, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, nullptr, &pVulkanBuffer->m_uniformTexelBufferView );
+                }
+                else
+                {
+                    // StructuredBuffer<T> and ByteAddressBuffer are both storage buffers. The
+                    // element offset that Direct3D 12 puts in the SRV becomes the descriptor's
+                    // own offset here.
+                    VkDescriptorBufferInfo readInfo = descriptorBufferInfo;
+                    readInfo.offset = parameters.m_firstElement * bufferStride;
+
+                    WriteResourceHeapSlot( pVulkanContext, heapIndex, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &readInfo, nullptr );
+                }
+            }
+            else
+            {
+                pVulkanBuffer->m_uavDescriptorOffset = pVulkanBuffer->m_srvDescriptorOffset;
+            }
+
+            if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::RWBuffer ) )
+            {
+                EE_ASSERT( pVulkanBuffer->m_uavDescriptorOffset != -1 );
+                EE_ASSERT( bufferStride > 0 && ( allocationSize % bufferStride ) == 0 );
+
+                uint32_t const heapIndex = uint32_t( pVulkanBuffer->m_descriptorHandles.m_offset ) + uint32_t( pVulkanBuffer->m_uavDescriptorOffset );
+
+                if ( isTypedBuffer )
+                {
+                    VkBufferViewCreateInfo viewCreateInfo = { VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO };
+                    viewCreateInfo.buffer = pVulkanBuffer->m_buffer;
+                    viewCreateInfo.format = VulkanFormat( parameters.m_format );
+                    viewCreateInfo.offset = parameters.m_firstElement * bufferStride;
+                    viewCreateInfo.range = VK_WHOLE_SIZE;
+
+                    result = vkCreateBufferView( pVulkanContext->m_device, &viewCreateInfo, nullptr, &pVulkanBuffer->m_storageTexelBufferView );
+                    EE_ASSERT( result == VK_SUCCESS );
+
+                    WriteResourceHeapSlot( pVulkanContext, heapIndex, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, nullptr, &pVulkanBuffer->m_storageTexelBufferView );
+                }
+                else
+                {
+                    VkDescriptorBufferInfo writeInfo = descriptorBufferInfo;
+                    writeInfo.offset = parameters.m_firstElement * bufferStride;
+
+                    WriteResourceHeapSlot( pVulkanContext, heapIndex, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &writeInfo, nullptr );
+                }
+
+                // BufferParameters::m_pCounterBuffer has nowhere to go. Direct3D 12 hands the
+                // counter resource to CreateUnorderedAccessView and Vulkan has no such thing.
+                // The engine does not need it: AppendBuffer.esh carries its own explicit
+                // RWBuffer<uint> counter and does its own InterlockedAdd, and no .esh or .esf
+                // in the repository uses IncrementCounter, DecrementCounter,
+                // AppendStructuredBuffer or ConsumeStructuredBuffer. See the binding model
+                // entry in Docs/Linux/Progress.md, which reaches the same conclusion from the
+                // shader side and reserves set 1 binding 2 for a counter heap that is never
+                // created.
+                EE_ASSERT( parameters.m_pCounterBuffer == nullptr );
+            }
+        }
+
+        if ( parameters.m_flags.IsFlagSet( BufferFlags::SubAllocations ) )
+        {
+            VmaVirtualBlockCreateInfo virtualBlockCreateInfo = {};
+            virtualBlockCreateInfo.size = allocationSize;
+            virtualBlockCreateInfo.pAllocationCallbacks = &pVulkanContext->m_hostAllocationCallbacks;
+
+            result = vmaCreateVirtualBlock( &virtualBlockCreateInfo, &pVulkanBuffer->m_virtualBlock );
+            EE_ASSERT( result == VK_SUCCESS );
+        }
+
+        pVulkanBuffer->m_size = allocationSize;
+        pVulkanBuffer->m_stride = parameters.m_bufferStride;
+        pVulkanBuffer->m_memoryType = parameters.m_memoryType;
+        pVulkanBuffer->m_nodeIndex = parameters.m_nodeIndex;
+        pVulkanBuffer->m_descriptorTypes = descriptorTypes;
+
+        return pVulkanBuffer;
+    }
+
+    void DestroyBuffer( Context* pContext, Buffer*&& pBuffer )
+    {
+        if ( pBuffer != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanBuffer* pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
+
+            if ( pVulkanBuffer->m_virtualBlock != VK_NULL_HANDLE )
+            {
+                EE_ASSERT( vmaIsVirtualBlockEmpty( pVulkanBuffer->m_virtualBlock ) );
+                vmaDestroyVirtualBlock( pVulkanBuffer->m_virtualBlock );
+            }
+
+            if ( pVulkanBuffer->m_uniformTexelBufferView != VK_NULL_HANDLE )
+            {
+                vkDestroyBufferView( pVulkanContext->m_device, pVulkanBuffer->m_uniformTexelBufferView, nullptr );
+            }
+
+            if ( pVulkanBuffer->m_storageTexelBufferView != VK_NULL_HANDLE )
+            {
+                vkDestroyBufferView( pVulkanContext->m_device, pVulkanBuffer->m_storageTexelBufferView, nullptr );
+            }
+
+            if ( pVulkanBuffer->m_descriptorHandles.IsValid() )
+            {
+                // The slots are not cleared. PARTIALLY_BOUND means a stale descriptor is only a
+                // problem if a shader reads it, and a shader that reads a freed handle is a bug
+                // either way. Direct3D 12 frees its descriptors the same way, without writing
+                // over them.
+                pVulkanContext->m_resourceHeapAllocator.Deallocate( eastl::move( pVulkanBuffer->m_descriptorHandles ) );
+            }
+
+            TrackResourceAllocation( pVulkanContext, pVulkanBuffer->m_descriptorTypes, false, false, pVulkanBuffer->m_allocationSize );
+
+            if ( pVulkanBuffer->m_buffer != VK_NULL_HANDLE )
+            {
+                vmaDestroyBuffer( pVulkanContext->m_resourceAllocator, pVulkanBuffer->m_buffer, pVulkanBuffer->m_allocation );
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanBuffer ) );
+            pBuffer = nullptr;
+        }
     }
 
     void MapBuffer( Context* pContext, Buffer* pBuffer, ReadRange range )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanBuffer* pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
+
+        pVulkanBuffer->m_mappedRange = { 0, pVulkanBuffer->m_size };
+        if ( range.m_offset != 0 || range.m_size != 0 )
+        {
+            pVulkanBuffer->m_mappedRange.m_offset = range.m_offset;
+            pVulkanBuffer->m_mappedRange.m_size = range.m_size;
+        }
+
+        EE_ASSERT( pVulkanBuffer->m_mappedRange.m_offset < pVulkanBuffer->m_size );
+        EE_ASSERT( pVulkanBuffer->m_mappedRange.m_offset + pVulkanBuffer->m_mappedRange.m_size <= pVulkanBuffer->m_size );
+
+        // vmaMapMemory maps the whole allocation; Direct3D 12's Map takes a read range as a
+        // hint about what the CPU will touch. The offset is applied to the pointer so the
+        // caller sees the same address either way.
+        void* pMappedAddress = nullptr;
+        VkResult const result = vmaMapMemory( pVulkanContext->m_resourceAllocator, pVulkanBuffer->m_allocation, &pMappedAddress );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanBuffer->m_pMappedAddress_WriteCombined = static_cast<uint8_t*>( pMappedAddress ) + pVulkanBuffer->m_mappedRange.m_offset;
     }
 
     void UnmapBuffer( Context* pContext, Buffer* pBuffer )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanBuffer* pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
+
+        vmaUnmapMemory( pVulkanContext->m_resourceAllocator, pVulkanBuffer->m_allocation );
+        pVulkanBuffer->m_pMappedAddress_WriteCombined = nullptr;
     }
 
     BufferHandle GetBufferHandle( Buffer const* pBuffer, DescriptorTypeFlags descriptorType )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return BufferHandle();
+        VulkanBuffer const* pVulkanBuffer = static_cast<VulkanBuffer const*>( pBuffer );
+
+        EE_ASSERT( pVulkanBuffer->m_descriptorTypes.IsFlagSet( descriptorType ) );
+        EE_ASSERT( pVulkanBuffer->m_descriptorHandles.IsValid() );
+
+        switch ( descriptorType )
+        {
+            case DescriptorTypeFlags::ConstantBuffer:
+            {
+                return BufferHandle( pVulkanBuffer->m_descriptorHandles.m_offset );
+            }
+
+            case DescriptorTypeFlags::Buffer:
+            {
+                EE_ASSERT( pVulkanBuffer->m_srvDescriptorOffset != -1 );
+                return BufferHandle( pVulkanBuffer->m_descriptorHandles.m_offset + uint8_t( pVulkanBuffer->m_srvDescriptorOffset ) );
+            }
+
+            case DescriptorTypeFlags::RWBuffer:
+            {
+                EE_ASSERT( pVulkanBuffer->m_uavDescriptorOffset != -1 );
+                return BufferHandle( pVulkanBuffer->m_descriptorHandles.m_offset + uint8_t( pVulkanBuffer->m_uavDescriptorOffset ) );
+            }
+
+            default:
+            {
+                EE_ASSERT( false );
+                return InvalidResourceHandle;
+            }
+        }
     }
 
     BufferSubAllocation BufferSubAllocate( Buffer* pBuffer, uint64_t size, uint64_t alignment )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return BufferSubAllocation();
+        VulkanBuffer* pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
+        EE_ASSERT( pVulkanBuffer->m_virtualBlock != VK_NULL_HANDLE ); // Buffer was not created with the SubAllocations flag
+
+        VmaVirtualAllocationCreateInfo allocationCreateInfo = {};
+        allocationCreateInfo.size = size;
+        allocationCreateInfo.alignment = alignment;
+
+        VmaVirtualAllocation virtualAllocation = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+
+        VkResult const result = vmaVirtualAllocate( pVulkanBuffer->m_virtualBlock, &allocationCreateInfo, &virtualAllocation, &offset );
+        if ( result == VK_SUCCESS )
+        {
+            static_assert( sizeof( VmaVirtualAllocation ) <= sizeof( uint64_t ), "BufferSubAllocation::m_internal must be able to hold a VmaVirtualAllocation" );
+            return BufferSubAllocation{ offset, uint64_t( virtualAllocation ) };
+        }
+
+        // Out of memory is expected and the caller handles it; anything else needs looking at.
+        EE_ASSERT( result == VK_ERROR_OUT_OF_DEVICE_MEMORY );
+        return {};
     }
 
     void BufferSubDeallocate( Buffer* pBuffer, BufferSubAllocation&& subAllocation )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanBuffer* pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
+        EE_ASSERT( pVulkanBuffer->m_virtualBlock != VK_NULL_HANDLE ); // Buffer was not created with the SubAllocations flag
+
+        EE_ASSERT( subAllocation.IsValid() );
+
+        vmaVirtualFree( pVulkanBuffer->m_virtualBlock, VmaVirtualAllocation( subAllocation.m_internal ) );
+
+        subAllocation = {};
     }
+
 
     Texture* CreateTexture( Context* pContext, TextureParameters const& parameters )
     {

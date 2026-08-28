@@ -11,12 +11,17 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1, P5.2 and P5.4 are written and have never been
-run.**
+answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4 and P5.5 are written and have never
+been run.**
 
-**Which of the 16 groups are real: P5.1, P5.2 and P5.4, all unverified.** P5.2 is complete except
-`QueuePresent`, which cannot be written before P5.3 supplies a swapchain. Phase 5's own note says
-this count is the single most important piece of state, so it leads this section.
+**Which of the 16 groups are real: P5.1, P5.2, P5.4 and P5.5, all unverified.** P5.2 is complete
+except `QueuePresent`, which needs P5.3's swapchain. Phase 5's own note says this count is the
+single most important piece of state, so it leads this section.
+
+**The bindless heap now exists in code.** `CreateContext` builds set 1 exactly as the Phase 4
+binding model specifies, and `GetBufferHandle` returns an index into it. **One correction to that
+recorded decision was needed**, on a flag Vulkan does not allow where the entry put it; it is
+written up below and it changes nothing the shaders can see.
 
 **Nothing on Linux can execute an RHI call yet, and that is a deliberate decision.** The engine
 binary does not exist on Linux, and building one is blocked behind all of Phase 6: `BaseModule::
@@ -68,7 +73,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2 and P5.4 written, never run**; 80 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. **3 of the 16 groups are real, all unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4 and P5.5 written, never run**; 74 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and one of the 74 is the `VulkanFormat` default that P5.6 fills in. **4 of the 16 groups are real, all unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -81,26 +86,27 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.4-command-buffers`.** Stacked: `p5.0-vulkan-deps` (PR #24),
-`p5.1-device-context` (#25), `p5.2-queues-sync` (#26), then this. None merged yet. Nothing has run
-any of it.
+**Phase 5, on `linux/p5.5-buffers`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+`p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27), then this.
+None merged yet. Nothing has run any of it.
 
-**Next: P5.5, buffers.** It is where the Phase 4 binding model stops being a document and becomes
-code, because `GetBufferHandle` returns the bindless heap offset. Read the binding model entry
-before writing it, and reuse `BufferSubAllocation`, `PageAllocator` and `HandleAllocator` from
-`Code/Base/Render/`, which are platform-neutral. After that P5.7, shaders and pipelines.
+**Next: P5.7, shaders, root signatures and pipelines.** It is the last of the five groups
+`RenderSystem::Initialize` needs, and the largest remaining decision: `RootSignature` becomes a
+`VkPipelineLayout` plus the two set layouts, and set 0 is the push descriptor set the binding
+model describes. `CreateShader` is where SPIRV-Reflect finally has a caller. Implement graphics
+and compute pipelines only; mesh and raytracing are P5.14 and P5.16.
 
 `RenderSystem::Initialize` is the order that matters. It is straight-line with no early exit:
 `CreateContext`, three `CreateQueue`, `CreateBuffer`, `InitializeShaders`, then
 `CreateCommandPool` and `CreateCommandBuffer` in loops. The first engine run needs **P5.1, P5.2,
-P5.4, P5.5 and P5.7** together. Three of the five are written.
+P5.4, P5.5 and P5.7** together. Four of the five are written.
 
 **Owed by later groups, recorded so they are not forgotten:**
 
 | Group | What it owes |
 |---|---|
 | P5.3 | `QueuePresent`, which is still a stub. `VkPresentInfoKHR` takes binary semaphores only, so the swapchain has to carry one per image, the submit before the present must signal it next to the timeline value, and the present waits on it. Acquire needs the mirror of the same thing. |
-| P5.6 | `DeviceCapabilities::m_canShaderReadFrom`, `m_canShaderWriteTo`, `m_canRenderTargetWriteTo`, all left false. Fill them in the same task as the `DataFormat` to `VkFormat` mapping, never separately. |
+| P5.6 | `DeviceCapabilities::m_canShaderReadFrom`, `m_canShaderWriteTo`, `m_canRenderTargetWriteTo`, all left false. Fill them in the same task as the `DataFormat` to `VkFormat` mapping, never separately. **Complete the existing `VulkanFormat` function; do not write a second mapping.** It holds the six entries buffers need and asserts on the rest. |
 | P5.9 | `EndCommandBuffer` is where a batched barrier flush belongs, if the Vulkan side batches them the way Direct3D 12 does. The line is marked. |
 | P5.9, P5.12 | Two `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT` sites in `QueueDeviceWait` and `QueueSubmit`, listed below. P5.12 builds its nine `SetDebugName` overloads on `SetVulkanObjectName`, which P5.2 wrote. |
 
@@ -128,6 +134,124 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-28 - P5.5 Buffers, and the bindless heap becomes code. Written, never run
+
+**All seven functions are implemented, and `CreateContext` now builds the bindless descriptor
+heap.** 74 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 80. One of those 74 is not an RHI
+function: it is the default case of `VulkanFormat`, which P5.6 fills in. Nothing has run.
+
+This is the group the phase document calls the point where the Phase 4 binding model stops being
+a document, so this entry is long.
+
+#### A correction to the binding model, on one flag
+
+The binding model entry says both heap bindings take `PARTIALLY_BOUND` and
+`VARIABLE_DESCRIPTOR_COUNT`. **Vulkan does not allow that.** Only the highest-numbered binding in
+a set may carry `VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT`
+(`VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-pBindingFlags-03004`), so binding 0 cannot have
+it while binding 1 exists.
+
+**The flag is also not needed.** It exists to let a set be allocated smaller than its layout
+declares, and both heaps are allocated at their full declared size: 65472 and 2048. So it is
+dropped from both bindings rather than kept on one.
+
+`PARTIALLY_BOUND` and `UPDATE_AFTER_BIND` stay, and the layout keeps
+`UPDATE_AFTER_BIND_POOL`. **Nothing a shader can observe changes**: the set, the bindings, the
+descriptor types, the counts and the mutable type list are all exactly as recorded. The flag never
+reaches the SPIR-V. This is written up here rather than escalated as a re-decision because it
+corrects a detail of how the recorded model is built, not the model itself. **Say so if you
+disagree** - the entry it corrects is the hard prerequisite for the whole phase.
+
+#### What the heap looks like in code
+
+Built in `CreateContext`, once, and torn down in `DestroyContext`:
+
+| Binding | Type | Count | Flags |
+|---|---|---|---|
+| 0 | `VK_DESCRIPTOR_TYPE_MUTABLE_EXT` over six types | 65472 | `PARTIALLY_BOUND`, `UPDATE_AFTER_BIND` |
+| 1 | `VK_DESCRIPTOR_TYPE_SAMPLER` | 2048 | `PARTIALLY_BOUND`, `UPDATE_AFTER_BIND` |
+
+The counts are Direct3D 12's, from `RHI_Direct3D12.cpp:2229` and `:2236`. Keeping them identical
+is what makes a handle mean the same thing on both backends.
+
+**Index allocation reuses `HandleAllocator<GenericResourceHandle>`**, the platform-neutral
+allocator in `Code/Base/Render/HandleAllocator.h` that the Direct3D 12 backend already uses for
+its own descriptor heaps. So a handle is allocated the same way on both sides, and nothing new was
+written to do it.
+
+**Writing a mutable descriptor uses the actual type, never `VK_DESCRIPTOR_TYPE_MUTABLE_EXT`.**
+That constant only ever appears in the layout and the pool size. `WriteResourceHeapSlot` is the
+one place a heap slot is written.
+
+#### Buffers
+
+`GetBufferHandle` lays out its descriptors in the same order Direct3D 12 does - constant buffer
+first if present, then the read view, then the read-write view - because the handle arithmetic has
+to agree.
+
+Vulkan wants buffer usage up front where Direct3D 12 derives it from the view, so the usage flags
+come from the requested descriptor types. The awkward part is that a *typed* buffer is a different
+descriptor type from a structured one:
+
+| HLSL | `m_format` | Vulkan descriptor | Needs |
+|---|---|---|---|
+| `ConstantBuffer<T>` | undefined | `UNIFORM_BUFFER` | range |
+| `StructuredBuffer<T>`, `ByteAddressBuffer` | undefined | `STORAGE_BUFFER` | range |
+| `RWStructuredBuffer<T>` | undefined | `STORAGE_BUFFER` | range |
+| `Buffer<T>` | set | `UNIFORM_TEXEL_BUFFER` | a `VkBufferView` |
+| `RWBuffer<T>` | set | `STORAGE_TEXEL_BUFFER` | a `VkBufferView` |
+
+**A `VkBufferView` needs a `VkFormat`, which is P5.6's mapping.** Rather than write a second
+mapping, `VulkanFormat` is created here with the entries buffers actually need and asserts on
+everything else. **P5.6 completes this function; it must not write another one.** That is exactly
+the failure the phase document warns about, where two mappings disagree and textures corrupt in a
+way that looks like a bug somewhere else.
+
+Which entries were needed was **measured, not guessed**: every `BufferParameters::m_format`
+assignment in `Code/Engine` uses one of `R32_UInt`, `RG32_UInt` or `R32_SFloat`, across
+`SpatialHash.cpp`, `DeviceRenderView.cpp`, `Renderer_ForwardShading.cpp`, `DeviceAppendBuffer.cpp`,
+`DeviceRenderWorld.cpp` and `ImguiRenderer.cpp`. The signed and float siblings of those three are
+filled in too, because they cost a line each.
+
+**`BufferParameters::m_pCounterBuffer` has nowhere to go, and needs nowhere.** Direct3D 12 hands a
+counter resource to `CreateUnorderedAccessView`; Vulkan has no equivalent. `CreateBuffer` asserts
+it is null. The binding model entry reaches the same conclusion from the shader side: no `.esh` or
+`.esf` in the repository uses `IncrementCounter`, `DecrementCounter`, `AppendStructuredBuffer` or
+`ConsumeStructuredBuffer`, and `AppendBuffer.esh` carries its own explicit `RWBuffer<uint>` counter
+and does its own `InterlockedAdd`.
+
+**Suballocation is a `VmaVirtualBlock`**, the direct equivalent of the `D3D12MA` virtual block the
+reference uses. `BufferSubAllocation::m_internal` holds the `VmaVirtualAllocation`, with a
+`static_assert` on the size, the same guard the Direct3D 12 side has.
+
+**Freed heap slots are not cleared.** `PARTIALLY_BOUND` means a stale descriptor only matters if a
+shader reads it, and a shader reading a freed handle is a bug either way. Direct3D 12 frees its
+descriptors the same way.
+
+**`VK_SHARING_MODE_EXCLUSIVE`, not `CONCURRENT`.** Direct3D 12 buffers have no queue ownership at
+all, and `CONCURRENT` would reproduce that at a cost on some hardware. P5.9 owns barriers and has
+to get the ownership transfers right regardless, so the stricter mode is the one to start from.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets compile and link. `ninja` exits 0, `Checks.py` passes.
+- 60 `vk*` symbols now resolve against `libvulkan.so.1`, up from 51.
+- The three buffer formats were read out of the engine's own call sites.
+- Every Vulkan structure and flag was read out of `/usr/include/vulkan/vulkan_core.h`.
+
+#### Not verified, and this is the group where that matters most
+
+No descriptor set has been created, no descriptor written, no handle handed to a shader. The heap
+is the single highest-risk thing in Phase 5 - the phase document calls bringing it up "the highest
+risk step" and says not to go past it on an unverified assumption. **Every claim in this entry is
+an unverified assumption.** The specific things to check first, with validation layers on:
+
+1. That a mutable descriptor binding of 65472 with `UPDATE_AFTER_BIND` allocates at all.
+2. That writing a `UNIFORM_TEXEL_BUFFER` into a mutable slot is accepted.
+3. That the heap index a shader sees equals the handle `GetBufferHandle` returned.
+
+**Upstream files edited: none.**
 
 ### 2026-08-28 - P5.4 Command pools and buffers. Written, never run
 
