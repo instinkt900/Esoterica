@@ -1,0 +1,175 @@
+Resolve the associated counter when a structured buffer is assigned from a
+descriptor heap.
+
+Applies to: v1.10.2605.37 (c4d8f4f9). Also applies to main as of 2026-08-28.
+
+Assigning a counter-bearing resource out of ResourceDescriptorHeap fails with
+"cannot handle associated counter variable assignment", while initialising one
+from the same expression works:
+
+    RWStructuredBuffer<T> a = ResourceDescriptorHeap[i];   // works
+    s.buffer                = ResourceDescriptorHeap[i];   // fails
+
+It stops five of this engine's shaders. AppendBuffer.esh builds its
+AppendBuffer<T> exactly the second way, and two more failures are not in
+hand-written shader source at all: the Reflector's code generator emits the
+same pattern when it builds a resource table struct.
+
+tryToAssignCounterVar requires the source and the destination to agree on
+whether they have a counter. A struct field gets one eagerly, from
+createFieldCounterVars; the heap access resolves to none, so they disagree.
+The source never resolves for three separate reasons, and all three have to be
+fixed for the assignment to work.
+
+1. getFinalACSBufferCounter tests AssocCounter#1 first. heap[i] is a
+   CXXOperatorCallExpr, so getReferencedDef resolves it to the subscript
+   operator, and the function returns that operator's empty counter pair
+   before it ever reaches the descriptor heap branch below. The heap branch is
+   moved above AssocCounter#1.
+
+2. That branch tested isResourceDescriptorHeap against the expression's own
+   type. The expression's type is the indexed resource; isResourceDescriptorHeap
+   wants the type of the heap object being indexed. isDescriptorHeap is the
+   predicate that matches the expression, and getDescriptorHeapOperands already
+   asserts on it.
+
+3. Even with both corrected, the counter is resolved before the right-hand
+   side is emitted. A descriptor heap access creates the heap's SPIR-V variable
+   as a side effect of being emitted, and that is what registers the heap as a
+   structured buffer that can own a counter. doBinaryOperator therefore
+   evaluates the rhs before calling tryToAssignCounterVar. Its own comment
+   already says "we need to evaluate rhs before lhs"; the counter call sat
+   above the evaluation.
+
+A fourth point is needed to avoid over-reporting. One heap declaration is
+shared by every resource type read out of it, and registering the RW variant
+puts that declaration into declRWSBuffers. Without a type test, a later read of
+a StructuredBuffer or an RWBuffer out of the same heap reports the
+RWStructuredBuffer's counter, and the assignment is then rejected against a
+destination that rightly has no counter. The resource type a heap access
+produces sits on the implicit cast above the subscript, which is where
+doCXXOperatorCallExpr already reads it from, so getDescriptorHeapResourceType
+reads it from the same place.
+
+Effect on this engine: all 46 shader stages compile, up from 41. The 41 that
+compiled before produce byte-identical SPIR-V. No shader emits a counter heap,
+because none of them use an append or consume counter.
+
+Effect on DXC's own tests: 1343 of 1357 CodeGenSPIRV tests pass, against 1345
+before. The two are spirv.legal.sbuffer.struct.hlsl and
+spirv.legal.sbuffer.usage.hlsl, and both fail only on CHECK-NEXT lines that
+assume the counter store is emitted before the right-hand side rather than
+after. The opcode histograms of both are identical to the unpatched compiler's,
+so the change is a reordering. Upstream would want those two tests updated;
+this patch deliberately does not touch them, so that the fork's diff against
+the pinned tag stays confined to the fix.
+
+--- a/tools/clang/lib/SPIRV/SpirvEmitter.h
++++ b/tools/clang/lib/SPIRV/SpirvEmitter.h
+@@ -285,6 +285,9 @@
+ 
+   bool isDescriptorHeap(const Expr *expr);
+ 
++  /// Returns the resource type that a descriptor heap access produces.
++  QualType getDescriptorHeapResourceType(const Expr *expr);
++
+   void getDescriptorHeapOperands(const Expr *expr, const Expr **base,
+                                  const Expr **index);
+ 
+--- a/tools/clang/lib/SPIRV/SpirvEmitter.cpp
++++ b/tools/clang/lib/SPIRV/SpirvEmitter.cpp
+@@ -3129,10 +3129,19 @@
+   // Handle assignment first since we need to evaluate rhs before lhs.
+   // For other binary operations, we need to evaluate lhs before rhs.
+   if (opcode == BO_Assign) {
++    // Evaluate the rhs before resolving the counter variables.
++    //
++    // A descriptor heap access creates the heap's SPIR-V variable as a side
++    // effect of being emitted, and that is what registers the heap as a
++    // structured buffer that can own a counter. Resolving the source counter
++    // first therefore finds nothing, and the assignment is rejected as a
++    // mismatch even though the counter is reachable a moment later.
++    auto *rhs = loadIfGLValue(expr->getRHS());
++
+     // Update counter variable associated with lhs of assignments
+     tryToAssignCounterVar(expr->getLHS(), expr->getRHS());
+ 
+-    return processAssignment(expr->getLHS(), loadIfGLValue(expr->getRHS()),
++    return processAssignment(expr->getLHS(), rhs,
+                              /*isCompoundAssignment=*/false, nullptr,
+                              expr->getSourceRange());
+   }
+@@ -5194,7 +5203,9 @@
+   llvm::SmallVector<SpirvInstruction *, 2> indexes;
+   if (const auto *arraySubscriptExpr = dyn_cast<ArraySubscriptExpr>(expr)) {
+     indexes.push_back(doExpr(arraySubscriptExpr->getIdx()));
+-  } else if (isResourceDescriptorHeap(expr->IgnoreParenCasts()->getType())) {
++  } else if (isDescriptorHeap(expr->IgnoreParenCasts()) &&
++             isRWAppendConsumeSBuffer(
++                 getDescriptorHeapResourceType(expr->IgnoreParenCasts()))) {
+     const Expr *index = nullptr;
+     getDescriptorHeapOperands(expr->IgnoreParenCasts(), /* base= */ nullptr,
+                               &index);
+@@ -5211,17 +5222,37 @@
+ 
+ const CounterIdAliasPair *
+ SpirvEmitter::getFinalACSBufferCounter(const Expr *expr) {
+-  // AssocCounter#1: referencing some stand-alone variable
+-  if (const auto *decl = getReferencedDef(expr))
+-    return declIdMapper.getOrCreateCounterIdAliasPair(decl);
+-
++  // A descriptor heap access has to be recognised before AssocCounter#1, and by
++  // the shape of the expression rather than by its type.
++  //
++  // heap[i] is a CXXOperatorCallExpr, so getReferencedDef resolves it to the
++  // subscript operator, and AssocCounter#1 below then returns that operator's
++  // empty counter pair and never reaches this branch. The type test was wrong
++  // too: the expression's own type is the indexed resource, while
++  // isResourceDescriptorHeap tests the type of the heap object being indexed.
++  // isDescriptorHeap is the predicate that matches, and it is what
++  // getDescriptorHeapOperands already asserts on.
+   const Expr *expr_withoutcasts = expr->IgnoreParenCasts();
+-  if (isResourceDescriptorHeap(expr_withoutcasts->getType())) {
++  if (isDescriptorHeap(expr_withoutcasts)) {
++    // Only a counter-bearing resource type has a counter to find. One heap
++    // declaration is shared by every resource type read out of it, so without
++    // this test a read of a StructuredBuffer or an RWBuffer would report the
++    // counter belonging to whichever RWStructuredBuffer the module read from
++    // the same heap earlier, and the assignment would then be rejected as a
++    // mismatch against a destination that rightly has no counter.
++    if (!isRWAppendConsumeSBuffer(
++            getDescriptorHeapResourceType(expr_withoutcasts)))
++      return nullptr;
++
+     const Expr *base = nullptr;
+     getDescriptorHeapOperands(expr_withoutcasts, &base, /* index= */ nullptr);
+     return declIdMapper.getOrCreateCounterIdAliasPair(getReferencedDef(base));
+   }
+ 
++  // AssocCounter#1: referencing some stand-alone variable
++  if (const auto *decl = getReferencedDef(expr))
++    return declIdMapper.getOrCreateCounterIdAliasPair(decl);
++
+   // AssocCounter#2: referencing some non-struct field
+   llvm::SmallVector<uint32_t, 4> rawIndices;
+   const auto *base = collectArrayStructIndices(
+@@ -7984,6 +8015,19 @@
+   return false;
+ }
+ 
++QualType SpirvEmitter::getDescriptorHeapResourceType(const Expr *expr) {
++  // heap[i] itself is typed as the heap's element placeholder; the resource
++  // type the access produces is on the implicit cast above it. This mirrors
++  // what the descriptor heap emission path in doCXXOperatorCallExpr does.
++  assert(isDescriptorHeap(expr));
++
++  if (const auto *parent = parentMap->getParent(expr))
++    if (const auto *castExpr = dyn_cast<CastExpr>(parent))
++      return castExpr->getType();
++
++  return expr->getType();
++}
++
+ bool SpirvEmitter::isDescriptorHeap(const Expr *expr) {
+   const CXXOperatorCallExpr *operatorExpr = dyn_cast<CXXOperatorCallExpr>(expr);
+   if (!operatorExpr)
