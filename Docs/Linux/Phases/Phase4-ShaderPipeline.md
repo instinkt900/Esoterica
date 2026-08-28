@@ -100,6 +100,11 @@ Vulkan-targeting flags. What matters:
   model **together with Phase 5**, because the RHI's `CmdSetRootParameter` implementation must
   agree with what the shaders were compiled to expect. Record the decision in
   [Progress.md](../Progress.md). It is the most consequential decision in this phase.
+  **Decided on 2026-08-28.** Heaps pinned to set 1, root parameters shifted by register type in
+  set 0, `VK_EXT_mutable_descriptor_type` plus push descriptors. There is no counter heap,
+  because no shader in this engine uses a hidden append or consume counter. The full decision,
+  with the flags and what the Vulkan backend must build, is the "P4.3 The bindless binding
+  model" entry in [Progress.md](../Progress.md).
 - **`-fvk-invert-y`**, if the engine assumes Direct3D's clip-space Y direction. Read the viewport
   setup in `RHI_Direct3D12.cpp` and the engine's projection matrices, and decide whether the
   inversion belongs here or in the Vulkan backend's viewport. Pick one place. Doing it in both,
@@ -209,7 +214,8 @@ these up. That is P0.4.
 7. Reflection output is correct for the bindless cases. Unbounded descriptor arrays are reported
    with the right set and binding, and flagged as runtime arrays.
 8. The binding model decision from P4.3 is recorded in [Progress.md](../Progress.md), in enough
-   detail for Phase 5 to implement against it.
+   detail for Phase 5 to implement against it. **Done, 2026-08-28.** See the "P4.3 The bindless
+   binding model" entry.
 9. The clip-space Y decision is recorded, and it names which layer performs the inversion.
 10. **The Windows MSBuild build still succeeds**, the Windows Reflector still compiles shaders to
     DXIL, and its generated output is unchanged from before this phase.
