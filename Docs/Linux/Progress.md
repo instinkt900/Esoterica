@@ -11,13 +11,18 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7 and P5.8 are
+answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8 and P5.9 are
 written and have never been run.**
 
-**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5, P5.6, P5.7 and P5.8, all unverified.**
-P5.2 is complete except `QueuePresent`, which needs P5.3's swapchain; P5.7 covers graphics and
-compute pipelines, with mesh and raytracing left to P5.14 and P5.16. Phase 5's own note says this
-count is the single most important piece of state, so it leads this section.
+**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8 and P5.9, all
+unverified.** P5.2 is complete except `QueuePresent`, which needs P5.3's swapchain; P5.7 covers
+graphics and compute pipelines, with mesh and raytracing left to P5.14 and P5.16. Phase 5's own
+note says this count is the single most important piece of state, so it leads this section.
+
+**The render pass is opened by the first draw, not by `CmdSetRenderTargets`.** The engine records
+image layout barriers between the two and a barrier may not run inside dynamic rendering, so the
+begin is deferred. See the P5.9 entry; anything that changes `CmdSetRenderTargets` or a draw has
+to keep that order.
 
 **The `DataFormat` to `VkFormat` mapping is complete, and there is exactly one of it.** All 99
 formats map, the three `DeviceCapabilities` format arrays are filled from the device, and every
@@ -82,7 +87,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7 and P5.8 written, never run**; 45 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 45 are markers rather than RHI functions: the custom sampler border colour, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **7 of the 16 groups are real, all unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8 and P5.9 written, never run**; 42 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 42 are markers rather than RHI functions: the custom sampler border colour, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **8 of the 16 groups are real, all unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -95,41 +100,41 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.6-textures-samplers`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.9-barriers`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
-`p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31), then this. None merged
-yet. Nothing has run any of it.
+`p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
+`p5.6-textures-samplers` (#32), then this. None merged yet. Nothing has run any of it.
 
-**Next: P5.9, barriers.** It is now the one group that everything already written is waiting on.
-Nothing can execute a correct frame until image layouts move, and P5.6 hands it three specific
-obligations, listed below. P5.10, copies and clears, is the other candidate and is smaller.
+**Next: P5.10, copies and clears.** With it, every group `RenderSystem` needs on a frame is
+written except the swapchain, and P5.3 is the last one before Phase 6 can try to run anything.
 
 **Still owed to other groups**, each asserted or commented at the line rather than silently
 skipped:
 
 | Owed by | What |
 |---|---|
-| P5.9 | Every barrier must call `EndRenderingIfActive` first. A barrier inside dynamic rendering is invalid. |
-| P5.10 | Same, for every copy and clear. |
+| P5.10 | Every copy and clear must call `FlushBarriers` and then `SuspendRendering`, in that order, exactly as `CmdDispatchCompute` does. A copy may not run inside dynamic rendering, and a barrier the copy depends on has to reach the device first. |
+| P5.13 | The same two calls in `CmdExecuteIndirect`, plus `BeginRenderingIfPending` after them, which is what `PrepareDraw` does for the ordinary draws. |
 
 **Owed by later groups, recorded so they are not forgotten:**
 
 | Group | What it owes |
 |---|---|
 | P5.3 | `QueuePresent`, which is still a stub. `VkPresentInfoKHR` takes binary semaphores only, so the swapchain has to carry one per image, the submit before the present must signal it next to the timeline value, and the present waits on it. Acquire needs the mirror of the same thing. |
-| P5.9 | **Three obligations from P5.6, and getting any of them wrong looks like a texture bug.** (1) A `VkImage` is always created in `VK_IMAGE_LAYOUT_UNDEFINED`, whatever `TextureParameters::m_initialState` says, so the first barrier on a texture has to transition from `VulkanTexture::m_currentLayout` and not from the state the caller passes. (2) A texture the shader reads has to reach `VulkanTexture::m_shaderReadLayout`, which is `GENERAL` rather than `SHADER_READ_ONLY_OPTIMAL` when the texture is also an `RWTexture`, because that is the layout its heap descriptor was written with. (3) Every `RWTexture` access needs `GENERAL`. Also: `EndCommandBuffer` is where a batched barrier flush belongs, if the Vulkan side batches them the way Direct3D 12 does. The line is marked. |
 | P5.10 | `vkCmdCopyBufferToImage`'s `bufferRowLength` must come from `GetTextureCopyRowStride`. The engine writes its staging rows at that stride and the copy has to read them at it. |
 | P5.9, P5.12 | Two `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT` sites in `QueueDeviceWait` and `QueueSubmit`, listed below. P5.12 builds its nine `SetDebugName` overloads on `SetVulkanObjectName`, which P5.2 wrote. |
 
 ## `ALL_COMMANDS` sites
 
 Phase 5's "do not" list says to record every temporary `ALL_COMMANDS` barrier rather than leave it
-to be found later. Both current sites are in `RHI_Vulkan.cpp`, in P5.2:
+to be found later. All four sites are in `RHI_Vulkan.cpp`:
 
 | Site | Why it is there | What narrowing it needs |
 |---|---|---|
-| `QueueDeviceWait`, wait `stageMask` | `ID3D12CommandQueue::Wait` blocks the whole queue, and this has to mean the same thing. | Knowledge of what the waiting submit does, which the caller does not pass. |
-| `QueueSubmit`, signal `stageMask` | The signalled timeline value has to mean "everything in this submit finished". | Nothing. `ALL_COMMANDS` is arguably correct here rather than lazy, since that is the semantic. |
+| `QueueDeviceWait`, wait `stageMask` (P5.2) | `ID3D12CommandQueue::Wait` blocks the whole queue, and this has to mean the same thing. | Knowledge of what the waiting submit does, which the caller does not pass. |
+| `QueueSubmit`, signal `stageMask` (P5.2) | The signalled timeline value has to mean "everything in this submit finished". | Nothing. `ALL_COMMANDS` is arguably correct here rather than lazy, since that is the semantic. |
+| `VulkanPipelineStage`, `PipelineStage::All` (P5.9) | `D3D12_BARRIER_SYNC_ALL` means every stage, and so does this. The reference returns it the same way, as an early return rather than one bit among many. | Nothing. It is the meaning of the flag. |
+| `VulkanAccess`, `ResourceAccess::Common` (P5.9) | `D3D12_BARRIER_ACCESS_COMMON` is "any access", which Vulkan spells `MEMORY_READ` plus `MEMORY_WRITE`. `DeviceTextureState` starts every texture at `Common`, so this is the source mask of the first barrier on any texture. | The engine would have to say what it actually did, which the tracker does not record. Narrowing it is a change on the engine side, not here. |
 
 ---
 
@@ -145,6 +150,128 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.9 Barriers. The render pass now opens at the draw, not at the bind
+
+**All three `CmdBarrier` overloads are implemented**, on synchronization2. 42
+`EE_UNIMPLEMENTED_FUNCTION` remain, down from 45. Nothing has run.
+
+Barriers are batched on the command buffer and flushed in one `vkCmdPipelineBarrier2` at every
+draw, every dispatch and `EndCommandBuffer`, which are the points `RHI_Direct3D12.cpp:1586`
+flushes at. The mapping work is the small half of this task. The large half is below.
+
+#### The render pass had to become lazy, and this is the reason
+
+**The engine records image layout barriers between `CmdSetRenderTargets` and the first draw.** It
+is not an accident or one pass being odd; it is the shape of every pass in the renderer:
+
+```
+resourceStates.Writeable( target, ... )      // the target becomes a render target
+resourceStates.FlushBarriers( cb )           //   -> RHI::CmdBarrier
+RHI::CmdSetRenderTargets( cb, target, ... )
+rootConstants.SetSourceTexture( resourceStates, ... )   // a source becomes shader-readable
+resourceStates.FlushBarriers( cb )           //   -> RHI::CmdBarrier, *after* the bind
+RHI::CmdDraw( cb, 3, 0 )
+```
+
+`RenderPass_SMAA.cpp:154`, `:190` and `:218`, `RenderPass_GTAO.cpp:435` and `:462` all do it. **A
+barrier may not run inside dynamic rendering**, so a `CmdSetRenderTargets` that called
+`vkCmdBeginRendering` would put every one of those barriers inside a pass.
+
+So `CmdSetRenderTargets` records the attachment configuration and does not begin. The first draw
+flushes the barriers and then begins, through `PrepareDraw`. Direct3D 12 has the same shape for
+its own reason: `OMSetRenderTargets` is state, and its batched barriers flush at the draw.
+
+Three consequences worth knowing before touching that code:
+
+| Case | What happens |
+|---|---|
+| A pass with a clear and no draw | `FlushRendering` begins and immediately ends it, so the clear still happens. `CmdSetRenderTargets` and `EndCommandBuffer` both call it. |
+| A barrier or dispatch between two draws of one pass | `SuspendRendering` ends the pass and forces every load op to `LOAD`, so the next draw resumes it without losing what the first half drew. No engine pass does this today. |
+| The attachment's `imageLayout` | Read from `VulkanTexture::m_currentLayout`, not hard-coded. `RenderPass_DebugDraw.cpp:1342` binds a depth target it only reads, which is `DEPTH_STENCIL_READ_ONLY_OPTIMAL` and not the attachment layout. |
+
+#### A correction to P5.8: load and store actions were discarding the frame
+
+**`LoadAction` is zero initialised, and zero is `DontCare` for both actions.** Direct3D 12 has no
+load or store actions at all - binding a render target preserves it, and the backend reads
+`m_loadActionsColor` only to decide whether to call `ClearRenderTargetView` - so every action the
+engine leaves alone arrives in the backend as `DontCare`.
+
+- **No engine pass sets a store action at all.** Mapping `StoreActionType::DontCare` to
+  `VK_ATTACHMENT_STORE_OP_DONT_CARE` discards the output of every render pass in the frame.
+- **`RenderPass_DebugDraw.cpp:1316` builds a `LoadAction` that sets only the depth action**, then
+  binds the frame's final colour target with it at `:1358`. `VK_ATTACHMENT_LOAD_OP_DONT_CARE`
+  there discards the whole rendered frame.
+
+Both `DontCare` values now preserve, which is what the reference backend does. `Clear`, `Load`
+and `StoreActionType::None` are unchanged, so a caller that means "discard" still has
+`StoreActionType::None` to say it with. **This is a deliberate divergence from the phase
+document's literal mapping** and it is written up under "Upstream issues observed" below.
+
+#### Queue ownership: `CONCURRENT`, which P5.5 left to this task
+
+Direct3D 12 resources have no queue ownership. A buffer written on the compute queue is read on
+the graphics queue with only a barrier between, and the engine's async compute path relies on it.
+Vulkan's `EXCLUSIVE` sharing needs an ownership transfer for the same thing, and **nothing in
+`RHI.h` says which queue last touched a resource**, so there is nothing to build a transfer from.
+
+`SetSharingMode` gives every buffer and image `CONCURRENT` across the distinct queue families the
+context uses, and leaves `EXCLUSIVE` when there is only one family. It costs some compression on
+some hardware. It is the mapping that reproduces the Direct3D semantics exactly, and the
+alternative is silent corruption across queues.
+
+#### The mappings, and the two entries that are deliberately broad
+
+`PipelineStage` to `VkPipelineStageFlags2`, `ResourceAccess` to `VkAccessFlags2`, `TextureState`
+to `VkImageLayout`. Four of them do not line up one for one:
+
+| `RHI.h` | Vulkan |
+|---|---|
+| `PipelineStage::Draw` | `ALL_GRAPHICS`, because `D3D12_BARRIER_SYNC_DRAW` is every stage a draw runs through. It has to cover the depth test stages: the engine transitions a depth target with `Draw` and never with a depth stage of its own. |
+| `PipelineStage::NonPixelShader` | Every shader stage except fragment, compute included, as Direct3D has it. The task and mesh stage bits belong here and are left out until P5.14 enables `VK_EXT_mesh_shader`, because naming a stage from a disabled extension is a validation error. |
+| `PipelineStage::Copy` | `ALL_TRANSFER`, not `COPY`. Direct3D's `SYNC_COPY` sits next to `SYNC_CLEAR` and `SYNC_RESOLVE` and the RHI has no separate flag, so a clear arrives here as `Copy`. |
+| `TextureState::ShaderResource` | `VulkanTexture::m_shaderReadLayout`, which P5.6 set. It is `GENERAL` when the texture is also an `RWTexture`, because that is the layout its heap descriptor was written with. |
+
+`PipelineStage::All` and `ResourceAccess::Common` map to `ALL_COMMANDS` and
+`MEMORY_READ|MEMORY_WRITE`. Both are in the `ALL_COMMANDS` table above with why, and both are the
+meaning of the flag rather than laziness.
+
+`PipelineStage::VideoProcess`, `ResourceAccess::VideoProcessRead` and `VideoProcessWrite` have no
+Vulkan equivalent at all: Vulkan has no video processing queue. Nothing asks for them.
+
+#### P5.6's three obligations are met
+
+1. `CmdBarrier` takes `oldLayout` from `VulkanTexture::m_currentLayout`, never from the caller's
+   `sourceState`, because a `VkImage` starts in `UNDEFINED` whatever `m_initialState` says. The
+   caller's belief is asserted against the truth rather than used, so the two cannot drift.
+2. `TextureState::ShaderResource` resolves through `m_shaderReadLayout`.
+3. `UnorderedAccess` is `GENERAL`.
+
+One layout is tracked per image, which is exact only while callers barrier the whole texture.
+`DeviceResourceStates::FlushBarriers` passes an empty `TextureBarrierRegion`, so every engine
+barrier does.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 87 `vk*` symbols resolve against `libvulkan.so.1`, up from 86. None unresolved.
+- Every engine `CmdSetRenderTargets` call site was read to confirm the deferred begin is needed
+  and sufficient, rather than assumed from one pass.
+
+#### Not verified
+
+No barrier issued, no layout moved. The order to check things in:
+
+1. **The load and store action correction.** If it is wrong, the frame is blank or garbage, and
+   that is the loudest failure here rather than the quietest.
+2. That the deferred begin puts every barrier outside its pass. A validation error names the
+   exact draw if not.
+3. That `m_currentLayout` agrees with the engine's tracker after a frame. The assert in
+   `CmdBarrier` is what says otherwise.
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.6 Textures and samplers. The format mapping is complete
 
@@ -2638,6 +2765,23 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `RHI.h:1044` - `LoadAction` defaults to discarding every attachment
+
+`LoadAction` is zero initialised, `LoadActionType::DontCare` is zero and `StoreActionType::DontCare`
+is zero, so every action a caller does not set says "discard". That is harmless on Direct3D 12,
+which has no load or store actions and preserves a bound render target either way, and it is not
+harmless on any backend that honours them.
+
+**No engine pass sets a store action at all**, and `RenderPass_DebugDraw.cpp:1316` builds a
+`LoadAction` that sets only the depth action and then binds the frame's final colour target with
+it at `:1358`. On a backend that honours the values, the first discards every render pass output
+in the frame and the second discards the rendered frame.
+
+The Vulkan backend maps both `DontCare` values to preserve, and leaves `Clear`, `Load` and
+`StoreActionType::None` exact. A caller that really wants an attachment left alone still has
+`StoreActionType::None`. Worth raising upstream: the fix there is either a non-discarding default
+or explicit actions at each call site.
 
 ### `RHI_Direct3D12.cpp:284` - `RGB565_UNorm` and `BGR565_UNorm` map to the same DXGI format
 
