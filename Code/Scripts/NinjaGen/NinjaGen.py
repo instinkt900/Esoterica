@@ -200,7 +200,8 @@ def target_path( project, configuration ):
 def project_compile_flags( repo_root, project, configuration, problems ):
     """Every flag that compiling this project in this configuration needs."""
 
-    sheets = project.get_property_sheets( configuration.base_name )
+    sheets = list( project.get_property_sheets( configuration.base_name ) )
+    sheets += [ s for s in Toolchain.linux_only_sheets( project.name ) if s not in sheets ]
     sheet_includes, sheet_defines, _, sheet_problems = Toolchain.resolve_sheets( sheets, repo_root )
     problems.extend( f'{project.name}: {p}' for p in sheet_problems )
 
@@ -238,9 +239,11 @@ def project_link_flags( repo_root, solution, project, configuration, problems ):
     """Link flags for a project, including the sheets of everything it depends on."""
 
     sheets = list( project.get_property_sheets( configuration.base_name ) )
+    sheets += [ s for s in Toolchain.linux_only_sheets( project.name ) if s not in sheets ]
 
     for dependency in topological_order( solution, project ):
-        for sheet in dependency.get_property_sheets( configuration.base_name ):
+        for sheet in list( dependency.get_property_sheets( configuration.base_name ) ) \
+                   + list( Toolchain.linux_only_sheets( dependency.name ) ):
             if sheet not in sheets:
                 sheets.append( sheet )
 

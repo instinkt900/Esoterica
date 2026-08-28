@@ -10,7 +10,79 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 4 (done on Linux).** DXC is built from source with three patches that fix its SPIR-V back
+**Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
+answered: the plain loader, not `volk`. **P5.1 to P5.10 are all written and have never been
+run.**
+
+**All 16 groups are written. 15 of them are real; P5.13 is the exception and cannot be finished
+here.** Every one is unverified: nothing on Linux has executed a single RHI call. Phase 5's own
+note says this count is the single most important piece of state, so it leads this section.
+
+**3 `EE_UNIMPLEMENTED_FUNCTION` remain, none of them a whole function.** One is the indirect
+refusal from open question 7. The other two are markers that name a caller if it ever appears: a
+sampler border colour Vulkan cannot express without `VK_EXT_custom_border_color`, and the
+static-sampler path the binding model does not use.
+
+**"Written" is not "works".** Four of the sixteen groups cannot be exercised on any hardware in
+this machine, and one cannot be finished at all:
+
+| Group | Why it is unverifiable here |
+|---|---|
+| P5.13 indirect draws | Open question 7. Half written by decision, and the frame is built on it. |
+| P5.14 mesh shaders | Neither real GPU here has `VK_EXT_mesh_shader`. |
+| P5.15 variable rate shading | Switched off to match the Direct3D 12 backend, which reports `NotSupported`. |
+| P5.16 raytracing | No caller anywhere, no way to build a shader table on either backend, and only `llvmpipe` has the extensions. |
+
+**Neither GPU in this development machine supports mesh shaders**, so the engine's debug draw
+cannot run here. `VK_EXT_mesh_shader` is present only on `llvmpipe`, the software rasteriser. The
+Intel UHD 620 and the NVIDIA MX250 both lack it, and both would lack it on Direct3D 12 as well, so
+this is the hardware being below the engine's bar rather than a port problem. See the P5.14 entry.
+
+**The frame cannot draw, and closing that needs a decision nobody has made yet.** Every render
+pass is built on `CmdExecuteIndirect` - `RenderPass_ForwardShading` uses it six times,
+`RenderPass_CascadedShadow` twice, `RenderPass_DebugDraw` six times - and **the engine's command
+signatures cannot be expressed by any Vulkan indirect draw.** A Direct3D 12 command signature sets
+root constants and binds root descriptors per command; Vulkan's indirect draws read draw arguments
+and nothing else, and a compute pre-pass does not help because a pre-pass cannot bind a descriptor
+either. **The answer needs a shader change, which is Phase 4's.** P5.13 landed its mechanical half
+by decision and refuses the rest at the line; see the P5.13 entry and open question 7.
+
+**`m_pNativeWindowHandle` is a `VkSurfaceKHR` on Linux, and the application owns it.** That is
+the surface-creation requirement Phase 5 owes Phase 6, and `SDL_Vulkan_CreateSurface` returns
+exactly it. **The application drives swapchain recreation, not the RHI**, which is the second
+answer Phase 6 was promised. Both are in the P5.3 entry.
+
+**A Vulkan queue does not execute its submits in order and a Direct3D 12 queue does**, so every
+submit now waits on the value the previous submit on that queue signalled. The engine depends on
+the Direct3D guarantee and `RHI.h` gives it no way to ask for it. See the P5.3 entry.
+
+**The render pass is opened by the first draw, not by `CmdSetRenderTargets`.** The engine records
+image layout barriers between the two and a barrier may not run inside dynamic rendering, so the
+begin is deferred. See the P5.9 entry; anything that changes `CmdSetRenderTargets` or a draw has
+to keep that order.
+
+**The `DataFormat` to `VkFormat` mapping is complete, and there is exactly one of it.** All 99
+formats map, the three `DeviceCapabilities` format arrays are filled from the device, and every
+texture, buffer view and pipeline attachment format reads the same function.
+
+**Both Phase 4 decisions are now implemented, each in exactly one place.** Clip-space Y is
+inverted in `CmdSetViewport` with a negative viewport height, and nowhere else. Heap set 1 is
+bound in `CmdSetPipeline`, not in `BeginCommandBuffer`. Neither has been executed.
+
+**The bindless heap now exists in code.** `CreateContext` builds set 1 exactly as the Phase 4
+binding model specifies, and `GetBufferHandle` returns an index into it. **One correction to that
+recorded decision was needed**, on a flag Vulkan does not allow where the entry put it; it is
+written up below and it changes nothing the shaders can see.
+
+**Nothing on Linux can execute an RHI call yet, and that is a deliberate decision.** The engine
+binary does not exist on Linux, and building one is blocked behind all of Phase 6: `BaseModule::
+InitializeModule` halts in `InputSystem::Initialize` and `ImguiSystem::InitializePlatform`, both
+Phase 6 stubs, before `EngineModule::InitializeModule` ever reaches `RHI::CreateContext`. The
+decision was to write Phase 5 against the compiler and link only, and to first execute it when
+Phase 6 lands. See the 2026-08-28 decision entry. **Treat every P5.x entry as compile-verified
+and run-unverified until that changes.**
+
+Previously: **Phase 4 (done on Linux).** DXC is built from source with three patches that fix its SPIR-V back
 end, and **all 46 shader stages compile and pass `spirv-val`**. `./CompileShaders.sh` exits 0 and
 fills `_AutoGenerated/Shaders/`; the generated C++ compiles and links. Validate with
 `External/DirectXShaderCompiler/bin/x64/spirv-val --target-env vulkan1.3 --scalar-block-layout`
@@ -52,7 +124,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | not started |
+| 5 - Vulkan RHI | **all 16 groups written, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception and cannot be finished until open question 7 is answered. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -65,36 +137,53 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 4, on `linux/p4-defect2-counter`.** P4.1 and P4.3's binding model are done, and
-**defect 2 is fixed**: patch 0002 makes the heap-sourced structured buffer assignment resolve its
-counter, and the last five shaders compile. Nothing in Phase 4 is blocked now.
+**Phase 5, on `linux/p5.16-raytracing`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+`p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
+`p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
+`p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34),
+`p5.3-swapchain` (#35), `p5.13-indirect-draws` (#36), `p5.12-debug-utilities` (#37),
+`p5.11-query-pools` (#38), `p5.14-mesh-shaders` (#39), `p5.15-variable-rate-shading` (#40), then
+this. **Seventeen branches, none merged, and nothing has run any of it.**
 
-**Phase 4 is done on Linux, and Phase 5 is the next thing to start.** All the decisions are made,
-all three DXC defects are fixed, and the only outstanding items are criteria 6 and 10, both of
-which need a Windows machine. The Linux half of criterion 6 is committed in advance, so it is a
-one-command diff whenever that machine appears; see the P4.6 entry below.
+**There is no next group. Every one of the sixteen is written.** What is left in Phase 5 is not
+more code:
 
-Phase 5 should begin by reading the binding model and clip-space Y entries, which are written for
-it, and the device requirements they name: descriptor indexing, `VK_EXT_mutable_descriptor_type`,
-`VK_KHR_push_descriptor` and `scalarBlockLayout`.
+1. **Open question 7**, the indirect draws, which needs a shader-side decision and blocks the
+   frame. Nothing else moves past it.
+2. **Merging the stack.** Seventeen stacked PRs is a lot of unreviewed work to carry.
+3. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
+   before it lands.
 
-**P4.4 is closed as not applicable and P4.2 is moved to Phase 5**, both recorded below. The plan
-called P4.4 the bulk of the phase, so what is actually left is smaller than the task list
-suggests: the five shaders, the two decisions, and P4.5 and P4.6. P4.5 and P4.6 both need the
-shader pass to exit 0 first, so the five shaders gate everything remaining.
+**Open question 7 blocks the frame and is not scheduled.** It is the indirect-draw decision
+described above and in the P5.13 entry. **No amount of further Phase 5 work moves past it**, so it
+is the thing to settle before Phase 6.
 
-**Criteria 8 and 9 are both decided.** The bindless binding model, and clip-space Y: the Vulkan
-viewport inverts Y with a negative height, the shader compiler does not, and `-fvk-invert-y` must
-not be added. Both are recorded below, and the Y decision is also written into `RHI_Vulkan.cpp`
-at the stub that implements it.
+**Still owed to other groups**, each asserted or commented at the line rather than silently
+skipped:
 
-**The constant buffer layout rule is settled too:** the Reflector passes `-fvk-use-dx-layout`,
-and the Vulkan device must enable `scalarBlockLayout`. It turned up **defect 3**, DXC's SPIR-V
-back end refusing to merge bitfields whose base types differ, **now fixed by patch 0003**. It
-affected `MeshCluster` and `RenderView`, and both now match Direct3D and C++.
+| Owed by | What |
+|---|---|
+| P5.14 | `CmdExecuteIndirect` on a `DispatchMesh` signature is `vkCmdDrawMeshTasksIndirectEXT`, which cannot be named until `VK_EXT_mesh_shader` is enabled. It halts at the line today. |
+| P5.16 | The same for a `DispatchRays` signature, which is `vkCmdTraceRaysIndirect2KHR`. |
 
-The shader stage mapping for the raytracing stages is still untouched, and matters only once
-Phase 5 reaches P5.16.
+**Owed by later groups, recorded so they are not forgotten:**
+
+| Group | What it owes |
+|---|---|
+
+## `ALL_COMMANDS` sites
+
+Phase 5's "do not" list says to record every temporary `ALL_COMMANDS` barrier rather than leave it
+to be found later. All four sites are in `RHI_Vulkan.cpp`:
+
+| Site | Why it is there | What narrowing it needs |
+|---|---|---|
+| `QueueDeviceWait`, wait `stageMask` (P5.2) | `ID3D12CommandQueue::Wait` blocks the whole queue, and this has to mean the same thing. | Knowledge of what the waiting submit does, which the caller does not pass. |
+| `QueueSubmit`, signal `stageMask` (P5.2) | The signalled timeline value has to mean "everything in this submit finished". | Nothing. `ALL_COMMANDS` is arguably correct here rather than lazy, since that is the semantic. |
+| `VulkanPipelineStage`, `PipelineStage::All` (P5.9) | `D3D12_BARRIER_SYNC_ALL` means every stage, and so does this. The reference returns it the same way, as an early return rather than one bit among many. | Nothing. It is the meaning of the flag. |
+| `VulkanAccess`, `ResourceAccess::Common` (P5.9) | `D3D12_BARRIER_ACCESS_COMMON` is "any access", which Vulkan spells `MEMORY_READ` plus `MEMORY_WRITE`. `DeviceTextureState` starts every texture at `Common`, so this is the source mask of the first barrier on any texture. | The engine would have to say what it actually did, which the tracker does not record. Narrowing it is a change on the engine side, not here. |
+| `RecordQueueOrderingWait`, both masks (P5.3) | A Direct3D 12 queue runs its command lists in submission order and a Vulkan queue does not, so every submit waits on the previous submit's timeline value. "The previous submit finished" is the whole meaning of the wait. | Nothing. It is the semantic, the way `QueueSubmit`'s signal mask is. |
+| `RecordClearVisibilityBarrier`, destination masks (P5.10) | A clear has to be visible to whatever reads it next, and the engine's own barrier after a clear names a shader write as the source, which does not cover a Vulkan transfer write. Nothing at the call site says who the reader is. | The reader. In practice it is a compute dispatch, an indirect argument fetch or a copy to a host buffer, and naming those three would narrow it. Confirm against a captured frame first. |
 
 ---
 
@@ -110,6 +199,1528 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.16 Raytracing. The last group, and the least reachable
+
+**`CreateAccelerationStructure`, `GetAccelerationStructureHandle`, `CmdBuildAccelerationStructure`,
+`CmdDispatchRays`, the raytracing `CreatePipeline` overload and the indirect ray path are
+implemented.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 9, and none of them is a whole
+function. Nothing has run.
+
+**All sixteen groups are now written.**
+
+#### Unreachable three times over, and that is worth stating plainly
+
+- **No caller.** Nothing in `Code/Engine` or `Code/Applications` creates an acceleration
+  structure. `RHI.esh` defines `GetRaytracingAccelerationStructure` and no shader uses it.
+- **No shader table, on either backend.** `RHI.h` declares no factory for a
+  `RaytracingShaderTable`, and `RHI_Direct3D12.cpp` never constructs its own version either, so
+  `CmdDispatchRays` is unreachable by construction on both sides.
+- **No hardware here.** Only `llvmpipe` reports `VK_KHR_ray_tracing_pipeline` in this machine, the
+  same story as mesh shaders.
+
+It is written because the phase document asks for full parity and criterion 1 counts the markers.
+It should be treated as unproven code until something calls it.
+
+#### The heap question the binding model left open, answered without changing anything
+
+P5.7 left a note asking whether `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` has to join the
+heap's mutable type list, since `RHI.esh` reads an acceleration structure straight out of the heap.
+
+**It does not, because no shader does.** `GetAccelerationStructureHandle` returns a buffer handle
+on the top level structure buffer, which is exactly what `RHI_Direct3D12.cpp:4002` returns. The day
+a shader actually writes `GetRaytracingAccelerationStructure`, the heap needs the descriptor type
+and that is a Phase 4 binding model decision, not this file's.
+
+#### Three places the reference is broken and this is not
+
+| Reference | What happens |
+|---|---|
+| `RHI_Direct3D12.cpp:3981` | The line that fills in `m_instanceBuffer` is commented out, and `:3390` then dereferences it. The top level build would crash. `CreateAccelerationStructure` here records the buffer. |
+| `RHI_Direct3D12.cpp:3978` | The top level structure buffer is created with `BufferFlags::NoDescriptors` and descriptor types `RWBuffer\|Raw`, and `GetAccelerationStructureHandle` then asks it for a `DescriptorTypeFlags::Buffer` handle it cannot have. Two asserts. This one gets the descriptor it is about to be asked for. |
+| `RHI_Direct3D12.cpp:3969` | The scratch buffer is sized from the bottom level prebuild alone and then reused for the top level build at `:3392`, which overruns whenever the top level needs more. Here it is sized to the larger of the two. |
+
+All three are recorded under "Upstream issues observed".
+
+#### Four pipeline parameters have no Vulkan equivalent
+
+`m_pEmptyRootSignature`, `m_pRayGenRootSignature`, `m_rayMissRootSignatures` and each hit group's
+`m_pRootSignature` are Direct3D 12 **local** root signatures, which let each shader binding table
+record carry its own bindings. **Vulkan has one pipeline layout for the whole raytracing pipeline
+and nothing else.** Moving the per-record data into the table and reading it in the shader is a
+shader change, so the local signatures are dropped and the empty case is asserted.
+
+`m_payloadSize` and `m_attributeSize` are Direct3D's shader config; Vulkan reads both out of the
+SPIR-V. `m_maxNumRays` has no counterpart at all.
+
+#### The role of a raytracing shader comes from where it sits, not from the shader
+
+`RHI.h` has one `ShaderStage::RayTracing` for all five roles, so `VulkanShaderStage` cannot tell a
+miss shader from a closest hit one. The Vulkan stage is decided by which parameter field the
+`Shader` arrived in.
+
+The entry point names need a null terminator that `StringView` does not carry, so they are copied
+into a vector **reserved to its exact maximum before the first one is added**. Every
+`VkPipelineShaderStageCreateInfo::pName` points into it, and one reallocation part way through
+would dangle every pointer taken so far.
+
+#### The third and last file static
+
+`CreateBuffer` has no `Context`, and a raytracing build reads its inputs and stores its result in
+ordinary buffers, which need usage bits that only exist once `VK_KHR_acceleration_structure` is
+enabled. So every buffer carries them when `g_raytracingEnabled` is true, rather than the RHI
+growing a flag it does not have. Same shape as `g_meshShaderEnabled` and
+`g_fragmentShadingRateEnabled`.
+
+All three extensions go on together or not at all: `VK_KHR_acceleration_structure`,
+`VK_KHR_ray_tracing_pipeline`, and `VK_KHR_deferred_host_operations`, which the first depends on
+and which carries no feature bit of its own.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 111 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. Unchanged on purpose: all
+  nine raytracing entry points are extension functions looked up through `vkGetDeviceProcAddr`.
+- The new code adds no compiler warning.
+- The three remaining markers were read and attributed.
+
+#### Not verified
+
+None of it. No structure built, no ray traced, no raytracing pipeline compiled, and no hardware
+here to try. **The first machine with the extensions should not assume any of this works.**
+
+**Upstream files edited: none.**
+
+### 2026-08-29 - P5.15 Variable rate shading. Written, and deliberately switched off
+
+**`CmdSetShadingRate` is implemented and the reported capability stays `NotSupported`.** 9
+`EE_UNIMPLEMENTED_FUNCTION` remain, down from 10. Nothing has run, and **nothing can reach this
+code until a decision is taken on the Direct3D 12 side.**
+
+#### Why it is off, which is the whole of the group
+
+`RHI_Direct3D12.cpp:2177` sets `m_shadingRate` and `m_shadingRateCaps` to `NotSupported` with a
+TODO, so `CmdSetShadingRate` is a no-op on the reference too. Nothing in the engine calls it either
+way.
+
+Reporting the real device capability here would be a divergence **we** introduced: the engine would
+start shading at a reduced rate on Linux and not on Windows, and acceptance criterion 7 is a
+screenshot comparison between the two. So the capability line matches the reference exactly, and
+the code behind it is written and reachable the moment both backends change together.
+
+#### Turning it on needs three things, not one
+
+| What | Where |
+|---|---|
+| The capability line | `FillDeviceCapabilities` here and `RHI_Direct3D12.cpp:2177` there. Both, or the two backends diverge. |
+| `VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR` on a rate image | `CreateTexture` does not set it, and a rate image requires it. |
+| A view for the rate image | The per-tile path uses the render target view, which P5.6 only builds for a texture created with `DescriptorTypeFlags::RenderTarget`. A rate image wants a view of its own. |
+
+The last two are guesswork until something creates a rate image, and both are small.
+
+#### The structural difference: a command against an attachment
+
+**Direct3D 12 binds the shading rate image with `RSSetShadingRateImage`, a command. Vulkan makes it
+an attachment of the render pass.** So `CmdSetShadingRate` records the view on the command buffer
+and `BeginRenderingIfPending` chains a `VkRenderingFragmentShadingRateAttachmentInfoKHR` onto the
+`VkRenderingInfo`. A pass without one carries no `pNext` at all.
+
+The per-draw rate maps directly: `vkCmdSetFragmentShadingRateKHR`, guarded on the same
+`m_shadingRateCaps` the reference copies onto its command buffer at `RHI_Direct3D12.cpp:2862`.
+
+#### Four combiners map and the fifth does not
+
+`Passthrough`, `Override`, `Min` and `Max` are `KEEP`, `REPLACE`, `MIN` and `MAX`. **Direct3D's
+`SUM` adds the two rates and Vulkan's nearest operation, `MUL`, multiplies them.** There is no
+Vulkan combiner that sums, so `Sum` maps to `MUL` and the two backends would disagree on it.
+Nothing calls `CmdSetShadingRate`, so nothing disagrees today.
+
+#### A dynamic state that has to be set even though nothing uses it
+
+Every graphics pipeline declares `VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR` when the extension is
+enabled, because `vkCmdSetFragmentShadingRateKHR` needs it. **A declared dynamic state that is
+never set leaves every draw undefined**, and nothing in the engine sets it, so `BeginCommandBuffer`
+sets the full rate once per command buffer. That is what a pipeline without variable rate shading
+does anyway.
+
+The list is built conditionally, through a second file static, `g_fragmentShadingRateEnabled`,
+for the same reason `g_meshShaderEnabled` exists: declaring a dynamic state from a disabled
+extension is a validation error, and `CreateGraphicsOrMeshPipeline` has no `Context`.
+
+`VK_KHR_fragment_shading_rate` is optional like `VK_EXT_mesh_shader`, and needs both
+`pipelineFragmentShadingRate` and `attachmentFragmentShadingRate`.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 111 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. Unchanged on purpose:
+  `vkCmdSetFragmentShadingRateKHR` is an extension function looked up through
+  `vkGetDeviceProcAddr`.
+- The new code adds no compiler warning.
+
+#### Not verified, and unverifiable as it stands
+
+Nothing here runs while the capability says `NotSupported`. **The pipeline change is the one to
+watch**: every graphics pipeline now declares one more dynamic state on a device that has the
+extension, and a mistake there breaks every draw rather than only the shading rate. The default
+rate set in `BeginCommandBuffer` is what stops that.
+
+**Upstream files edited: none.**
+
+### 2026-08-29 - P5.14 Mesh shaders. No GPU in this machine has them
+
+**`CmdDispatchMesh`, the mesh `CreatePipeline` overload and the indirect mesh path are
+implemented.** 10 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 13. Nothing has run.
+
+#### The finding that matters more than the code
+
+**Neither real GPU in this development machine supports `VK_EXT_mesh_shader`.** `vulkaninfo`
+reports it on `llvmpipe` alone, the software rasteriser. The Intel UHD 620 and the NVIDIA MX250
+both lack it.
+
+That is not a port problem. Both are below the hardware bar for mesh shaders on Direct3D 12 too,
+so the engine's debug draw would fail on Windows on this machine as well. It does mean **the debug
+draw path cannot be verified here**, and whoever first runs a development build on this machine
+will hit the assert in `CmdDispatchMesh`.
+
+#### Optional, not required, and that is a decision
+
+Every other capability the backend needs is in `g_requiredDeviceExtensions`, and a device missing
+one is refused at `CreateContext` with the extension named. Mesh shaders are not, for one reason:
+**the engine has no capability flag for them and no fallback path.** `RenderPass_DebugDraw` calls
+`CmdDispatchMesh` outright, `RHI.h` has no mesh shader field in `DeviceCapabilities`, and nothing
+anywhere asks whether they exist. Direct3D 12 simply assumes the hardware has them.
+
+Requiring the extension would refuse a device the rest of the engine renders on perfectly well,
+which is exactly the situation this machine is in. So the extension is asked for when present,
+`CreateContext` logs a warning when it is missing, and every use asserts.
+
+#### A mesh dispatch is a draw
+
+`CmdDispatchMesh` calls `PrepareDraw`, not the flush-and-suspend pair `CmdDispatchCompute` uses.
+`DispatchMesh` is Direct3D's name for it; it rasterises, it runs inside a render pass, and leaving
+the pass for it would be wrong.
+
+#### One pipeline body for two overloads
+
+`MeshPipelineParameters` derives from `GraphicsPipelineParameters` and adds nothing, and Vulkan
+builds both with `vkCreateGraphicsPipelines`. The whole delta is which shader stages are wanted
+and whether there is an input assembler, so `CreateGraphicsOrMeshPipeline` takes a flag and both
+overloads call it. A second copy of two hundred lines of blend, depth, raster and dynamic
+rendering state would only be a place for the two to drift apart.
+
+`pVertexInputState` and `pInputAssemblyState` are null on a mesh pipeline. There is no input
+assembler in front of a mesh shader, and the spec says to leave both out.
+
+#### A barrier correction that P5.9 flagged and could not make
+
+`VulkanPipelineStage` mapped `PipelineStage::NonPixelShader` and `AllShader` onto every shader
+stage **except task and mesh**, because naming a stage from a disabled extension is a validation
+error. Now that the extension is conditionally enabled, both bits go in when it is.
+
+**Without them a barrier before a mesh draw would not cover the stage that reads the result**,
+which is a silent wrong-data bug rather than a validation one. `VulkanPipelineStage` is handed
+flags and no `Context`, so the answer is a file static, `g_meshShaderEnabled`, set by
+`CreateContext` and cleared by `DestroyContext`. One context at a time, which is what the engine
+creates, and the same shape the leak counters already use.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 111 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. The count is unchanged on
+  purpose: all three mesh entry points are extension functions looked up through
+  `vkGetDeviceProcAddr`.
+- The new code adds no compiler warning.
+- `vulkaninfo` was read for the mesh shader support on both GPUs in this machine, rather than
+  assumed.
+
+#### Not verified
+
+No mesh shader compiled into a pipeline, no mesh draw issued, and **it cannot be verified on this
+machine at all**. The first hardware with `VK_EXT_mesh_shader` should check the debug draw pass
+before anything else, because it is the only consumer.
+
+**Upstream files edited: none.**
+
+### 2026-08-29 - P5.11 Query pools
+
+**All seven query functions are implemented, and the `SetDebugName` overload P5.12 owed to this
+group is filled in.** 13 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 21. Nothing has run.
+
+#### A correction: nothing in the engine calls any of this
+
+The P5.12 entry said P5.11 was needed for "the query pools a development build's profile scopes
+use every frame". **That is wrong.** `EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE` at `RHI.h:1705` expands
+to a CPU profile scope and a `CommandBufferMarkerScope`, which is a debug marker. It records no
+timestamp. There is no `CreateQueryPool` call anywhere in `Code/Engine` or `Code/Applications`.
+
+The group is written for parity, not because the frame needs it.
+
+#### The four mappings that are not one for one
+
+| `RHI.h` | Vulkan |
+|---|---|
+| `CmdResetQueryPool` | **Direct3D 12 does nothing here and Vulkan requires it.** This is the one place in the backend where the asymmetry runs that way: a Vulkan query is undefined until it has been reset. It may not run inside a render pass, so it goes through `PrepareTransfer`. |
+| `CmdBeginQuery` on a timestamp pool | Nothing. A timestamp is written at one point, not over a range, and `vkCmdBeginQuery` on a timestamp pool is a validation error. It matches what the reference achieves anyway; see "Upstream issues observed". |
+| `CmdEndQuery` on a timestamp pool | `vkCmdWriteTimestamp2` at `BOTTOM_OF_PIPE`, because Direct3D's `EndQuery` timestamp is taken after the work the scope covers. **It is legal inside a render pass**, which matters: a profile scope around a pass must not tear it the way a reset would. |
+| `GetQueryTimestampFrequency` | `1e9 / timestampPeriod`. Vulkan reports nanoseconds per tick and Direct3D 12 reports ticks per second, which is the inversion the phase document asks for. |
+
+#### Two things Direct3D 12 has no equivalent of, and both are asserted
+
+- **A queue family may report zero valid timestamp bits**, meaning it cannot write one at all.
+  `VulkanQueue` now carries `m_timestampValidBits` and `m_timestampPeriod`, both read in
+  `CreateQueue`, because `GetQueryTimestampFrequency` is handed a `Queue` and no `Context`.
+- **`pipelineStatisticsQuery` is a device feature**, and a `PipelineStatistics` pool cannot be
+  created without it. It is enabled **when the device has it and never required**, so a device
+  missing it is not refused over a capability nothing uses. `CreateQueryPool` asserts on the flag.
+
+#### The resolve writes eight bytes per query, which is only right for a timestamp
+
+The destination offset is the reference's, `startQuery * 8` at `RHI_Direct3D12.cpp:3528`, and a
+pipeline statistics query resolves to eleven counters rather than one. Both backends have to write
+the same layout, so `CmdResolveQuery` asserts the pool is a timestamp pool rather than inventing a
+second layout. Nothing creates a statistics pool.
+
+`VK_QUERY_RESULT_WAIT_BIT` is set, because Direct3D's `ResolveQueryData` reads finished results.
+Without it the copy could write nothing and report availability separately.
+
+#### The eleven pipeline statistics all map
+
+`D3D12_QUERY_DATA_PIPELINE_STATISTICS` has eleven counters and every one has a Vulkan equivalent,
+which is unusual enough to be worth saying. They are listed in declaration order in
+`CreateQueryPool`.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 111 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. The seven this adds are
+  `vkCreateQueryPool`, `vkDestroyQueryPool`, `vkCmdResetQueryPool`, `vkCmdBeginQuery`,
+  `vkCmdEndQuery`, `vkCmdWriteTimestamp2` and `vkCmdCopyQueryPoolResults`.
+- The new code adds no compiler warning.
+- **All 13 remaining `EE_UNIMPLEMENTED_FUNCTION` were read and attributed**: six P5.16, three
+  P5.14, one P5.15, one open question 7, two markers.
+
+#### Not verified
+
+No query written, no timestamp read. The first thing worth checking is the frequency inversion,
+because a wrong one gives plausible-looking timings that are wrong by a constant factor, which is
+the sort of thing nobody notices.
+
+**Upstream files edited: none.**
+
+### 2026-08-29 - P5.12 Debug names and markers
+
+**Eight of the nine `SetDebugName` overloads, `CmdBeginDebugMarker`, `CmdEndDebugMarker` and
+`CmdWriteDebugMarker` are implemented.** 21 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 32.
+`BeginFrameCapture` and `EndFrameCapture` were already done in P5.1, so the group is complete
+apart from the one overload P5.11 has to unblock. Nothing has run.
+
+Most of this group was already paid for. `SetVulkanObjectName` has existed since P5.2 and every
+`Create*` call has been naming its objects through it, so the nine overloads are a handle and an
+object type each.
+
+#### The three that needed thought
+
+**`SetDebugName( QueryPool* )` halts**, because there is no `VulkanQueryPool` type to cast to
+until P5.11 defines one. It is the only one of the nine that does.
+
+**`SetDebugName( CommandSignature* )` does nothing, and that is the finished answer.** P5.13's
+command signature is a record of one command's byte layout and creates no Vulkan object, so there
+is no handle for a name to reach. Its parameters are unnamed to say so.
+
+**`CmdWriteDebugMarker` is `vkCmdFillBuffer`, and it loses the ordering.** Direct3D 12 uses
+`WriteBufferImmediate`, whose `MARKER_IN` and `MARKER_OUT` modes mean "before everything already
+submitted" and "after". Vulkan spells that `VK_AMD_buffer_marker`, which is not enabled here and
+would be a device requirement the Phase 4 list does not have.
+
+The concrete loss is in the `InOut` case: **Direct3D writes the In value at the top of the pipe
+and the Out value at the bottom, so a crash between the two leaves the In value in the buffer,
+which is the entire point of a breadcrumb.** Two fills run in order and the second overwrites the
+first. `DeviceCapabilities::m_breadcrumbs` is `false` on this backend and nothing in the engine
+calls the function, so nothing loses anything today. Turning breadcrumbs on means enabling the
+extension first.
+
+#### Markers
+
+`VK_EXT_debug_utils` labels, which RenderDoc and every Vulkan profiler read the way PIX reads a
+Direct3D event. The extension is enabled whenever the loader has it, with or without the
+validation layer, so markers are present in a Release build too.
+
+The golden-ratio HSV colour walk is copied from `RHI_Direct3D12.cpp:3628` verbatim, starting from
+the same `0.5F`, so a marker gets the same colour on both backends. `RHI.h` holds no such helper
+and this file may not add one to it.
+
+**`EndCommandBuffer` now asserts the marker scope counter is zero**, the same check
+`RHI_Direct3D12.cpp:2947` makes. Vulkan is stricter than Direct3D here: an unbalanced label is a
+validation error rather than a cosmetic problem. The counter is kept even when the extension is
+missing, so the assert still catches an unmatched scope on a machine without it.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 104 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. The count is unchanged on
+  purpose: the two label entry points are looked up through `vkGetInstanceProcAddr` like every
+  other `VK_EXT_debug_utils` function, and `vkCmdFillBuffer` was already linked by P5.10.
+- The new code adds no compiler warning.
+
+#### Not verified
+
+No object named, no marker recorded. The first thing to check is that names appear in a RenderDoc
+capture, which is also the cheapest thing to check, and it makes every remaining group easier.
+
+**Upstream files edited: none.**
+
+### 2026-08-29 - P5.13 Indirect draws. The engine's command signatures do not fit Vulkan
+
+**`CreateCommandSignature` and `DestroyCommandSignature` are implemented. `CmdExecuteIndirect` is
+implemented for a signature that carries only a draw or dispatch argument, and refuses the rest at
+the line.** **P5.13 is not a real group**, because no engine call site takes the path that works.
+Nothing has run.
+
+The `EE_UNIMPLEMENTED_FUNCTION` count is unchanged at 32, and that is the honest number: two whole
+functions became real and `CmdExecuteIndirect` gained two named refusals in place of one blanket
+one.
+
+#### Why it does not fit, in one picture
+
+A Direct3D 12 command signature can set root constants and bind root descriptors per command.
+**Vulkan's indirect draws read draw arguments and nothing else.** `EngineShader.cpp:108` walks the
+root signature's descriptor reflections and emits one argument per root parameter ahead of the draw
+argument, so one material command is laid out like this:
+
+```
+[ root constants   40 bytes ]   set 0 binding b0, a uniform buffer on Vulkan
+[ root CBV address  8 bytes ]   set 0 binding b1, a uniform buffer on Vulkan
+[ dispatch args    12 bytes ]   VkDispatchIndirectCommand
+```
+
+`vkCmdDrawIndirect` takes a stride, so it reads the last block out of the fat struct without help.
+It cannot rebind the first two per command, and `BucketResolve.esf:36` writes a different value
+into them for each command in the buffer.
+
+**A compute pre-pass does not cover it**, which answers the question Phase 4 left open when it set
+`m_indirectRootConstant` to `false`. A pre-pass can repack the draw arguments, and repacking is not
+needed because of the stride. A pre-pass cannot bind a descriptor.
+
+**Every engine signature carries root data.** `MaterialShader`, `SurfaceShader` and `ComputeShader`
+all build theirs the same way, and the two argument-writing shaders, `BucketResolve.esf` and
+`InstanceCulling.esf`, both fill in a per-command root CBV address. Nothing reads the
+`m_indirectRootConstant` capability, so the engine does not offer a narrower path.
+
+#### The decision taken
+
+**Land the mechanical half and refuse the rest, by decision.** The alternative shapes both need a
+change on the shader side, which is Phase 4's and not this file's:
+
+| Shape | What it costs |
+|---|---|
+| The shader reads its own command's root data by indexing the argument buffer with `SV_DrawIndex`, which Vulkan has as core `gl_DrawID`. One indirect call then covers the whole buffer. | No extension. Changes `RHI.esh` and the renderer shaders, so all 46 stages recompile and revalidate, and Windows sees the change too. |
+| Root constants become Vulkan push constants and root descriptors become buffer device addresses, driven by `VK_EXT_device_generated_commands`. | That extension sets push constants per command and still cannot bind a descriptor set, so it needs the same shader change **plus** a device requirement the Phase 4 list does not have. |
+
+Recorded as open question 7.
+
+#### What is real
+
+- **`CreateCommandSignature`** records the byte layout of one command: the argument type, the
+  stride, the offset of the draw argument inside the command, and whether root arguments are
+  present. The arithmetic accumulates the same byte sizes `RHI_Direct3D12.cpp:3746` does, because
+  both backends read one buffer a shader wrote and have to agree on where every field is. There is
+  no Vulkan object to create.
+- **`CmdExecuteIndirect`** maps `Draw` and `DrawIndexed` onto `vkCmdDrawIndirect` and
+  `vkCmdDrawIndexedIndirect`, or their `Count` forms when a counter buffer is passed, reading the
+  draw argument at its offset with the signature's stride. `DispatchCompute` maps onto
+  `vkCmdDispatchIndirect`.
+
+#### Three things the working path still cannot do, each asserted at the line
+
+| Case | Why |
+|---|---|
+| A `DispatchCompute` signature with a counter buffer, or `maxNumCommands` above 1 | `vkCmdDispatchIndirect` runs exactly one dispatch and reads no count buffer, where Direct3D 12 runs `min( maxNumCommands, count )`. A caller would silently get one dispatch, so both are refused. |
+| A `DispatchMesh` signature | `vkCmdDrawMeshTasksIndirectEXT`, which cannot be named until P5.14 enables `VK_EXT_mesh_shader`. |
+| A `DispatchRays` signature | `vkCmdTraceRaysIndirect2KHR`, which is P5.16's. |
+
+#### A correction to what P5.10 recorded as owed here
+
+That entry said `CmdExecuteIndirect` should call `PrepareTransfer` and then
+`BeginRenderingIfPending`, which would end the render pass and immediately restart it. **An
+indirect draw wants exactly what `PrepareDraw` gives an ordinary one**, and only an indirect
+dispatch has to leave the pass. It now branches on the signature's argument type.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 104 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved.
+- Every engine `CmdExecuteIndirect` and `CreateCommandSignature` call site was read, along with the
+  two shaders that write the argument buffers and the `DrawArgument` and `DebugDrawMeshArgument`
+  layouts. That is what established that no call site takes the working path.
+
+#### Not verified
+
+Nothing indirect has been drawn. There is no point checking the working path against the engine
+until open question 7 is answered, because no engine call site reaches it.
+
+**Upstream files edited: none.**
+
+### 2026-08-29 - P5.3 Swapchain. A Vulkan queue does not run its submits in order
+
+**`CreateSwapchain`, `DestroySwapchain`, `AcquireNextImage`, `SetVSync` and `QueuePresent` are
+implemented.** 32 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 37. Nothing has run.
+
+#### The correction this group forced on P5.2, which matters more than the swapchain
+
+**A Direct3D 12 queue executes its command lists in the order they were submitted. A Vulkan queue
+does not.** Two `vkQueueSubmit2` calls on one `VkQueue` may overlap unless something orders them.
+
+The engine relies on the Direct3D guarantee. `ForwardShadingRenderer::SubmitGraphicsCommandBuffer`
+submits several graphics command buffers a frame with the barriers recorded across them, and
+**`RHI.h` gives it no way to ask for the ordering**: `QueueDeviceWait` asserts that the two queues
+differ, so a queue cannot be made to wait on itself.
+
+`RecordQueueOrderingWait` now makes every submit wait on the value the previous submit on that
+queue signalled. That is the Direct3D semantics exactly. It costs the overlap a Vulkan driver
+might otherwise have found, and the alternative is a race that no validation layer reports.
+
+It is also what makes the swapchain sound, which is how it was found. See below.
+
+#### `m_pNativeWindowHandle` is a `VkSurfaceKHR`, and the application owns it
+
+This is the first of the two answers Phase 5 owes Phase 6.
+
+Direct3D 12 takes an `HWND` and asks DXGI for a swapchain. Vulkan needs a `VkSurfaceKHR`, and
+creating one needs a window system library. **`Base/Render` depends on no such library and must
+not start to**, so the application creates the surface from the instance and hands it over.
+`SDL_Vulkan_CreateSurface` returns exactly that.
+
+Two consequences:
+
+- **`CreateContext` now enables the surface instance extensions**, even though no window exists
+  yet. A surface may only be created from an instance that enabled its platform extension, and
+  the instance is created once. `VK_KHR_surface` plus xlib, xcb and wayland, whichever the loader
+  reports. They are named by string rather than by macro, because the macros only exist once
+  `VK_USE_PLATFORM_*` is defined and that drags X11 headers into a file with no other use for
+  them.
+- **`DestroySwapchain` never destroys the surface.** `Window::ResizeSwapchain` destroys and
+  recreates around an unchanged `m_pNativeWindowHandle`.
+
+#### The application drives swapchain recreation, not the RHI
+
+The second answer. `Engine.cpp:754` and `ImguiRenderer.cpp:91` both compare the window size
+against `GetSwapchainSize()` and call `Window::ResizeSwapchain`, and each waits the graphics queue
+idle first. So `AcquireNextImage` and `QueuePresent` accept `VK_SUBOPTIMAL_KHR` and
+`VK_ERROR_OUT_OF_DATE_KHR` instead of recreating behind the engine's back.
+
+`VK_ERROR_OUT_OF_DATE_KHR` from the acquire is the one case with teeth: **no image is acquired and
+the semaphore is not signalled**, so recording a wait on it would hang the queue. That path returns
+the image index it already held.
+
+#### A null handle means headless, which is all of Phase 5
+
+There is no window until Phase 6, so a null `m_pNativeWindowHandle` builds a swapchain with no
+`VkSurfaceKHR` and no `VkSwapchainKHR`: a ring of ordinary offscreen render targets,
+`AcquireNextImage` cycles the index, and `QueuePresent` signals its timeline value and presents
+nothing. That is the phase document's own bring-up order, and it is what lets ladder steps 6 and
+7 run as soon as there is an entry point to run them from.
+
+#### Binary semaphores, which P5.2 left to this group
+
+`VkPresentInfoKHR` has no timeline path, so:
+
+| Semaphore | Count | Why |
+|---|---|---|
+| Acquire | One per image, used as a ring | `vkAcquireNextImageKHR` is told which semaphore to signal *before* it says which image it gave, so it cannot be indexed by image. The engine host-waits on the previous frame's timeline value before reusing a slot, so a ring of `MaxPendingFrames` is safe. |
+| Present | One per image | An image is not presented again until it has been acquired again. |
+
+The acquire wait goes onto the present queue's `m_pendingWaits`, which the next submit drains.
+That is only sound because of the queue ordering above: the submit that writes the swapchain image
+is not the first one after the acquire.
+
+`QueuePresent` submits and then presents, where Direct3D 12 presents and then signals. It has to:
+`vkQueuePresentKHR` waits on a semaphore only a submit can signal. The returned value still means
+"the frame is done", which is all the engine reads it for.
+
+#### Two smaller mappings
+
+- **The swapchain image is created sRGB.** Direct3D 12 creates it `UNorm` and puts an sRGB render
+  target view on it, which in Vulkan would need `VK_KHR_swapchain_mutable_format`. Creating the
+  image in `m_renderTargetFormat` gives the same conversion on write and the same picture, with no
+  extension. `m_colorFormat` is the fallback if the surface refuses it.
+- **`SetVSync` picks a present mode and a later call needs a recreation to take effect**, because
+  Vulkan fixes the mode when the swapchain is created. FIFO with vsync; MAILBOX or else IMMEDIATE
+  without it. Nothing in the engine calls it outside `CreateSwapchain`, so the two backends behave
+  identically today.
+
+#### The one thing that can stop Phase 6 dead
+
+**`minImageCount` is a minimum, so a driver may return more swapchain images than were asked for.**
+`Swapchain::m_renderTargets` is a fixed `TArray` of `MaxPendingFrames`, which is 2, and several
+Linux drivers want three or four. `CreateSwapchain` logs the two numbers and halts. The fix is
+`MaxPendingFrames` in `RHI.h`, which is an upstream file and a human decision.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 99 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved.
+- Every engine call site of `AcquireNextImage`, `QueuePresent`, `CreateSwapchain` and
+  `QueueSubmit` was read, along with the frame order in `Engine.cpp`. That is what found the
+  queue ordering problem.
+
+#### Not verified
+
+Nothing has been acquired or presented. The order to check things in:
+
+1. **The image count.** It halts on a driver that wants more than two, and it is the first thing
+   that will happen on real hardware.
+2. **The queue ordering wait.** If it is wrong, passes read each other's half-written targets.
+   Sync validation is what names it.
+3. **The acquire wait reaching the right submit.** A validation error names it.
+
+**Upstream files edited: none.**
+
+### 2026-08-29 - P5.10 Copies and clears. A clear needs a barrier the engine does not record
+
+**`CmdCopyBuffer`, both `CmdCopyTexture` overloads, `CmdClearTexture` and `CmdClearBuffer` are
+implemented.** 37 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 42. Nothing has run.
+
+The five commands are short. Three things around them are not, and each is a place where Direct3D
+12 needs nothing and Vulkan needs something.
+
+#### A Direct3D clear is a shader write, and a Vulkan clear is a transfer write
+
+`ClearUnorderedAccessViewUint` writes through an unordered access view, so
+`Renderer_ForwardShading.cpp:753` follows its clears with a barrier whose source is
+`ResourceAccess::UnorderedAccess`. That is a shader storage write. `vkCmdFillBuffer` is a transfer
+write, which that barrier does not cover at all, so **the culling counters would be read stale and
+no validation layer would say a word**.
+
+So every clear records the transfer half of its own visibility barrier, batched like the rest and
+flushed with them at the next dispatch. `RecordClearVisibilityBarrier` is the one place it lives.
+Its destination is `ALL_COMMANDS` and it is listed in the table above as a site to narrow.
+
+#### A copy needs a layout the engine never asks for
+
+`D3D12_BARRIER_LAYOUT_COMMON` is already a legal copy source, copy destination and unordered
+access view clear target, so **the engine issues no layout barrier before a texture upload**. It
+issues a global memory barrier and nothing else: `RenderSystem.cpp:489` and `:759` are the two
+sites. Vulkan needs `GENERAL` or one of the `TRANSFER` layouts, and the image is still in the
+`UNDEFINED` that `vkCreateImage` gave it, which is P5.6's recorded obligation.
+
+`TransitionTextureForTransfer` records that barrier, once per texture, into `GENERAL` and not
+`TRANSFER_DST_OPTIMAL`. `GENERAL` is what `TextureState::Common` maps to, so the engine's belief
+about this texture stays true and the next barrier it records still passes `CmdBarrier`'s assert.
+Every texture the engine copies into is created `Common`; `RenderSystem.cpp:650` asserts it.
+
+#### The staging row stride, which P5.6 left to this task
+
+`vkCmdCopyBufferToImage` takes its row length in texels and the engine lays out its staging rows
+at the byte stride `GetTextureCopyRowStride` reports. `CopyRowLengthInTexels` converts the one
+into the other, and **both** copy overloads use it, so the readback direction reads rows at the
+stride the upload direction writes them. Direct3D 12 uses the destination buffer's own footprint
+for the readback, which for a buffer resource is the whole buffer as a single row and says nothing
+about texture rows.
+
+#### Two clear-value divergences, and nothing calls either path today
+
+- `CmdClearTexture` has **no caller anywhere in the engine**. `vkCmdClearColorImage` converts the
+  clear value to the image format and `ClearUnorderedAccessViewUint` writes the raw bits, so the
+  two agree on an integer format and disagree on a normalised one.
+- `CmdClearBuffer` fills 32-bit words. Direct3D fills components of the view's format. Every
+  buffer the engine clears is a counter or a 32-bit typed buffer, so the two agree; a 16-bit
+  format would not.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 91 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. The five this task adds -
+  `vkCmdCopyBuffer`, `vkCmdCopyBufferToImage`, `vkCmdCopyImageToBuffer`, `vkCmdFillBuffer` and
+  `vkCmdClearColorImage` - are all among them.
+- Every engine `CmdClearBuffer`, `CmdCopyBuffer` and `CmdCopyTexture` call site was read, along
+  with the barriers around it, which is what found the clear visibility hole.
+
+#### Not verified
+
+No copy issued, no buffer filled. The order to check things in:
+
+1. **The clear visibility barrier.** If it is wrong the culling counters are garbage and the frame
+   is empty or wildly wrong. Sync validation is the tool that names it.
+2. **The staging row stride.** A wrong stride skews every uploaded texture, which looks like a
+   decode bug rather than a copy bug.
+3. That `TransitionTextureForTransfer` leaves `m_currentLayout` agreeing with the engine's
+   tracker. `CmdBarrier`'s assert is what says otherwise.
+
+**Upstream files edited: none.**
+
+### 2026-08-29 - P5.9 Barriers. The render pass now opens at the draw, not at the bind
+
+**All three `CmdBarrier` overloads are implemented**, on synchronization2. 42
+`EE_UNIMPLEMENTED_FUNCTION` remain, down from 45. Nothing has run.
+
+Barriers are batched on the command buffer and flushed in one `vkCmdPipelineBarrier2` at every
+draw, every dispatch and `EndCommandBuffer`, which are the points `RHI_Direct3D12.cpp:1586`
+flushes at. The mapping work is the small half of this task. The large half is below.
+
+#### The render pass had to become lazy, and this is the reason
+
+**The engine records image layout barriers between `CmdSetRenderTargets` and the first draw.** It
+is not an accident or one pass being odd; it is the shape of every pass in the renderer:
+
+```
+resourceStates.Writeable( target, ... )      // the target becomes a render target
+resourceStates.FlushBarriers( cb )           //   -> RHI::CmdBarrier
+RHI::CmdSetRenderTargets( cb, target, ... )
+rootConstants.SetSourceTexture( resourceStates, ... )   // a source becomes shader-readable
+resourceStates.FlushBarriers( cb )           //   -> RHI::CmdBarrier, *after* the bind
+RHI::CmdDraw( cb, 3, 0 )
+```
+
+`RenderPass_SMAA.cpp:154`, `:190` and `:218`, `RenderPass_GTAO.cpp:435` and `:462` all do it. **A
+barrier may not run inside dynamic rendering**, so a `CmdSetRenderTargets` that called
+`vkCmdBeginRendering` would put every one of those barriers inside a pass.
+
+So `CmdSetRenderTargets` records the attachment configuration and does not begin. The first draw
+flushes the barriers and then begins, through `PrepareDraw`. Direct3D 12 has the same shape for
+its own reason: `OMSetRenderTargets` is state, and its batched barriers flush at the draw.
+
+Three consequences worth knowing before touching that code:
+
+| Case | What happens |
+|---|---|
+| A pass with a clear and no draw | `FlushRendering` begins and immediately ends it, so the clear still happens. `CmdSetRenderTargets` and `EndCommandBuffer` both call it. |
+| A barrier or dispatch between two draws of one pass | `SuspendRendering` ends the pass and forces every load op to `LOAD`, so the next draw resumes it without losing what the first half drew. No engine pass does this today. |
+| The attachment's `imageLayout` | Read from `VulkanTexture::m_currentLayout`, not hard-coded. `RenderPass_DebugDraw.cpp:1342` binds a depth target it only reads, which is `DEPTH_STENCIL_READ_ONLY_OPTIMAL` and not the attachment layout. |
+
+#### A correction to P5.8: load and store actions were discarding the frame
+
+**`LoadAction` is zero initialised, and zero is `DontCare` for both actions.** Direct3D 12 has no
+load or store actions at all - binding a render target preserves it, and the backend reads
+`m_loadActionsColor` only to decide whether to call `ClearRenderTargetView` - so every action the
+engine leaves alone arrives in the backend as `DontCare`.
+
+- **No engine pass sets a store action at all.** Mapping `StoreActionType::DontCare` to
+  `VK_ATTACHMENT_STORE_OP_DONT_CARE` discards the output of every render pass in the frame.
+- **`RenderPass_DebugDraw.cpp:1316` builds a `LoadAction` that sets only the depth action**, then
+  binds the frame's final colour target with it at `:1358`. `VK_ATTACHMENT_LOAD_OP_DONT_CARE`
+  there discards the whole rendered frame.
+
+Both `DontCare` values now preserve, which is what the reference backend does. `Clear`, `Load`
+and `StoreActionType::None` are unchanged, so a caller that means "discard" still has
+`StoreActionType::None` to say it with. **This is a deliberate divergence from the phase
+document's literal mapping** and it is written up under "Upstream issues observed" below.
+
+#### Queue ownership: `CONCURRENT`, which P5.5 left to this task
+
+Direct3D 12 resources have no queue ownership. A buffer written on the compute queue is read on
+the graphics queue with only a barrier between, and the engine's async compute path relies on it.
+Vulkan's `EXCLUSIVE` sharing needs an ownership transfer for the same thing, and **nothing in
+`RHI.h` says which queue last touched a resource**, so there is nothing to build a transfer from.
+
+`SetSharingMode` gives every buffer and image `CONCURRENT` across the distinct queue families the
+context uses, and leaves `EXCLUSIVE` when there is only one family. It costs some compression on
+some hardware. It is the mapping that reproduces the Direct3D semantics exactly, and the
+alternative is silent corruption across queues.
+
+#### The mappings, and the two entries that are deliberately broad
+
+`PipelineStage` to `VkPipelineStageFlags2`, `ResourceAccess` to `VkAccessFlags2`, `TextureState`
+to `VkImageLayout`. Four of them do not line up one for one:
+
+| `RHI.h` | Vulkan |
+|---|---|
+| `PipelineStage::Draw` | `ALL_GRAPHICS`, because `D3D12_BARRIER_SYNC_DRAW` is every stage a draw runs through. It has to cover the depth test stages: the engine transitions a depth target with `Draw` and never with a depth stage of its own. |
+| `PipelineStage::NonPixelShader` | Every shader stage except fragment, compute included, as Direct3D has it. The task and mesh stage bits belong here and are left out until P5.14 enables `VK_EXT_mesh_shader`, because naming a stage from a disabled extension is a validation error. |
+| `PipelineStage::Copy` | `ALL_TRANSFER`, not `COPY`. Direct3D's `SYNC_COPY` sits next to `SYNC_CLEAR` and `SYNC_RESOLVE` and the RHI has no separate flag, so a clear arrives here as `Copy`. |
+| `TextureState::ShaderResource` | `VulkanTexture::m_shaderReadLayout`, which P5.6 set. It is `GENERAL` when the texture is also an `RWTexture`, because that is the layout its heap descriptor was written with. |
+
+`PipelineStage::All` and `ResourceAccess::Common` map to `ALL_COMMANDS` and
+`MEMORY_READ|MEMORY_WRITE`. Both are in the `ALL_COMMANDS` table above with why, and both are the
+meaning of the flag rather than laziness.
+
+`PipelineStage::VideoProcess`, `ResourceAccess::VideoProcessRead` and `VideoProcessWrite` have no
+Vulkan equivalent at all: Vulkan has no video processing queue. Nothing asks for them.
+
+#### P5.6's three obligations are met
+
+1. `CmdBarrier` takes `oldLayout` from `VulkanTexture::m_currentLayout`, never from the caller's
+   `sourceState`, because a `VkImage` starts in `UNDEFINED` whatever `m_initialState` says. The
+   caller's belief is asserted against the truth rather than used, so the two cannot drift.
+2. `TextureState::ShaderResource` resolves through `m_shaderReadLayout`.
+3. `UnorderedAccess` is `GENERAL`.
+
+One layout is tracked per image, which is exact only while callers barrier the whole texture.
+`DeviceResourceStates::FlushBarriers` passes an empty `TextureBarrierRegion`, so every engine
+barrier does.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 87 `vk*` symbols resolve against `libvulkan.so.1`, up from 86. None unresolved.
+- Every engine `CmdSetRenderTargets` call site was read to confirm the deferred begin is needed
+  and sufficient, rather than assumed from one pass.
+
+#### Not verified
+
+No barrier issued, no layout moved. The order to check things in:
+
+1. **The load and store action correction.** If it is wrong, the frame is blank or garbage, and
+   that is the loudest failure here rather than the quietest.
+2. That the deferred begin puts every barrier outside its pass. A validation error names the
+   exact draw if not.
+3. That `m_currentLayout` agrees with the engine's tracker after a frame. The assert in
+   `CmdBarrier` is what says otherwise.
+
+**Upstream files edited: none.**
+
+### 2026-08-29 - P5.6 Textures and samplers. The format mapping is complete
+
+**All seven functions are implemented, and the `DataFormat` to `VkFormat` mapping is finished.**
+45 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 52. Nothing has run.
+
+**All 99 `DataFormat` members map, and there is exactly one mapping.** The phase document warns
+that two mappings which disagree corrupt textures in a way that looks like a bug somewhere else,
+so `VulkanFormat` is the only one: image creation, buffer views, pipeline attachment formats and
+the device capability query all come through it.
+
+#### Two things in the format mapping that are easy to get backwards
+
+**Vulkan names a packed format most significant component first, and DXGI names it least
+significant first.** So `DXGI_FORMAT_B5G6R5_UNORM` is `VK_FORMAT_R5G6B5_UNORM_PACK16`, not
+`VK_FORMAT_B5G6R5_UNORM_PACK16`. The same reversal applies to every packed entry:
+`B5G5R5A1` becomes `A1R5G5B5`, `B4G4R4A4` becomes `A4R4G4B4`, `R10G10B10A2` becomes
+`A2B10G10R10`, `R11G11B10` becomes `B10G11R11`, `R9G9B9E5` becomes `E5B9G9R9`. Getting one
+backwards swaps red and blue on that format alone, which is exactly the kind of failure that
+looks like a bug in the asset.
+
+**`RGB565_UNorm` and `BGR565_UNorm` deliberately map to the same `VkFormat`.** Vulkan can tell
+them apart and Direct3D cannot, so mapping them faithfully would make the two backends draw the
+same asset differently. See the upstream note below. Nothing in the engine uses either.
+
+Two places where Vulkan is the more exact of the two, and the mapping says so rather than
+copying Direct3D:
+
+| `DataFormat` | Direct3D 12 | Vulkan |
+|---|---|---|
+| `DXBC1_RGB_*` against `DXBC1_RGBA_*` | Both are `DXGI_FORMAT_BC1_UNORM` | `VK_FORMAT_BC1_RGB_*` and `VK_FORMAT_BC1_RGBA_*`, which is the distinction the `DataFormat` enum already makes |
+| The 28 ASTC formats | `DXGI_FORMAT_UNKNOWN`, no ASTC in Direct3D | All present, gated on `textureCompressionASTC_LDR`, which nothing enables. `FillDeviceCapabilities` reports each one honestly |
+
+`R1_UNorm` has no Vulkan equivalent at all and returns `VK_FORMAT_UNDEFINED` without asserting,
+which mirrors what the Direct3D 12 backend does with the ASTC formats it cannot express.
+
+#### Views, because Vulkan puts the subresource in the view
+
+Direct3D 12 selects a subresource in the descriptor. Vulkan selects it in the `VkImageView`, so
+`CreateTexture` builds every view the engine can ask for, up front:
+
+| View | How many | Why |
+|---|---|---|
+| Sampled | one | Covers every mip and layer. A depth-stencil image must name one aspect, and depth is the one the engine reads, matching `RHI_Direct3D12.cpp:4597`. |
+| Storage | one per mip level | An `RWTexture` handle names a mip. `RenderPass_GTAO.cpp:263` asks for five of them on one texture. |
+| Attachment | one per mip level per array layer | `RenderPass_GlobalEnvironmentMap.cpp:304` renders to one face of a cube at one mip, and `RenderPass_CascadedShadow.cpp` to one of four array slices. |
+
+**That closes the assert P5.8 left.** `CmdSetRenderTargets` now honours `colorArraySlices`,
+`colorMipSlices`, `depthArraySlice` and `depthMipSlice`, and the render area is the mip's extent
+rather than the whole texture's.
+
+An attachment view takes every aspect the image has and the sampled view takes one, which is not
+a detail either API makes obvious.
+
+#### Three things P5.9 has to know, and none of them are guessable from `RHI.h`
+
+These are the reason the "owed by later groups" table above now has a long P5.9 row.
+
+1. **A `VkImage` is always created in `VK_IMAGE_LAYOUT_UNDEFINED`.** `vkCreateImage` accepts that
+   or `PREINITIALIZED`, and the second is for linear tiling. Direct3D 12 takes the initial layout
+   directly, so the engine believes a fresh texture is already in `m_initialState` and the image
+   is not. `VulkanTexture::m_currentLayout` records the truth, and the first barrier has to read
+   it rather than the state the caller passes.
+2. **A texture that is both `Texture` and `RWTexture` sits in `VK_IMAGE_LAYOUT_GENERAL`**, not in
+   `SHADER_READ_ONLY_OPTIMAL`. A storage image descriptor may name no other layout and one image
+   cannot be in two layouts at once. `VulkanTexture::m_shaderReadLayout` carries the layout the
+   descriptor was actually written with. `RenderPass_GTAO.cpp:111` creates such a texture.
+3. **`GetTextureCopyRowStride` is P5.10's `bufferRowLength`.** Direct3D 12 reads its answer out of
+   `GetCopyableFootprints`; Vulkan has no such call because the staging layout is the caller's to
+   choose, so the row stride is `ComputeFormatRowStride` rounded up to the device's
+   `optimalBufferCopyRowPitchAlignment`. The engine writes its rows at that stride and
+   `vkCmdCopyBufferToImage` has to read them at it.
+
+#### Samplers
+
+Six samplers, created once in `RenderSystem::Initialize`, and two of them need something Vulkan
+puts outside `VkSamplerCreateInfo`:
+
+- **`FilterMode::Min` and `FilterMode::Max` are a reduction mode**, not a filter.
+  `COMMON_SAMPLER_LINEAR_CLAMP_MAX` is one of the six, so `samplerFilterMinmax` is now a device
+  requirement. It is core in Vulkan 1.2.
+- **The border colour is one of six fixed values.** Direct3D 12 takes any colour;
+  `VK_EXT_custom_border_color` is the only way to that and it is not enabled. Transparent black,
+  opaque black and opaque white map; anything else halts and names the sampler. Every sampler the
+  engine creates leaves the default of transparent black, and only a `ClampToBorder` address mode
+  reads it at all.
+
+#### One correction to P5.5
+
+**`descriptorBindingStorageTexelBufferUpdateAfterBind` was missing.** Every descriptor type in
+the heap's mutable list has to support update-after-bind, and the list holds a storage texel
+buffer for `RWBuffer<T>`. The other five types were asked for and this one was not, so creating
+the set layout would have failed validation on the first run. It is one line, next to its five
+siblings, and it changes nothing else.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build still compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged; confirmed by building them without this change.
+- 86 `vk*` symbols resolve against `libvulkan.so.1`, up from 81. None unresolved.
+- Every one of the 99 `DataFormat` members has a case in `VulkanFormat`, checked by script
+  against the enum in `RHI.h` rather than by reading.
+
+#### Not verified
+
+No image created, no view bound, no texture sampled. The order to check things in when Phase 6
+makes that possible:
+
+1. **The packed formats.** Nothing in the engine uses one today, so a mistake there will surface
+   the first time an asset does, long after this.
+2. That a cube face at a given mip is the subresource the attachment view actually names. Six
+   faces and nine mips give 54 views and only one right answer per draw.
+3. That the sampled and storage descriptors of one texture agree with the layout P5.9 puts it in.
+
+**Upstream files edited: none.**
+
+### 2026-08-28 - P5.8 Render pass and draw commands. Both Phase 4 decisions land
+
+**All thirteen functions are implemented.** 52 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 65.
+Nothing has run.
+
+**This is where both Phase 4 decisions become code**, and each is in exactly one place:
+
+- **Clip-space Y is inverted in `CmdSetViewport`**, by moving the origin to the bottom of the
+  rectangle and making the height negative. The shader compiler does not invert, and
+  `-fvk-invert-y` must never be added. The comment at that line says so and names the other half
+  of the decision, so that nobody adds a second flip.
+- **Heap set 1 is bound in `CmdSetPipeline`**, not in `BeginCommandBuffer` where Direct3D 12 calls
+  `SetDescriptorHeaps` (`:2917`). Vulkan cannot do it once per command buffer: binding a pipeline
+  whose layout differs from set N onwards disturbs every set from N up, and set 0 varies per
+  shader. The binding model accepted the redundant rebind deliberately.
+
+#### Three places where Vulkan needs something Direct3D 12 does not
+
+**Dynamic rendering has a begin and an end; `OMSetRenderTargets` has neither.** So
+`VulkanCommandBuffer` carries an `m_isRendering` flag, `CmdSetRenderTargets` closes the previous
+pass before opening the next, and `EndCommandBuffer` closes the last one. **Anything that may not
+run inside a render pass has to close it too**: `CmdDispatchCompute` does, and P5.9's barriers and
+P5.10's copies will have to. `EndRenderingIfActive` is the one call, and the requirement is
+written into the "in flight" table above so it is not discovered by a validation error.
+
+**Clears become load ops.** Direct3D 12 binds targets and then clears with a separate
+`ClearRenderTargetView`; here `LoadActionType::Clear` is `VK_ATTACHMENT_LOAD_OP_CLEAR` on the
+attachment. That is what the phase document's mapping asks for and what a tiling GPU needs.
+`StoreActionType::None` maps to `VK_ATTACHMENT_STORE_OP_NONE`, core in 1.3.
+
+**Dynamic rendering needs a render area and Direct3D 12 has none.** The full extent of the
+attachments is used, which is the same thing, and the viewport still restricts what is drawn.
+
+#### Root constants are a ring buffer, as the binding model said they would be
+
+`RHI.esh` declares the block through `EE_DECLARE_ROOT_CONSTANTS` as a `ConstantBuffer`, so DXC
+emits a uniform buffer and Vulkan push constants are not available without `[[vk::push_constant]]`
+in `RHI.esh`, which Phase 4 rule 4 forbids. So `CmdSetRootConstants` copies into a ring and pushes
+a descriptor at the copy.
+
+**One ring per command buffer, 64 KB, reset in `BeginCommandBuffer`.** That is safe without any
+frame tracking, because Vulkan already requires a command buffer's previous submission to have
+completed before it can be re-recorded. **The ring asserts rather than wraps**: wrapping would
+overwrite constants the GPU is still reading, and the failure would look like a shader reading
+wrong values, which is a miserable thing to chase. 64 KB against a handful of `uint32`s per set is
+generous by a wide margin.
+
+`CmdSetRootParameter` is the same push with the caller's buffer and offset and `VK_WHOLE_SIZE` for
+the range, which is what a Direct3D 12 root descriptor is: an address with no size. The binding
+model says so explicitly.
+
+Both use `m_shaderResources[index].m_registerIndex`, which P5.7 recorded as holding the **Vulkan
+binding** rather than the HLSL register. That is why no shift is applied here.
+
+#### A file reorganisation, because the declaration order forced it
+
+`RHI.h` declares the draw commands before the buffers, textures and pipelines they act on, so a
+`VulkanBuffer` defined next to `CreateBuffer` comes too late for `CmdSetRootConstants`. Every
+`VulkanXxx` type now sits in one "Resource types" block near the top. **The functions keep
+`RHI.h`'s section order**, which is what Conventions rule and the phase document ask for; only the
+type definitions moved.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets compile and link. `ninja` exits 0, `Checks.py` passes.
+- 81 `vk*` symbols resolve against `libvulkan.so.1`, up from 70.
+- Every one of the thirteen functions plus `CmdSetShadingRate` is present exactly once. That was
+  checked by name, because the splice that replaced the stubs spanned `CmdSetShadingRate`, which
+  belongs to P5.15 and had to be put back.
+
+#### Not verified
+
+No viewport set, no pass begun, no descriptor pushed. The two decisions this group implements are
+the ones Phase 4 spent the most effort on, and neither has run. The order to check them in:
+
+1. **The Y flip and the front face together.** Getting both wrong looks correct. Render something
+   with a known handedness before trusting either.
+2. That a push descriptor lands on set 0 while set 1 stays bound across a pipeline change.
+3. That the root constant ring holds a value long enough for the GPU to read it.
+
+**Upstream files edited: none.**
+
+### 2026-08-28 - P5.7 Shaders, root signatures and pipelines. Written, never run
+
+**Graphics and compute pipelines are implemented, and SPIRV-Reflect finally has a caller.** 65
+`EE_UNIMPLEMENTED_FUNCTION` remain, down from 74. Four of the 65 are markers rather than
+unimplemented RHI functions: the `VulkanFormat` default, the static-sampler path, and the mesh and
+raytracing `CreatePipeline` overloads. Nothing has run.
+
+**This closes the set of five groups `RenderSystem::Initialize` needs.** P5.1, P5.2, P5.4, P5.5
+and P5.7 are all written. Whether they work is a different question that nothing can answer before
+Phase 6.
+
+#### Reflection
+
+`ExtractReflection` mirrors `RHI_Direct3D12.cpp:1003` and produces the same `ShaderReflection` the
+engine already reads. The interesting mappings:
+
+| Direct3D 12 | Vulkan |
+|---|---|
+| `D3D12_SHADER_INPUT_BIND_DESC::Type` | `SpvReflectDescriptorBinding::descriptor_type` |
+| `D3D_SIT_STRUCTURED` against `D3D_SIT_UAV_RWSTRUCTURED` | `resource_type & SPV_REFLECT_RESOURCE_FLAG_UAV`. A SPIR-V storage buffer is both read and read-write, so the resource flag is the discriminator rather than the type. |
+| `GetThreadGroupSize` | `entry_points[0].local_size` |
+| `ID3D12ShaderReflectionConstantBuffer` members | `SpvReflectDescriptorBinding::block.members` |
+
+**`m_registerIndex` holds the Vulkan binding, not the HLSL register.** The binding model shifts
+`b`/`t`/`u`/`s` to 0/8/16/24, and un-shifting in reflection only to re-shift in
+`CreateRootSignature` is two chances to get it wrong instead of none. Nothing outside the backend
+reads it: `EngineShader.cpp` reads only `m_descriptorTypeFlags` and `m_numConstants` from a
+`DescriptorReflection`, and uses position in the vector as the parameter index. This is written
+down because the field means something different on the two backends, which is exactly the sort of
+thing a later reader assumes rather than checks.
+
+**Set 1 bindings are skipped during reflection.** They are the bindless heap, whose layout is
+fixed and shared, so they are not root parameters and must not become them.
+
+#### Root signatures
+
+`RootSignature` becomes a `VkPipelineLayout` over two set layouts: set 0, built from reflection
+with `VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR`, and set 1, the shared heap layout
+from `CreateContext`. The merge of per-stage resources, first seen wins, is copied from
+`RHI_Direct3D12.cpp:4946` including its cross-stage asserts, because the order decides
+`m_parameterIndex` and both `CmdSetRootParameter` and `EngineShader.cpp` index by position.
+
+**Root constants are a uniform buffer, not Vulkan push constants.** `RHI.esh` declares the block
+through `EE_DECLARE_ROOT_CONSTANTS` as a `ConstantBuffer`, so DXC emits a uniform buffer, and
+making it a push constant block needs `[[vk::push_constant]]` in `RHI.esh`, which Phase 4 rule 4
+forbids. The binding model already recorded the answer: `CmdSetRootConstants` copies into a
+per-frame upload ring and pushes a descriptor at it. P5.8 writes that.
+
+**The static sampler path halts rather than warns.** The binding model found no shader using one,
+and `CreateRootSignature` keeps the Direct3D 12 warning for a name that matches nothing. If a name
+*does* match, that is a new shader using a static sampler and the halt says so at the point it
+happens.
+
+#### Pipelines
+
+Graphics uses dynamic rendering, so there is no `VkRenderPass` and no framebuffer:
+`VkPipelineRenderingCreateInfo` carries the formats instead. Direct3D 12's single `DSVFormat`
+splits into `depthAttachmentFormat` and `stencilAttachmentFormat`.
+
+Viewport, scissor and stencil reference are dynamic state, because `CmdSetViewport`,
+`CmdSetScissor` and `CmdSetStencilReference` exist.
+
+**No vertex input state, and that is correct.** `GraphicsPipelineParameters` carries no input
+layout at all: the engine pulls vertices out of buffers in the shader. An empty
+`VkPipelineVertexInputStateCreateInfo` says exactly that.
+
+**The winding line is the one most likely to be wrong.** The Direct3D 12 backend sets
+`FrontCounterClockwise = ( m_frontFace == ClockWise )`, already an inversion of the name. The
+Vulkan viewport inverts Y with a negative height, which P5.8 applies, and that reverses winding in
+framebuffer space. Inverting the inversion lands back on the name, so `ClockWise` maps to
+`VK_FRONT_FACE_CLOCKWISE`. **This is reasoning, not a measurement.** If faces come out inside
+out, this line and the sign of the viewport height in `CmdSetViewport` are the only two places
+that can be responsible, and getting both wrong looks correct.
+
+Three smaller mismatches, all recorded at the line rather than silently absorbed:
+
+| `RHI.h` | Vulkan |
+|---|---|
+| `m_depthClip` | `depthClampEnable = !m_depthClip`. Clipping discards the primitive and clamping keeps it at the plane, so the two are not identical. `VK_EXT_depth_clip_enable` is the exact control and is not enabled. Nothing sets `m_depthClip` today. |
+| `m_sampleQuality` | No equivalent. It is a Direct3D quality level for a sample count and Vulkan exposes only the count. |
+| `m_independentBlend` | No switch. Vulkan is per attachment when the feature is supported and uniform otherwise, and the engine fills every attachment either way. |
+
+A render target outside `m_renderTargetMask` gets a fully default attachment: blending off, no
+colour written. That is what Direct3D 12 leaves behind for an unmasked target, and defaulting to a
+full write mask instead would silently change what is drawn.
+
+**The pipeline cache is implemented, which the reference is not.** `RHI_Direct3D12.cpp:5232`
+asserts `pPipelineCache == nullptr` with "Not implemented yet". `VkPipelineCache` is a handful of
+lines, so it is real here; `GetPipelineCacheData` keeps the bytes on the cache object because it
+hands back a view.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets compile and link. `ninja` exits 0, `Checks.py` passes.
+- **SPIRV-Reflect is genuinely linked**: 45 `spvReflect*` symbols are pulled out of
+  `libspirv-reflect.a` and into `libEsoterica.Base.so`. Until this group it was an archive nothing
+  referenced.
+- 70 `vk*` symbols resolve against `libvulkan.so.1`, up from 60.
+- `VulkanFormat` gained the ten render target and depth formats the engine uses, measured from
+  every `DataFormat` a texture or pipeline is created with in `Code/Engine`.
+
+#### Not verified
+
+No shader module has been created, no SPIR-V reflected, no pipeline compiled. The specific things
+to check first, in order:
+
+1. That `ExtractReflection` produces the same resource list Direct3D 12 does for the same shader.
+   A difference here silently changes the root parameter order.
+2. The winding, above.
+3. That a push descriptor set layout with the reflected bindings is accepted alongside the
+   update-after-bind heap set in one pipeline layout.
+
+**Upstream files edited: none.**
+
+### 2026-08-28 - P5.5 Buffers, and the bindless heap becomes code. Written, never run
+
+**All seven functions are implemented, and `CreateContext` now builds the bindless descriptor
+heap.** 74 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 80. One of those 74 is not an RHI
+function: it is the default case of `VulkanFormat`, which P5.6 fills in. Nothing has run.
+
+This is the group the phase document calls the point where the Phase 4 binding model stops being
+a document, so this entry is long.
+
+#### A correction to the binding model, on one flag
+
+The binding model entry says both heap bindings take `PARTIALLY_BOUND` and
+`VARIABLE_DESCRIPTOR_COUNT`. **Vulkan does not allow that.** Only the highest-numbered binding in
+a set may carry `VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT`
+(`VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-pBindingFlags-03004`), so binding 0 cannot have
+it while binding 1 exists.
+
+**The flag is also not needed.** It exists to let a set be allocated smaller than its layout
+declares, and both heaps are allocated at their full declared size: 65472 and 2048. So it is
+dropped from both bindings rather than kept on one.
+
+`PARTIALLY_BOUND` and `UPDATE_AFTER_BIND` stay, and the layout keeps
+`UPDATE_AFTER_BIND_POOL`. **Nothing a shader can observe changes**: the set, the bindings, the
+descriptor types, the counts and the mutable type list are all exactly as recorded. The flag never
+reaches the SPIR-V. This is written up here rather than escalated as a re-decision because it
+corrects a detail of how the recorded model is built, not the model itself. **Say so if you
+disagree** - the entry it corrects is the hard prerequisite for the whole phase.
+
+#### What the heap looks like in code
+
+Built in `CreateContext`, once, and torn down in `DestroyContext`:
+
+| Binding | Type | Count | Flags |
+|---|---|---|---|
+| 0 | `VK_DESCRIPTOR_TYPE_MUTABLE_EXT` over six types | 65472 | `PARTIALLY_BOUND`, `UPDATE_AFTER_BIND` |
+| 1 | `VK_DESCRIPTOR_TYPE_SAMPLER` | 2048 | `PARTIALLY_BOUND`, `UPDATE_AFTER_BIND` |
+
+The counts are Direct3D 12's, from `RHI_Direct3D12.cpp:2229` and `:2236`. Keeping them identical
+is what makes a handle mean the same thing on both backends.
+
+**Index allocation reuses `HandleAllocator<GenericResourceHandle>`**, the platform-neutral
+allocator in `Code/Base/Render/HandleAllocator.h` that the Direct3D 12 backend already uses for
+its own descriptor heaps. So a handle is allocated the same way on both sides, and nothing new was
+written to do it.
+
+**Writing a mutable descriptor uses the actual type, never `VK_DESCRIPTOR_TYPE_MUTABLE_EXT`.**
+That constant only ever appears in the layout and the pool size. `WriteResourceHeapSlot` is the
+one place a heap slot is written.
+
+#### Buffers
+
+`GetBufferHandle` lays out its descriptors in the same order Direct3D 12 does - constant buffer
+first if present, then the read view, then the read-write view - because the handle arithmetic has
+to agree.
+
+Vulkan wants buffer usage up front where Direct3D 12 derives it from the view, so the usage flags
+come from the requested descriptor types. The awkward part is that a *typed* buffer is a different
+descriptor type from a structured one:
+
+| HLSL | `m_format` | Vulkan descriptor | Needs |
+|---|---|---|---|
+| `ConstantBuffer<T>` | undefined | `UNIFORM_BUFFER` | range |
+| `StructuredBuffer<T>`, `ByteAddressBuffer` | undefined | `STORAGE_BUFFER` | range |
+| `RWStructuredBuffer<T>` | undefined | `STORAGE_BUFFER` | range |
+| `Buffer<T>` | set | `UNIFORM_TEXEL_BUFFER` | a `VkBufferView` |
+| `RWBuffer<T>` | set | `STORAGE_TEXEL_BUFFER` | a `VkBufferView` |
+
+**A `VkBufferView` needs a `VkFormat`, which is P5.6's mapping.** Rather than write a second
+mapping, `VulkanFormat` is created here with the entries buffers actually need and asserts on
+everything else. **P5.6 completes this function; it must not write another one.** That is exactly
+the failure the phase document warns about, where two mappings disagree and textures corrupt in a
+way that looks like a bug somewhere else.
+
+Which entries were needed was **measured, not guessed**: every `BufferParameters::m_format`
+assignment in `Code/Engine` uses one of `R32_UInt`, `RG32_UInt` or `R32_SFloat`, across
+`SpatialHash.cpp`, `DeviceRenderView.cpp`, `Renderer_ForwardShading.cpp`, `DeviceAppendBuffer.cpp`,
+`DeviceRenderWorld.cpp` and `ImguiRenderer.cpp`. The signed and float siblings of those three are
+filled in too, because they cost a line each.
+
+**`BufferParameters::m_pCounterBuffer` has nowhere to go, and needs nowhere.** Direct3D 12 hands a
+counter resource to `CreateUnorderedAccessView`; Vulkan has no equivalent. `CreateBuffer` asserts
+it is null. The binding model entry reaches the same conclusion from the shader side: no `.esh` or
+`.esf` in the repository uses `IncrementCounter`, `DecrementCounter`, `AppendStructuredBuffer` or
+`ConsumeStructuredBuffer`, and `AppendBuffer.esh` carries its own explicit `RWBuffer<uint>` counter
+and does its own `InterlockedAdd`.
+
+**Suballocation is a `VmaVirtualBlock`**, the direct equivalent of the `D3D12MA` virtual block the
+reference uses. `BufferSubAllocation::m_internal` holds the `VmaVirtualAllocation`, with a
+`static_assert` on the size, the same guard the Direct3D 12 side has.
+
+**Freed heap slots are not cleared.** `PARTIALLY_BOUND` means a stale descriptor only matters if a
+shader reads it, and a shader reading a freed handle is a bug either way. Direct3D 12 frees its
+descriptors the same way.
+
+**`VK_SHARING_MODE_EXCLUSIVE`, not `CONCURRENT`.** Direct3D 12 buffers have no queue ownership at
+all, and `CONCURRENT` would reproduce that at a cost on some hardware. P5.9 owns barriers and has
+to get the ownership transfers right regardless, so the stricter mode is the one to start from.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets compile and link. `ninja` exits 0, `Checks.py` passes.
+- 60 `vk*` symbols now resolve against `libvulkan.so.1`, up from 51.
+- The three buffer formats were read out of the engine's own call sites.
+- Every Vulkan structure and flag was read out of `/usr/include/vulkan/vulkan_core.h`.
+
+#### Not verified, and this is the group where that matters most
+
+No descriptor set has been created, no descriptor written, no handle handed to a shader. The heap
+is the single highest-risk thing in Phase 5 - the phase document calls bringing it up "the highest
+risk step" and says not to go past it on an unverified assumption. **Every claim in this entry is
+an unverified assumption.** The specific things to check first, with validation layers on:
+
+1. That a mutable descriptor binding of 65472 with `UPDATE_AFTER_BIND` allocates at all.
+2. That writing a `UNIFORM_TEXEL_BUFFER` into a mutable slot is accepted.
+3. That the heap index a shader sees equals the handle `GetBufferHandle` returned.
+
+**Upstream files edited: none.**
+
+### 2026-08-28 - P5.4 Command pools and buffers. Written, never run
+
+**All seven functions are implemented.** 80 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 87.
+Nothing has run.
+
+The group is nearly a straight translation, so this entry is short. Four things are worth keeping.
+
+**The pool takes `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT`.** Direct3D 12 resets an
+individual command list against its allocator, in `ID3D12GraphicsCommandList::Reset`, and the
+engine calls `BeginCommandBuffer` per buffer rather than resetting the pool each time. Without the
+bit, a second `vkBeginCommandBuffer` with no intervening `vkResetCommandPool` is invalid. Some
+drivers give such a pool per-buffer allocators, which costs a little; correctness first, and the
+flag is the direct equivalent of what the reference does.
+
+**`ResetCommandPool` passes no flags**, so `VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT` is off.
+`ID3D12CommandAllocator::Reset` keeps its memory for reuse, and this runs once per frame per pool,
+so handing memory back to the driver every frame is the opposite of what the caller wants.
+
+**`BeginCommandBuffer` does not set `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT`.** It would be
+faster, and it is an assumption rather than a fact: Direct3D 12 allows a closed command list to be
+submitted more than once without re-recording, and nothing here proves the engine never does. The
+flag is a validation error the moment it is wrong. Set it once someone has checked, not before.
+
+**`BeginCommandBuffer` does not bind any descriptor set**, and Direct3D 12's does the equivalent.
+`RHI_Direct3D12.cpp:2917` calls `SetDescriptorHeaps` once per command buffer. The Phase 4 binding
+model puts the matching `vkCmdBindDescriptorSets` in `CmdSetPipeline` instead, because set 1 is
+disturbed whenever a pipeline with a different set 0 layout is bound. P5.8 writes it there. The
+comment at the empty spot says so, so that the absence reads as a decision rather than an
+oversight.
+
+Two smaller notes. Vulkan command buffers start in the initial state, so there is nothing matching
+Direct3D 12's trick of creating a list already recording and closing it immediately; the stage is
+just set to `Closed`. And `VulkanCommandBuffer` gains the `Stage` enum its Direct3D 12 sibling
+has: the validation layers track the same lifecycle, but an `EE_ASSERT` names the caller that got
+it wrong instead of a layer message three frames later.
+
+**Verified, in the only sense available:** all eight Linux targets compile and link, `ninja` exits
+0, and 51 `vk*` symbols now resolve against `libvulkan.so.1`, up from 44.
+
+**Not verified:** that a pool is ever created or a command buffer ever recorded.
+
+**Upstream files edited: none.**
+
+### 2026-08-28 - P5.2 Queues and synchronization. Written, never run
+
+**Eight of the nine P5.2 functions are implemented. `QueuePresent` is not, and cannot be.** 87
+`EE_UNIMPLEMENTED_FUNCTION` remain, down from 95. Nothing has run.
+
+**The monotonic counter is a timeline semaphore, and the mapping is nearly free.** One
+`VK_SEMAPHORE_TYPE_TIMELINE` semaphore per queue. `QueueGetCompletedSemaphore` is
+`vkGetSemaphoreCounterValue`, `QueueHostWait` is `vkWaitSemaphores`, `WaitQueueIdle` is
+`vkQueueWaitIdle`. The phase document calls this the one thing to get right first; it is right
+because `RHI.h` was already written against a counter rather than a fence object.
+
+**The counter starts at 1 and means "the next value to be signalled".** `QueueGetCurrentSemaphore`
+therefore returns a value that has *not* happened yet. That looks wrong and is not: it is exactly
+what `Direct3D12Queue::m_fenceValue` does, initialised to 1 at `RHI_Direct3D12.cpp:2554`, and the
+engine is written against that meaning. The timeline's initial value is 0, which is why both
+backends skip a wait on 0.
+
+**`QueueDeviceWait` is the one real mismatch.** `ID3D12CommandQueue::Wait` is a standalone queue
+operation that blocks everything submitted after it. Vulkan has no such thing: a wait only exists
+attached to a submit. So the wait is recorded on the queue and the next `QueueSubmit` drains it.
+
+The obvious alternative is wrong and worth writing down. Submitting an empty `vkQueueSubmit2`
+carrying only the wait does **not** reproduce the semantics, because submissions on one queue may
+overlap: a wait in submit N does not hold back submit N+1. The pending-wait list does.
+
+A wait with no submit after it is dropped. That is a behaviour difference from Direct3D 12 with no
+observable consequence, since a queue wait that nothing follows cannot be observed.
+
+**P5.1 had to be amended, and the reason is a deadlock.** `CreateContext` previously asked for one
+`VkQueue` per unique family. On a device with no dedicated async compute or transfer family, all
+three RHI queues then share one `VkQueue`, and a `QueueDeviceWait` between two of them waits for a
+timeline value that only a later submit on that same `VkQueue` can signal. That is a hang, not a
+slowdown. `CreateContext` now asks for as many queues per family as the engine will take, clamped
+to `VkQueueFamilyProperties::queueCount`, and `CreateQueue` hands out distinct queue indices.
+Where the family really does expose one queue, the queues still share it, which is correct but
+serialised.
+
+**`QueuePresent` belongs to P5.3, not to P5.2.** `VkPresentInfoKHR` accepts binary semaphores
+only; there is no timeline path. Presenting needs the swapchain to carry a binary semaphore per
+image, the submit before the present to signal it alongside the timeline value, and the present
+to wait on it. None of that can be written before `VulkanSwapchain` exists. The stub says so, at
+the stub.
+
+**Two things `QueueParameters` asks for that Vulkan will not give:**
+
+| Parameter | Status |
+|---|---|
+| `QueuePriority` | **Not honoured.** Vulkan fixes queue priorities at `vkCreateDevice`, and `CreateQueue` runs long after. Honouring it would mean recreating the device. Nothing in the engine sets it: `RenderSystem::Initialize` leaves all three queues on `Normal`. `GlobalRealtime` would additionally need `VK_EXT_global_priority`, also at device creation. |
+| `QueueFlags::DisableTimeout` | **No equivalent.** `D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT` has no Vulkan counterpart. Nothing sets it either. |
+
+Both are recorded rather than silently ignored, so that the first caller to set one finds an
+explanation instead of a mystery.
+
+**Two structures were written here that other groups own.**
+
+- `VulkanCommandBuffer`, with the single `VkCommandBuffer` member `QueueSubmit` reads. P5.4 owns
+  command buffers and extends it. The type has to exist for `QueueSubmit` to compile at all.
+- `SetVulkanObjectName`, the one `vkSetDebugUtilsObjectNameEXT` call underneath all nine
+  `SetDebugName` overloads. P5.12 owns those and builds them on this. It is written now because
+  `CreateQueue` names its queue, and because the phase document says to do debug utils early: a
+  named object makes every later group easier to debug.
+
+`Queue::m_unifiedMemory` comes from a new `VulkanContext::m_isUnifiedMemory`, computed in
+`FillDeviceCapabilities` as "no memory type is device-local without also being host-visible".
+Direct3D 12 reads the same flag from D3D12MA's `IsUMA()`.
+
+**Verified, in the only sense available:**
+
+- All eight Linux targets compile and link. `ninja` exits 0.
+- 44 `vk*` symbols are now undefined in `libEsoterica.Base.so` and resolve against
+  `libvulkan.so.1`, up from 37.
+- `Checks.py` passes.
+- Every Vulkan structure, enum and entry point was read out of
+  `/usr/include/vulkan/vulkan_core.h` before use.
+
+**Not verified:** that a queue is ever created, that a timeline semaphore ever signals, or that
+the pending-wait scheme behaves as reasoned. The `QueueDeviceWait` argument above is the piece
+most worth re-checking with validation layers on, because it is reasoning about Vulkan's execution
+model rather than a mechanical translation.
+
+**Upstream files edited: none.**
+
+### 2026-08-28 - P5.1 Device, context and memory. Written, never run
+
+**P5.1 is implemented and has never executed a single instruction.** `CreateContext`,
+`DestroyContext`, `GetTotalAllocatedDeviceMemory`, `GetDetailedMemoryStatistics`,
+`GetResourceAllocationStatistics` and `ReportDeviceMemoryLeaks` are real, and so are
+`BeginFrameCapture` and `EndFrameCapture`, which are P5.12's but are four lines each once
+`CreateContext` has the RenderDoc API pointer. 95 `EE_UNIMPLEMENTED_FUNCTION` remain, down from
+103.
+
+Read every claim below as "the compiler and linker agree", never as "this works".
+
+**What `CreateContext` does.** Instance with `VK_LAYER_KHRONOS_validation` and
+`VK_EXT_debug_utils` when validation is asked for; physical device selection; device with the
+binding model's features; VMA. Device selection honours `DeviceSelectionPreference`:
+`UseProvidedIndex` takes the index and refuses it if it does not qualify, and the other two score
+discrete against integrated in opposite directions, which mirrors what `DXGI_GPU_PREFERENCE` asks
+the factory for rather than inventing a different notion of "best".
+
+**The device is refused rather than worked around.** `GetDeviceRejectionReason` checks Vulkan 1.3,
+the three required extensions, and 20 feature bits, and returns the **name of the first missing
+one** so the log says what is wrong instead of "no suitable device". The list is the binding
+model's, not a guess: `mutableDescriptorType`, `VK_KHR_push_descriptor`, `scalarBlockLayout`, the
+descriptor indexing bits, the four `*UpdateAfterBind` bits and the four `*ArrayNonUniformIndexing`
+bits, plus `timelineSemaphore`, `bufferDeviceAddress`, `drawIndirectCount`, `dynamicRendering` and
+`synchronization2`. There is no fallback path, because the shaders are compiled for this model.
+
+`VK_KHR_swapchain` is enabled here even though P5.3 owns the swapchain. A device is created once,
+and adding the extension later would mean recreating it.
+
+**Two symbols moved here that had no home on Linux.** `RHI_Direct3D12.cpp` defines both, and
+exactly one backend compiles per platform:
+
+- `Memory::Allocators::g_RHI`, named by seven `TVector` and `THashMap` members in `RHI.h`.
+- `GenericResource::~GenericResource`, which `Context` derives from.
+
+Neither was referenced before, because no Linux code instantiated the types that need them. The
+link error for the second one is worth remembering: `undefined reference: vtable for
+EE::Render::RHI::GenericResource`, which names the base class and not the derived one that caused
+it.
+
+**A validation error halts.** The debug messenger logs through `EE_LOG_FATAL_ERROR`, which
+carries `EE_HALT()`. Phase 5 says to treat any validation error as a build break; this is what
+makes that true rather than aspirational. The callback initialises the thread heap first, because
+the layers call it from whichever thread tripped the check, exactly as the Direct3D 12 info queue
+callback does.
+
+**RenderDoc uses `RTLD_NOLOAD`.** `dlopen( "librenderdoc.so", RTLD_NOW | RTLD_NOLOAD )` attaches
+to a RenderDoc that already injected itself and never loads one that is not there, which is what
+`GetModuleHandleA` does on Windows. It still takes a reference, so `DestroyContext` calls
+`dlclose`. The Vulkan device pointer is `RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE`, the dispatch
+table at the start of the instance, not the instance handle.
+
+**`ReportDeviceMemoryLeaks` had to be inverted.** Direct3D 12 asks DXGI for live objects, and
+Vulkan has no global registry. It is also called from `BaseModule::ShutdownModule`, *after* the
+context is destroyed, so the allocator that knows the answer is already gone. `DestroyContext`
+therefore runs `vmaCalculateStatistics` while the allocator still exists and records any surviving
+allocations in two file statics, which `ReportDeviceMemoryLeaks` then reports. Leaked Vulkan
+*handles*, as opposed to memory, are the validation layers' job.
+
+**What is deliberately not filled in, and why.**
+
+| Left alone | Reason |
+|---|---|
+| `m_canShaderReadFrom`, `m_canShaderWriteTo`, `m_canRenderTargetWriteTo` | All three need the complete `DataFormat` to `VkFormat` mapping, which is P5.6's largest piece. Two partial mappings that disagree is the failure the phase document says corrupts textures in a way that looks like a bug somewhere else. |
+| `m_shadingRate`, `m_shadingRateCaps` | `NotSupported`, matching the Direct3D 12 backend, which sets the same with a TODO. P5.15 owns them, and reporting a capability the backend cannot honour makes the engine issue calls that halt. |
+| `m_indirectRootConstant` | `false`. Direct3D 12 command signatures set root constants per draw and Vulkan's indirect draws cannot. P5.13 decides whether a compute pre-pass covers it. |
+| `m_breadcrumbs` | `false`. DRED's equivalents are `VK_AMD_buffer_marker` and `VK_NV_device_diagnostic_checkpoints`, neither wired up. |
+| `m_rasterizerOrderViews` | `false`. `VK_EXT_fragment_shader_interlock` is the equivalent and nothing enables it. |
+| `m_hdr` | `false`. It needs a swapchain colour space, which is P5.3. |
+| `m_numRaytracingCores` | `0`. No Vulkan query exposes it, and nothing in the engine reads it. |
+
+`m_optimalRootSignatureSizeInDWORDs` is copied from Direct3D 12 as 13 rather than derived. It is
+an AMD packet-size heuristic with no Vulkan meaning, and it feeds the engine's own root signature
+sizing, which has to agree across both backends.
+
+**Queue families are chosen here, which looks like P5.2's work.** `vkCreateDevice` takes the queue
+create infos, so it cannot be deferred. A device with no dedicated async compute or transfer
+family falls back to the graphics family, which is correct rather than degraded: every
+graphics-capable family also supports compute and transfer.
+
+**`DeviceMode` is always `Single`.** Vulkan has no equivalent of a Direct3D 12 linked-node
+adapter; multi-GPU is explicit device groups, which the engine never asks for. `m_numLinkedNodes`
+is 1.
+
+**Verified, in the only sense available:**
+
+- All eight Linux targets compile and link: the five `.so` files, `Reflector`,
+  `ResourceCompiler`, `Tester`. `ninja` exits 0 and a re-run reports "no work to do".
+- `nm -DC libEsoterica.Base.so` shows `EE::Render::RHI::CreateContext` as a defined exported
+  symbol and `EE::Memory::Allocators::g_RHI` in BSS. 37 `vk*` symbols are undefined and resolve
+  against `libvulkan.so.1`.
+- `Checks.py` passes.
+- Every Vulkan extension macro, feature bit and struct name was read out of
+  `/usr/include/vulkan/vulkan_core.h` before use, not recalled.
+
+**Not verified, and not verifiable here:** that any of it produces a working device. No
+instance has been created, no device enumerated, no capability read. The two GPUs in this machine
+were surveyed during Phase 4 and both expose everything the binding model needs, so the
+requirement list is not speculative, but the code that reads it has never executed.
+
+**One `#pragma clang diagnostic` is used**, around the `vk_mem_alloc.h` include, to silence about
+200 `-Wnullability-completeness` warnings. It is a new Linux-only file, so no upstream file is
+touched, and the suppression is scoped to that include.
+
+**Upstream files edited: none.** `RHI_Vulkan.cpp` is a file this fork added; it is listed in
+`LinuxSources.txt` and does not appear in [TouchedFiles.md](TouchedFiles.md), which is correct.
+
+### 2026-08-28 - P5.0 The Vulkan dependencies, and open question 3
+
+Phase 5's dependency plumbing. **No RHI function is implemented.** `RHI_Vulkan.cpp` is untouched,
+so all 16 groups are still Phase 1 stubs.
+
+Three dependencies arrive, and one long-standing generator problem goes away:
+
+| Dependency | Pin | Layout | Built? |
+|---|---|---|---|
+| VMA | `v3.4.0` | `External/VMA/include/vk_mem_alloc.h` | no, header only |
+| SPIRV-Reflect | `vulkan-sdk-1.4.357.0` | `External/SPIRV-Reflect/`, plus `lib/libspirv-reflect.a` | one C file, `cc` and `ar` |
+| RenderDoc header | `v1.45` | `External/RenderDoc/renderdoc_app.h` | no, one header |
+
+**The Vulkan loader and headers are not fetched.** `libvulkan-dev` supplies both. The loader
+carries an ICD layer that has to match the installed drivers, so a source build of it would fight
+the distribution rather than help. `pkg-config vulkan` gives the include path and `-lvulkan`, the
+same way `FreeType.props` already works.
+
+**`External/RenderDoc` did not exist, and NinjaGen had reported that as a problem since Phase 0.**
+`RenderDoc.props` maps to that include directory, `Esoterica.Base` imports the sheet, and nothing
+had ever put the header there. `fetch_renderdoc` fixes it, so the generator now reports 17
+problems instead of 18, and every one that remains is "no sources in <configuration>".
+
+**Open question 3 is answered: the plain Vulkan loader, not `volk`.** The phase document's
+default stands, because the question asks for a decision from measured dispatch overhead and
+there is nothing to measure until the backend renders. Switching is one line in
+`Toolchain.SHEETS` plus an include, so nothing is lost by waiting for a profile that argues for
+it.
+
+**Linux-only property sheets are a new concept in the generator, and they had to be.** The three
+sheets have no `Code/PropertySheets/*.props` sibling and never will: the Windows build has no use
+for Vulkan, VMA or SPIRV-Reflect. Every other sheet reaches a project through
+`UpstreamProjects.txt`, which `SyncUpstream.py` regenerates from the `.vcxproj` files, so a
+hand-written entry there would not survive the next sync - and `Checks.py` verifies that file
+against upstream, so it would fail loudly first. `Toolchain.LINUX_ONLY_SHEETS` attaches a sheet
+to a project **by name** instead, and `project_compile_flags` and `project_link_flags` fold it in
+alongside the imported sheets. Only `Esoterica.Base` has an entry; every other project reaches
+the RHI through it.
+
+**One check was added**, and it is the kind `Checks.py` is for. A typo in either name of a
+`LINUX_ONLY_SHEETS` entry silently contributes nothing. The build stays green until something
+needs the symbols, and the link error then names `vkCreateInstance` rather than the misspelling.
+The two new checks confirm that every key names a real project and every value is in `SHEETS`.
+
+**Verified:**
+
+- All eight Linux targets build and link: the five `.so` files, `Reflector`, `ResourceCompiler`
+  and `Tester`. `ninja` exits 0.
+- `ldd libEsoterica.Base.so` lists `libvulkan.so.1`. It is a real `DT_NEEDED`, not just a flag in
+  the ninja file.
+- `-lspirv-reflect` resolves at link time. No symbol is referenced yet, so the archive
+  contributes nothing, but a missing archive would have failed the link.
+- `vk_mem_alloc.h` with `VMA_IMPLEMENTATION`, `spirv_reflect.h` and `renderdoc_app.h` compile
+  together in one translation unit under the project's own language flags: `-std=c++20
+  -fno-exceptions -msse4.2 -mavx -mavx2`. That is the combination P5.1 will write, and it was
+  checked rather than assumed.
+- `Checks.py` passes, including the two new checks and the existing determinism and upstream-sync
+  ones.
+- Re-running the three fetchers reports "already present" and rebuilds nothing.
+- `Editor` and `ResourceServer` still fail to compile, unchanged and for their existing Phase 7
+  reasons: `shellapi.h`, `EE::Platform::Win32`, and an incomplete `EditorTool`.
+
+**One thing for P5.1 to expect.** `vk_mem_alloc.h` emits about 200
+`-Wnullability-completeness` warnings under `-Wall -Wextra`. They are noise, not errors - the
+Linux build passes no `-Werror` - but the translation unit that defines `VMA_IMPLEMENTATION`
+will want `-Wno-nullability-completeness` to keep the build log readable. That is a decision for
+the task that writes the file, not for this one.
+
+**Upstream files edited: `Code/Scripts/NinjaGen/NinjaGen.py` only**, which
+[TouchedFiles.md](TouchedFiles.md) already registers as a large rewrite and a special case. Two
+functions gain one line each. No new registry entry is needed, and no `.vcxproj` or `.slnx` file
+is touched.
 
 ### 2026-08-28 - Criterion 3 is met: the shaders were valid, the validator was stale
 
@@ -777,6 +2388,59 @@ the reasoning, not just the outcome.
 **Rationale:** ...
 **Alternatives rejected:** ...
 -->
+
+### 2026-08-28 - Phase 5 is written blind, because nothing on Linux can run it
+
+**Decision: implement the Vulkan backend verified by compile and link only, and first execute it
+when Phase 6 lands.** Recorded because it makes every Phase 5 entry weaker than it looks, and a
+later session reading "P5.1 done" needs to know what "done" meant.
+
+**The blocker, verified rather than assumed.** Nothing on Linux can reach `RHI::CreateContext`:
+
+- Of the seven applications, `BuildGenerator` is excluded permanently, `Editor` and
+  `ResourceServer` do not compile and are Phase 7, `Reflector` and `ResourceCompiler` are offline
+  tools that never touch the RHI, and `Tester` is an upstream scratchpad.
+- `Esoterica.Applications.Engine` has exactly one source file, `Win32/EngineApplication_Win32.cpp`,
+  which the `**/Win32/**` exclusion glob drops. There is no Linux engine binary.
+- Writing one does not help on its own. `BaseModule::InitializeModule` calls
+  `m_inputSystem.Initialize()` at `:151`, which calls `Initialize()` on a `KeyboardMouseDevice`
+  and four `XBoxControllerInputDevice`s, and `m_imguiSystem.Initialize()` at `:157`, which calls
+  `InitializePlatform()`. All three are Phase 6 stubs that halt. `RHI::CreateContext` lives at
+  `RenderSystem.cpp:45`, inside `EngineModule::InitializeModule`, which runs after both.
+
+So running the engine needs P6.1 through P6.5 real first - SDL3, `LinuxApplication`, the imgui
+SDL3 backend, keyboard and mouse, gamepad. That is essentially all of Phase 6, whose own estimate
+is 3-4 weeks, before a line of Vulkan is written. Phase 6's stated prerequisite is "Phase 5
+through bring-up step 8", so the two phases are circular.
+
+**Rejected: the `Tester` harness the phase document names.** `Code/Applications/Tester/Main.cpp`
+is 114 lines, roughly 90 of them commented-out experiments, and the live code loads and saves an
+ini file from a hardcoded `D:\Esoterica\...` path. `int numTestFailures` is returned and never
+incremented. It is a scratchpad, not a test framework, and it is an upstream file that
+[TouchedFiles.md](TouchedFiles.md) does not list. **Acceptance criterion 4 cannot be met as
+written**, and the bring-up steps 1 to 8 it asks for have no home.
+
+**Rejected: a small Linux-only bring-up binary.** It would have verified P5.1 today, at the cost
+of a target with no Windows counterpart.
+
+**Rejected: the `EE_SHIPPING` loophole.** `EE_UNIMPLEMENTED_FUNCTION` compiles to nothing when
+`EE_DEVELOPMENT_TOOLS` is off, so a Shipping build walks past all three Phase 6 stubs silently.
+It also disables every assert and the validation layers, which Phase 5's "do not" list rules out
+explicitly.
+
+**What this costs, stated plainly.** Device feature checks, capability reporting, memory
+statistics and the whole binding model are unexercised. A wrong assumption in any of them
+surfaces at Phase 6 on top of several finished task groups rather than immediately. The
+mitigation available is that every extension name, feature bit and struct name is read out of the
+system Vulkan headers rather than recalled, and the two GPUs in this machine were surveyed during
+Phase 4 against the binding model's requirement list.
+
+**One thing that makes this less bad than it looks.** The engine's own initialisation order is
+already headless-first: `EngineModule::InitializeModule` calls `m_renderSystem.Initialize()`
+*before* `m_renderWindow.SetNativeWindowHandle( Platform::GetMainWindowHandle() )` at `:135`, and
+`Platform::GetMainWindowHandle` is a plain `void*` global with no Win32 types in it. When Phase 6
+lands, bring-up steps 1 to 8 map onto the real engine with no window needed, and step 9 is where
+the swapchain arrives. The ladder the phase document wanted still exists; it just runs later.
 
 ### 2026-08-28 - P4.6 is deferred to a Windows machine, with the Linux half done in advance
 
@@ -1775,10 +3439,11 @@ question to "Decisions made" once you answer it.
 |---|---|---|---|
 | 1 | ~~Does `ctt` (texture compression) build on Linux?~~ | Phase 3 | **answered: yes, it is open source. Built from crates.io.** |
 | 2 | Which LLVM version does the Reflector need, and does `clangAST` compile against it on Linux? | Phase 2 | open |
-| 3 | Use `volk`, or the plain Vulkan loader? | Phase 5 | open |
+| 3 | ~~Use `volk`, or the plain Vulkan loader?~~ | Phase 5 | **answered: the plain loader.** Nothing is profiled yet, and nothing can be until the backend renders |
 | 4 | Do the target distros package SDL3, or must we always build it? | Phase 6 | open |
 | 5 | ~~Does `GameNetworkingSockets` block the first `Base` link?~~ | Phase 1 | **answered: yes, and at compile time, not link** |
 | 6 | ~~Does the `VirtualAlloc` region in `Memory.cpp` have a working non-Windows path?~~ | Phase 1 | **answered: no** |
+| 7 | How do the engine's indirect draws reach Vulkan? Every command signature sets root constants and binds root descriptors per command, and no Vulkan indirect draw can do either. Both candidate answers change the shaders, which is Phase 4's. | Phase 5, and the whole frame | **open, and it blocks the frame.** See the P5.13 entry |
 
 Answered:
 
@@ -1815,6 +3480,70 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `RHI.h:1044` - `LoadAction` defaults to discarding every attachment
+
+`LoadAction` is zero initialised, `LoadActionType::DontCare` is zero and `StoreActionType::DontCare`
+is zero, so every action a caller does not set says "discard". That is harmless on Direct3D 12,
+which has no load or store actions and preserves a bound render target either way, and it is not
+harmless on any backend that honours them.
+
+**No engine pass sets a store action at all**, and `RenderPass_DebugDraw.cpp:1316` builds a
+`LoadAction` that sets only the depth action and then binds the frame's final colour target with
+it at `:1358`. On a backend that honours the values, the first discards every render pass output
+in the frame and the second discards the rendered frame.
+
+The Vulkan backend maps both `DontCare` values to preserve, and leaves `Clear`, `Load` and
+`StoreActionType::None` exact. A caller that really wants an attachment left alone still has
+`StoreActionType::None`. Worth raising upstream: the fix there is either a non-discarding default
+or explicit actions at each call site.
+
+### `RHI_Direct3D12.cpp:3981`, `:3978` and `:3969` - three faults in the raytracing path
+
+None has ever run: nothing in the engine creates an acceleration structure.
+
+- **`:3981`** has the line that fills in `Direct3D12AccelerationStructure::m_instanceBuffer`
+  commented out, and `:3390` dereferences it during the top level build. That is a null pointer.
+- **`:3978`** creates the top level structure buffer with `BufferFlags::NoDescriptors` and
+  descriptor types `RWBuffer|Raw`, and `GetAccelerationStructureHandle` at `:4002` then asks it for
+  a `DescriptorTypeFlags::Buffer` handle. Two asserts fire: one for the missing descriptor type and
+  one for the missing handle.
+- **`:3969`** sizes the scratch buffer from the bottom level prebuild alone and then reuses it for
+  the top level build at `:3392`. It overruns whenever the top level needs more scratch, which is
+  common.
+
+The Vulkan backend does not reproduce any of the three. Each is written up at the line in
+`RHI_Vulkan.cpp`.
+
+### `RHI_Direct3D12.cpp:3490` - `CmdBeginQuery` calls `BeginQuery` on a timestamp query
+
+`ID3D12GraphicsCommandList::BeginQuery` does not support `D3D12_QUERY_TYPE_TIMESTAMP`; a timestamp
+is written by `EndQuery` alone. The reference switches on exactly that type and calls `BeginQuery`
+for it, which the debug layer rejects.
+
+Nothing in the engine calls `CmdBeginQuery`, so it has never run. The Vulkan backend does nothing
+for a timestamp begin, which is what the reference effectively achieves minus the complaint.
+
+### `RHI_Direct3D12.cpp:3714` - `CmdWriteDebugMarker` packs its auto flags two different ways
+
+The `InOut` branch builds its flag from the enum's ordinal, `UINT( MarkerTypeFlags::In ) << 30`,
+which is `1 << 30`. The single-marker branch builds it from the bit field, `markerType << 30`,
+and `TBitFlags` converts to `1 << flagIndex`, so the same `In` becomes `2 << 30`. One of the two
+is wrong and they cannot both be right.
+
+Nothing in the engine calls `CmdWriteDebugMarker` and `DeviceCapabilities::m_breadcrumbs` is
+`false` on both backends, so it costs nothing today. The Vulkan backend reproduces both branches
+exactly, so the two write identical bytes; fixing it belongs upstream, next to a decision about
+which one was meant.
+
+### `RHI_Direct3D12.cpp:284` - `RGB565_UNorm` and `BGR565_UNorm` map to the same DXGI format
+
+Both return `DXGI_FORMAT_B5G6R5_UNORM`. Under DXGI's naming, which lists a packed format's
+components least significant first, that is the `BGR565` one; `RGB565` has no DXGI format at all.
+Vulkan has both, so the Vulkan backend could tell them apart and chooses not to: mapping them
+faithfully would make the two backends draw the same asset differently. Nothing in the engine uses
+either format, so this costs nothing today. Recorded because a future reader will see two
+`DataFormat` members reaching one `VkFormat` and assume it is a copy-paste slip.
 
 ### Eleven functions are `inline` on one side of the declaration only
 
