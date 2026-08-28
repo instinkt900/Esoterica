@@ -11,16 +11,17 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5 and P5.7 are written and have
-never been run.**
+answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5, P5.7 and P5.8 are written and
+have never been run.**
 
-**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5 and P5.7, all unverified.** P5.2 is
-complete except `QueuePresent`, which needs P5.3's swapchain; P5.7 covers graphics and compute
-pipelines, with mesh and raytracing left to P5.14 and P5.16. Phase 5's own note says this count
-is the single most important piece of state, so it leads this section.
+**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5, P5.7 and P5.8, all unverified.** P5.2
+is complete except `QueuePresent`, which needs P5.3's swapchain; P5.7 covers graphics and compute
+pipelines, with mesh and raytracing left to P5.14 and P5.16. Phase 5's own note says this count is
+the single most important piece of state, so it leads this section.
 
-**All five groups `RenderSystem::Initialize` needs are now written.** That call is straight-line
-with no early exit, so it was the five together or nothing. It has still never executed.
+**Both Phase 4 decisions are now implemented, each in exactly one place.** Clip-space Y is
+inverted in `CmdSetViewport` with a negative viewport height, and nowhere else. Heap set 1 is
+bound in `CmdSetPipeline`, not in `BeginCommandBuffer`. Neither has been executed.
 
 **The bindless heap now exists in code.** `CreateContext` builds set 1 exactly as the Phase 4
 binding model specifies, and `GetBufferHandle` returns an index into it. **One correction to that
@@ -77,7 +78,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5 and P5.7 written, never run**; 65 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 65 are markers rather than RHI functions: the `VulkanFormat` default, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **5 of the 16 groups are real, all unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5, P5.7 and P5.8 written, never run**; 52 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 52 are markers rather than RHI functions: the `VulkanFormat` default, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **6 of the 16 groups are real, all unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -90,20 +91,24 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.7-pipelines`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.8-draw-commands`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
-`p5.5-buffers` (#28), then this. None merged yet. Nothing has run any of it.
+`p5.5-buffers` (#28), `p5.7-pipelines` (#30), then this. None merged yet. Nothing has run any of
+it.
 
-**Next: P5.8, render pass and draw commands**, or P5.6, textures and samplers. P5.8 is where the
-two open Phase 4 decisions land in code: the clip-space Y inversion goes in `CmdSetViewport`, once
-and only once, and `CmdSetPipeline` is where `vkCmdBindDescriptorSets` binds heap set 1. P5.6 is
-larger and mostly mechanical, and it owes the rest of `VulkanFormat`.
+**Next: P5.6, textures and samplers.** It is the largest remaining group and it blocks a lot: the
+rest of `VulkanFormat`, the three `DeviceCapabilities` format arrays, and the per-subresource
+image views that `CmdSetRenderTargets` currently asserts against. P5.9, barriers, is the other
+candidate and is smaller.
 
-**The five groups `RenderSystem::Initialize` needs are all written.** That was the milestone worth
-naming, because the call is straight-line with no early exit: `CreateContext`, three
-`CreateQueue`, `CreateBuffer`, `InitializeShaders`, then `CreateCommandPool` and
-`CreateCommandBuffer` in loops. Whether they work is a separate question, and nothing can answer
-it before Phase 6.
+**P5.8 left three things for other groups to finish**, each asserted or commented at the line
+rather than silently skipped:
+
+| Owed by | What |
+|---|---|
+| P5.6 | Per-subresource image views. `CmdSetRenderTargets` asserts that `colorArraySlices`, `colorMipSlices`, `depthArraySlice` and `depthMipSlice` are all zero or empty, rather than quietly rendering to mip 0 of slice 0. It also extends the placeholder `VulkanTexture`. |
+| P5.9 | Every barrier must call `EndRenderingIfActive` first. A barrier inside dynamic rendering is invalid. |
+| P5.10 | Same, for every copy and clear. |
 
 **Owed by later groups, recorded so they are not forgotten:**
 
@@ -138,6 +143,88 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-28 - P5.8 Render pass and draw commands. Both Phase 4 decisions land
+
+**All thirteen functions are implemented.** 52 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 65.
+Nothing has run.
+
+**This is where both Phase 4 decisions become code**, and each is in exactly one place:
+
+- **Clip-space Y is inverted in `CmdSetViewport`**, by moving the origin to the bottom of the
+  rectangle and making the height negative. The shader compiler does not invert, and
+  `-fvk-invert-y` must never be added. The comment at that line says so and names the other half
+  of the decision, so that nobody adds a second flip.
+- **Heap set 1 is bound in `CmdSetPipeline`**, not in `BeginCommandBuffer` where Direct3D 12 calls
+  `SetDescriptorHeaps` (`:2917`). Vulkan cannot do it once per command buffer: binding a pipeline
+  whose layout differs from set N onwards disturbs every set from N up, and set 0 varies per
+  shader. The binding model accepted the redundant rebind deliberately.
+
+#### Three places where Vulkan needs something Direct3D 12 does not
+
+**Dynamic rendering has a begin and an end; `OMSetRenderTargets` has neither.** So
+`VulkanCommandBuffer` carries an `m_isRendering` flag, `CmdSetRenderTargets` closes the previous
+pass before opening the next, and `EndCommandBuffer` closes the last one. **Anything that may not
+run inside a render pass has to close it too**: `CmdDispatchCompute` does, and P5.9's barriers and
+P5.10's copies will have to. `EndRenderingIfActive` is the one call, and the requirement is
+written into the "in flight" table above so it is not discovered by a validation error.
+
+**Clears become load ops.** Direct3D 12 binds targets and then clears with a separate
+`ClearRenderTargetView`; here `LoadActionType::Clear` is `VK_ATTACHMENT_LOAD_OP_CLEAR` on the
+attachment. That is what the phase document's mapping asks for and what a tiling GPU needs.
+`StoreActionType::None` maps to `VK_ATTACHMENT_STORE_OP_NONE`, core in 1.3.
+
+**Dynamic rendering needs a render area and Direct3D 12 has none.** The full extent of the
+attachments is used, which is the same thing, and the viewport still restricts what is drawn.
+
+#### Root constants are a ring buffer, as the binding model said they would be
+
+`RHI.esh` declares the block through `EE_DECLARE_ROOT_CONSTANTS` as a `ConstantBuffer`, so DXC
+emits a uniform buffer and Vulkan push constants are not available without `[[vk::push_constant]]`
+in `RHI.esh`, which Phase 4 rule 4 forbids. So `CmdSetRootConstants` copies into a ring and pushes
+a descriptor at the copy.
+
+**One ring per command buffer, 64 KB, reset in `BeginCommandBuffer`.** That is safe without any
+frame tracking, because Vulkan already requires a command buffer's previous submission to have
+completed before it can be re-recorded. **The ring asserts rather than wraps**: wrapping would
+overwrite constants the GPU is still reading, and the failure would look like a shader reading
+wrong values, which is a miserable thing to chase. 64 KB against a handful of `uint32`s per set is
+generous by a wide margin.
+
+`CmdSetRootParameter` is the same push with the caller's buffer and offset and `VK_WHOLE_SIZE` for
+the range, which is what a Direct3D 12 root descriptor is: an address with no size. The binding
+model says so explicitly.
+
+Both use `m_shaderResources[index].m_registerIndex`, which P5.7 recorded as holding the **Vulkan
+binding** rather than the HLSL register. That is why no shift is applied here.
+
+#### A file reorganisation, because the declaration order forced it
+
+`RHI.h` declares the draw commands before the buffers, textures and pipelines they act on, so a
+`VulkanBuffer` defined next to `CreateBuffer` comes too late for `CmdSetRootConstants`. Every
+`VulkanXxx` type now sits in one "Resource types" block near the top. **The functions keep
+`RHI.h`'s section order**, which is what Conventions rule and the phase document ask for; only the
+type definitions moved.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets compile and link. `ninja` exits 0, `Checks.py` passes.
+- 81 `vk*` symbols resolve against `libvulkan.so.1`, up from 70.
+- Every one of the thirteen functions plus `CmdSetShadingRate` is present exactly once. That was
+  checked by name, because the splice that replaced the stubs spanned `CmdSetShadingRate`, which
+  belongs to P5.15 and had to be put back.
+
+#### Not verified
+
+No viewport set, no pass begun, no descriptor pushed. The two decisions this group implements are
+the ones Phase 4 spent the most effort on, and neither has run. The order to check them in:
+
+1. **The Y flip and the front face together.** Getting both wrong looks correct. Render something
+   with a known handedness before trusting either.
+2. That a push descriptor lands on set 0 while set 1 stays bound across a pipeline change.
+3. That the root constant ring holds a value long enough for the GPU to read it.
+
+**Upstream files edited: none.**
 
 ### 2026-08-28 - P5.7 Shaders, root signatures and pipelines. Written, never run
 

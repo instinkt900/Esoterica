@@ -98,6 +98,7 @@ namespace EE::Render::RHI
     static constexpr uint32_t g_resourceHeapSize = 64 * 1023;
     static constexpr uint32_t g_samplerHeapSize = 2048;
 
+    static constexpr uint32_t g_rootParameterSet = 0;
     static constexpr uint32_t g_heapSet = 1;
     static constexpr uint32_t g_resourceHeapBinding = 0;
     static constexpr uint32_t g_samplerHeapBinding = 1;
@@ -146,6 +147,11 @@ namespace EE::Render::RHI
     // Defined in the queues section below, next to the first caller that needed it.
     struct VulkanContext;
     static void SetVulkanObjectName( VulkanContext* pVulkanContext, VkObjectType objectType, uint64_t objectHandle, StringView debugName );
+
+    // Defined in the draw commands section. EndCommandBuffer has to close any open dynamic
+    // rendering, and it is defined before that section.
+    struct VulkanCommandBuffer;
+    static void EndRenderingIfActive( VulkanCommandBuffer* pVulkanCommandBuffer );
 
     //-------------------------------------------------------------------------
 
@@ -235,6 +241,9 @@ namespace EE::Render::RHI
         // VK_EXT_debug_utils is an extension, so its entry points are not exported by the
         // loader and have to be looked up. Null when the extension is not present.
         PFN_vkSetDebugUtilsObjectNameEXT                                m_vkSetDebugUtilsObjectName = nullptr;
+        // Core in Vulkan 1.4 as vkCmdPushDescriptorSet, but the baseline here is 1.3, so it is
+        // the KHR entry point and has to be looked up.
+        PFN_vkCmdPushDescriptorSetKHR                                   m_vkCmdPushDescriptorSet = nullptr;
 
         void*                                                           m_pRenderDocLibrary = nullptr;
         RENDERDOC_API_1_0_0*                                            m_pRenderDocAPI = nullptr;
@@ -835,6 +844,8 @@ namespace EE::Render::RHI
         // Resolved here rather than later, because everything created from this point on names
         // itself and SetVulkanObjectName reads it.
         pVulkanContext->m_vkSetDebugUtilsObjectName = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkSetDebugUtilsObjectNameEXT" ) );
+        pVulkanContext->m_vkCmdPushDescriptorSet = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdPushDescriptorSetKHR" ) );
+        EE_ASSERT( pVulkanContext->m_vkCmdPushDescriptorSet != nullptr );
 
         // VMA
         //-------------------------------------------------------------------------
@@ -1226,7 +1237,118 @@ namespace EE::Render::RHI
         VkDevice                                            m_device = VK_NULL_HANDLE;
         VkCommandBuffer                                     m_commandBuffer = VK_NULL_HANDLE;
         Stage                                               m_stage = Stage::Invalid;
+
+        // Direct3D 12 has no begin and end around a set of render targets; Vulkan's dynamic
+        // rendering does. CmdSetRenderTargets ends the previous one before beginning the next,
+        // and EndCommandBuffer ends the last. Anything that may not run inside a render pass -
+        // a dispatch, a copy, a barrier - has to end it too.
+        bool                                                m_isRendering = false;
+
+        // The pipeline layout of the currently bound pipeline. Push descriptors need it, and
+        // CommandBuffer::m_pBoundPipeline only carries the platform-neutral pointer.
+        VkPipelineLayout                                    m_boundPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineBindPoint                                 m_boundBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+
+        // Root constants are not Vulkan push constants; see CmdSetRootConstants. Each set of
+        // them is copied into this ring and a descriptor is pushed at the copy. One ring per
+        // command buffer, reset in BeginCommandBuffer, which is safe because Vulkan already
+        // requires the previous submission of a command buffer to have completed before it can
+        // be re-recorded.
+        Buffer*                                             m_pRootConstantRing = nullptr;
+        uint64_t                                            m_rootConstantRingOffset = 0;
+
+        // CmdSetRootConstants and CmdSetRootParameter take no Context, so the entry point comes
+        // along on the command buffer.
+        PFN_vkCmdPushDescriptorSetKHR                       m_vkCmdPushDescriptorSet = nullptr;
     };
+
+    //-------------------------------------------------------------------------
+    // Resource types
+    //-------------------------------------------------------------------------
+    // All in one place, because RHI.h declares the draw commands before the buffers, textures
+    // and pipelines they act on, so a definition next to its own functions would come too late.
+    // The functions stay in RHI.h's section order; only the types are gathered.
+
+    struct VulkanCommandPool final : CommandPool
+    {
+        VkCommandPool                                       m_commandPool = VK_NULL_HANDLE;
+    };
+
+    struct VulkanBuffer final : Buffer
+    {
+        VkBuffer                                            m_buffer = VK_NULL_HANDLE;
+        VmaAllocation                                       m_allocation = VK_NULL_HANDLE;
+        uint64_t                                            m_allocationSize = 0;
+
+        // Typed buffers, Buffer<T> and RWBuffer<T>, are texel buffers in Vulkan and a texel
+        // buffer descriptor takes a view rather than a range. Null for structured and raw
+        // buffers, which take the buffer directly.
+        VkBufferView                                        m_uniformTexelBufferView = VK_NULL_HANDLE;
+        VkBufferView                                        m_storageTexelBufferView = VK_NULL_HANDLE;
+
+        // BufferFlags::SubAllocations. The Direct3D 12 backend uses a D3D12MA virtual block for
+        // exactly this, and VMA has the same thing.
+        VmaVirtualBlock                                     m_virtualBlock = VK_NULL_HANDLE;
+
+        // A contiguous run in the resource heap, laid out the way Direct3D 12 lays it out:
+        // constant buffer first if present, then the read view, then the read-write view.
+        HandleAllocator<GenericResourceHandle>::Handle      m_descriptorHandles = {};
+        int8_t                                              m_srvDescriptorOffset = -1;
+        int8_t                                              m_uavDescriptorOffset = -1;
+
+        ReadRange                                           m_mappedRange = {};
+    };
+
+    struct VulkanTexture final : Texture
+    {
+        VkImage                                             m_image = VK_NULL_HANDLE;
+        VkImageView                                         m_imageView = VK_NULL_HANDLE;
+        VkFormat                                            m_format = VK_FORMAT_UNDEFINED;
+        VkExtent3D                                          m_extent = {};
+    };
+
+    struct VulkanShader final : Shader
+    {
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+        TInlineVector<VkShaderModule, 2>                    m_shaderModules;
+    };
+
+    struct VulkanRootSignature final : RootSignature
+    {
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+        VkPipelineLayout                                    m_pipelineLayout = VK_NULL_HANDLE;
+
+        // Set 0 of the binding model: per-pipeline, derived from reflection, and created with
+        // PUSH_DESCRIPTOR_BIT so CmdSetRootParameter is a push rather than a set allocation.
+        VkDescriptorSetLayout                               m_rootParameterSetLayout = VK_NULL_HANDLE;
+
+        // Copied from the context so CmdSetPipeline, which takes no Context, can bind it.
+        VkDescriptorSet                                     m_heapDescriptorSet = VK_NULL_HANDLE;
+    };
+
+    struct VulkanPipeline final : Pipeline
+    {
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+        VkPipeline                                          m_pipeline = VK_NULL_HANDLE;
+        VkPipelineBindPoint                                 m_bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        VkPrimitiveTopology                                 m_primitiveTopology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    };
+
+    struct VulkanPipelineCache final : PipelineCache
+    {
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+        VkPipelineCache                                     m_pipelineCache = VK_NULL_HANDLE;
+
+        // GetPipelineCacheData hands back a view, so the bytes have to outlive the call.
+        TVector<uint8_t>                                    m_cacheData{ Memory::Allocators::g_RHI };
+    };
+
+    // Enough for every root constant set in one command buffer. Root constants are a handful of
+    // uint32s each, and RHI.esh declares one block per shader, so this is generous by a wide
+    // margin. It is asserted rather than wrapped: silently wrapping would overwrite constants
+    // the GPU is still reading, and the failure would look like a shader bug.
+    static constexpr uint64_t g_rootConstantRingSize = 64 * 1024;
+    static constexpr uint64_t g_rootConstantAlignment = 256;
 
     //-------------------------------------------------------------------------
 
@@ -1469,10 +1591,6 @@ namespace EE::Render::RHI
     // Command pools and buffers
     //-------------------------------------------------------------------------
 
-    struct VulkanCommandPool final : CommandPool
-    {
-        VkCommandPool                                       m_commandPool = VK_NULL_HANDLE;
-    };
 
     //-------------------------------------------------------------------------
 
@@ -1549,6 +1667,7 @@ namespace EE::Render::RHI
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanCommandBuffer->m_device = pVulkanContext->m_device;
+        pVulkanCommandBuffer->m_vkCmdPushDescriptorSet = pVulkanContext->m_vkCmdPushDescriptorSet;
         pVulkanCommandBuffer->m_pQueue = parameters.m_pCommandPool->m_pQueue;
         pVulkanCommandBuffer->m_pCommandPool = parameters.m_pCommandPool;
         pVulkanCommandBuffer->m_nodeIndex = parameters.m_pCommandPool->m_pQueue->m_nodeIndex;
@@ -1557,6 +1676,17 @@ namespace EE::Render::RHI
         // match every other API. Vulkan already starts in the initial state, so there is
         // nothing to undo here.
         pVulkanCommandBuffer->m_stage = VulkanCommandBuffer::Stage::Closed;
+
+        // The root constant ring. Written by the CPU, read by the GPU, never given a descriptor
+        // of its own: CmdSetRootConstants pushes a descriptor at an offset into it.
+        BufferParameters ringParameters = {};
+        ringParameters.m_bufferSize = g_rootConstantRingSize;
+        ringParameters.m_memoryType = ResourceMemoryType::HostToDevice;
+        ringParameters.m_flags.SetMultipleFlags( BufferFlags::NoDescriptors, BufferFlags::PersistentMap );
+        ringParameters.m_descriptorTypes = DescriptorTypeFlags::ConstantBuffer;
+        ringParameters.m_debugName.sprintf( "%s RootConstants", parameters.m_debugName.c_str() );
+
+        pVulkanCommandBuffer->m_pRootConstantRing = CreateBuffer( pContext, ringParameters );
 
         SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_COMMAND_BUFFER, uint64_t( pVulkanCommandBuffer->m_commandBuffer ), parameters.m_debugName );
 
@@ -1575,6 +1705,8 @@ namespace EE::Render::RHI
             {
                 vkFreeCommandBuffers( pVulkanContext->m_device, pVulkanCommandPool->m_commandPool, 1, &pVulkanCommandBuffer->m_commandBuffer );
             }
+
+            DestroyBuffer( pContext, eastl::move( pVulkanCommandBuffer->m_pRootConstantRing ) );
 
             pVulkanContext->DestroyObject( eastl::move( pVulkanCommandBuffer ) );
             pCommandBuffer = nullptr;
@@ -1604,6 +1736,9 @@ namespace EE::Render::RHI
         // different set 0 layout is bound. See the binding model entry in Docs/Linux/Progress.md.
         pVulkanCommandBuffer->m_pBoundRootSignature = nullptr;
         pVulkanCommandBuffer->m_pBoundPipeline = nullptr;
+        pVulkanCommandBuffer->m_boundPipelineLayout = VK_NULL_HANDLE;
+        pVulkanCommandBuffer->m_isRendering = false;
+        pVulkanCommandBuffer->m_rootConstantRingOffset = 0;
     }
 
     void EndCommandBuffer( CommandBuffer* pCommandBuffer )
@@ -1611,6 +1746,9 @@ namespace EE::Render::RHI
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
         EE_ASSERT( pVulkanCommandBuffer->m_stage == VulkanCommandBuffer::Stage::Recording );
+
+        // Dynamic rendering has to be closed before the command buffer is.
+        EndRenderingIfActive( pVulkanCommandBuffer );
 
         // Direct3D 12 flushes pending barriers here. P5.9 decides whether the Vulkan side
         // batches barriers the same way; if it does, the flush belongs at this line.
@@ -1620,98 +1758,382 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_stage = VulkanCommandBuffer::Stage::Closed;
     }
 
+    //-------------------------------------------------------------------------
+    // Render pass and draw commands
+    //-------------------------------------------------------------------------
+
+    // P5.6 owns textures and will extend this. CmdSetRenderTargets needs the view, the extent
+    // and the format out of one, so the type has to exist now.
+
+    //-------------------------------------------------------------------------
+
+    static void EndRenderingIfActive( VulkanCommandBuffer* pVulkanCommandBuffer )
+    {
+        if ( pVulkanCommandBuffer->m_isRendering )
+        {
+            vkCmdEndRendering( pVulkanCommandBuffer->m_commandBuffer );
+            pVulkanCommandBuffer->m_isRendering = false;
+        }
+    }
+
+    static VkAttachmentLoadOp VulkanLoadOp( LoadActionType action )
+    {
+        switch ( action )
+        {
+            case LoadActionType::Load:      return VK_ATTACHMENT_LOAD_OP_LOAD;
+            case LoadActionType::Clear:     return VK_ATTACHMENT_LOAD_OP_CLEAR;
+            case LoadActionType::DontCare:  return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_ATTACHMENT_LOAD_OP_LOAD;
+    }
+
+    static VkAttachmentStoreOp VulkanStoreOp( StoreActionType action )
+    {
+        switch ( action )
+        {
+            case StoreActionType::Store:    return VK_ATTACHMENT_STORE_OP_STORE;
+            case StoreActionType::DontCare: return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            // "None" means the attachment is untouched. VK_ATTACHMENT_STORE_OP_NONE says
+            // exactly that and is core in 1.3.
+            case StoreActionType::None:     return VK_ATTACHMENT_STORE_OP_NONE;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_ATTACHMENT_STORE_OP_STORE;
+    }
+
     void CmdSetRenderTargets( CommandBuffer* pCommandBuffer, TArrayView<Texture* const> renderTargets, Texture* pDepthStencil, LoadAction* pLoadAction, TArrayView<uint32_t const> colorArraySlices, TArrayView<uint32_t const> colorMipSlices, uint32_t depthArraySlice, uint32_t depthMipSlice )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        // Direct3D 12's OMSetRenderTargets simply replaces what is bound. Dynamic rendering has
+        // a begin and an end, so the previous one is closed here.
+        EndRenderingIfActive( pVulkanCommandBuffer );
+
+        if ( renderTargets.empty() && pDepthStencil == nullptr )
+        {
+            return;
+        }
+
+        // Load and store actions are what dynamic rendering is for. Direct3D 12 has no such
+        // concept and clears with a separate ClearRenderTargetView call after binding; here the
+        // clear is the load op, which is what the phase document's mapping asks for and what a
+        // tiler needs.
+        TInlineVector<VkRenderingAttachmentInfo, MaxRenderTargets> colorAttachments;
+        VkExtent2D renderArea = {};
+
+        for ( size_t renderTargetIndex = 0; renderTargetIndex < renderTargets.size(); ++renderTargetIndex )
+        {
+            VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( renderTargets[renderTargetIndex] );
+
+            VkRenderingAttachmentInfo attachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            attachment.imageView = pVulkanTexture->m_imageView;
+            attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+            if ( pLoadAction != nullptr )
+            {
+                attachment.loadOp = VulkanLoadOp( pLoadAction->m_loadActionsColor[renderTargetIndex] );
+                attachment.storeOp = VulkanStoreOp( pLoadAction->m_storeActionsColor[renderTargetIndex] );
+
+                ClearValue const& clearValue = pLoadAction->m_colorClearValues[renderTargetIndex];
+                attachment.clearValue.color.float32[0] = clearValue.m_red;
+                attachment.clearValue.color.float32[1] = clearValue.m_green;
+                attachment.clearValue.color.float32[2] = clearValue.m_blue;
+                attachment.clearValue.color.float32[3] = clearValue.m_alpha;
+            }
+
+            colorAttachments.push_back( attachment );
+
+            renderArea.width = Math::Max( renderArea.width, pVulkanTexture->m_extent.width );
+            renderArea.height = Math::Max( renderArea.height, pVulkanTexture->m_extent.height );
+        }
+
+        VkRenderingAttachmentInfo depthAttachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        VkRenderingAttachmentInfo stencilAttachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        bool hasDepth = false;
+        bool hasStencil = false;
+
+        if ( pDepthStencil != nullptr )
+        {
+            VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( pDepthStencil );
+
+            hasDepth = pVulkanTexture->m_format != VK_FORMAT_S8_UINT;
+            hasStencil = ( pVulkanTexture->m_format == VK_FORMAT_S8_UINT ) ||
+                         ( pVulkanTexture->m_format == VK_FORMAT_D16_UNORM_S8_UINT ) ||
+                         ( pVulkanTexture->m_format == VK_FORMAT_D24_UNORM_S8_UINT ) ||
+                         ( pVulkanTexture->m_format == VK_FORMAT_D32_SFLOAT_S8_UINT );
+
+            depthAttachment.imageView = pVulkanTexture->m_imageView;
+            depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+            stencilAttachment = depthAttachment;
+
+            if ( pLoadAction != nullptr )
+            {
+                depthAttachment.loadOp = VulkanLoadOp( pLoadAction->m_loadActionDepth );
+                depthAttachment.storeOp = VulkanStoreOp( pLoadAction->m_storeActionsDepth );
+                depthAttachment.clearValue.depthStencil.depth = pLoadAction->m_depthClearValue.m_depth;
+
+                stencilAttachment.loadOp = VulkanLoadOp( pLoadAction->m_loadActionStencil );
+                stencilAttachment.storeOp = VulkanStoreOp( pLoadAction->m_storeActionStencil );
+                stencilAttachment.clearValue.depthStencil.stencil = pLoadAction->m_depthClearValue.m_stencil;
+            }
+
+            renderArea.width = Math::Max( renderArea.width, pVulkanTexture->m_extent.width );
+            renderArea.height = Math::Max( renderArea.height, pVulkanTexture->m_extent.height );
+        }
+
+        VkRenderingInfo renderingInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
+        // Direct3D 12 has no render area; it draws wherever the viewport and scissor allow. The
+        // full extent of the attachments is the same thing, and the viewport still restricts it.
+        renderingInfo.renderArea.extent = renderArea;
+        renderingInfo.layerCount = 1;
+        renderingInfo.colorAttachmentCount = uint32_t( colorAttachments.size() );
+        renderingInfo.pColorAttachments = colorAttachments.data();
+        renderingInfo.pDepthAttachment = hasDepth ? &depthAttachment : nullptr;
+        renderingInfo.pStencilAttachment = hasStencil ? &stencilAttachment : nullptr;
+
+        vkCmdBeginRendering( pVulkanCommandBuffer->m_commandBuffer, &renderingInfo );
+        pVulkanCommandBuffer->m_isRendering = true;
+
+        // colorArraySlices, colorMipSlices, depthArraySlice and depthMipSlice select a subresource
+        // of the target. Direct3D 12 does it by picking a different render target view; Vulkan
+        // does it with a different VkImageView. P5.6 creates per-subresource views on the
+        // texture, so this is left asserting rather than silently rendering to mip 0 of slice 0.
+        EE_ASSERT( colorArraySlices.empty() && colorMipSlices.empty() );
+        EE_ASSERT( depthArraySlice == 0 && depthMipSlice == 0 );
     }
 
     void CmdSetShadingRate( CommandBuffer* pCommandBuffer, ShadingRate shadingRate, Texture* pShadingRateTexture, ShadingRateCombiner postRasterizerCombiner, ShadingRateCombiner finalCombiner )
     {
+        // P5.15. It needs VK_KHR_fragment_shading_rate at device creation, and
+        // FillDeviceCapabilities has to stop reporting ShadingRate::NotSupported before the
+        // engine will ever call this.
         EE_UNIMPLEMENTED_FUNCTION();
     }
 
-    // Clip-space Y is inverted HERE, and nowhere else. This is Phase 4's criterion 9 decision;
-    // the full reasoning is in Docs/Linux/Progress.md.
-    //
-    // The engine builds its projection matrices with DirectXMath's right-handed conventions
-    // (Math::CreatePerspectiveProjectionMatrix, "Taken from DirectXMath: XMMatrixPerspectiveFovRH"),
-    // so NDC is Y-up with a 0..1 depth range. Vulkan shares the depth range and disagrees on Y.
-    //
-    //     vkViewport.x        = x;
-    //     vkViewport.y        = y + height;   // flip
-    //     vkViewport.width    = width;
-    //     vkViewport.height   = -height;      // flip
-    //     vkViewport.minDepth = minDepth;
-    //     vkViewport.maxDepth = maxDepth;
-    //
-    // The shader compiler does NOT flip: the Reflector deliberately does not pass -fvk-invert-y.
-    // Do not add it, and do not flip the projection matrices. Doing this twice is the classic
-    // porting bug, and the second flip is silent.
-    //
-    // A negative viewport height needs no extension; it is core Vulkan since 1.1 and the baseline
-    // here is 1.3.
-    //
-    // CONSEQUENCE FOR CreatePipeline: mirroring the viewport inverts triangle winding in
-    // framebuffer space, so the front-face mapping has to absorb it. See the note there.
     void CmdSetViewport( CommandBuffer* pCommandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        // **This is where clip-space Y is inverted, and it happens exactly once.**
+        //
+        // Phase 4 decided it: the Vulkan viewport flips Y with a negative height, the shader
+        // compiler does not, and -fvk-invert-y must never be added. See the clip-space Y entry
+        // in Docs/Linux/Progress.md. Direct3D's clip space has +Y up and Vulkan's has +Y down,
+        // so without this everything renders upside down.
+        //
+        // The origin moves to the bottom of the rectangle and the height goes negative, which
+        // is the standard formulation and is what VK_KHR_maintenance1 made legal.
+        //
+        // Do not add a second flip anywhere. The other half of this decision is the front face
+        // in CreatePipeline, which accounts for the winding this reverses.
+        VkViewport viewport = {};
+        viewport.x = x;
+        viewport.y = y + height;
+        viewport.width = width;
+        viewport.height = -height;
+        viewport.minDepth = minDepth;
+        viewport.maxDepth = maxDepth;
+
+        vkCmdSetViewport( pVulkanCommandBuffer->m_commandBuffer, 0, 1, &viewport );
     }
 
     void CmdSetScissor( CommandBuffer* pCommandBuffer, uint32_t x, uint32_t y, uint32_t width, uint32_t height )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        // The scissor is in framebuffer coordinates and is not affected by the viewport flip.
+        VkRect2D scissor = {};
+        scissor.offset.x = int32_t( x );
+        scissor.offset.y = int32_t( y );
+        scissor.extent.width = width;
+        scissor.extent.height = height;
+
+        vkCmdSetScissor( pVulkanCommandBuffer->m_commandBuffer, 0, 1, &scissor );
     }
 
     void CmdSetStencilReference( CommandBuffer* pCommandBuffer, uint32_t value )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        vkCmdSetStencilReference( pVulkanCommandBuffer->m_commandBuffer, VK_STENCIL_FACE_FRONT_AND_BACK, value );
     }
 
     void CmdSetPipeline( CommandBuffer* pCommandBuffer, Pipeline* pPipeline )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanPipeline* pVulkanPipeline = static_cast<VulkanPipeline*>( pPipeline );
+        VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanPipeline->m_pRootSignature );
+
+        vkCmdBindPipeline( pVulkanCommandBuffer->m_commandBuffer, pVulkanPipeline->m_bindPoint, pVulkanPipeline->m_pipeline );
+
+        pVulkanCommandBuffer->m_pBoundPipeline = pVulkanPipeline;
+        pVulkanCommandBuffer->m_pBoundRootSignature = pVulkanRootSignature;
+        pVulkanCommandBuffer->m_boundPipelineLayout = pVulkanRootSignature->m_pipelineLayout;
+        pVulkanCommandBuffer->m_boundBindPoint = pVulkanPipeline->m_bindPoint;
+
+        // **Heap set 1 is bound here, not in BeginCommandBuffer.**
+        //
+        // Direct3D 12 calls SetDescriptorHeaps once per command buffer, at :2917. Vulkan cannot
+        // do that: binding a pipeline whose layout differs from set N onwards disturbs every set
+        // from N up, set 0 varies per shader, so set 1 is disturbed on every pipeline-layout
+        // change. The binding model chose this spot deliberately and accepted the redundant
+        // rebind; one vkCmdBindDescriptorSets per pipeline change is a rounding error next to
+        // the alternative, which was a shader-compiler flag list tracking every register
+        // upstream ever writes. See the binding model entry in Docs/Linux/Progress.md.
+        vkCmdBindDescriptorSets( pVulkanCommandBuffer->m_commandBuffer, pVulkanPipeline->m_bindPoint, pVulkanRootSignature->m_pipelineLayout,
+                                 g_heapSet, 1, &pVulkanRootSignature->m_heapDescriptorSet, 0, nullptr );
     }
 
     void CmdSetRootConstants( CommandBuffer* pCommandBuffer, uint32_t constantIndex, void const* pConstantData, size_t constantSize )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanCommandBuffer->m_pBoundRootSignature );
+
+        DescriptorReflection const& descriptorReflection = pVulkanRootSignature->m_descriptorReflections[constantIndex];
+        EE_ASSERT( descriptorReflection.m_descriptorTypeFlags == TBitFlags( DescriptorTypeFlags::RootConstant ) );
+        EE_ASSERT( constantSize == sizeof( uint32_t ) * descriptorReflection.m_numConstants );
+
+        if ( pConstantData == nullptr )
+        {
+            return;
+        }
+
+        // **Not Vulkan push constants, and this is the reason.**
+        //
+        // RHI.esh declares the block through EE_DECLARE_ROOT_CONSTANTS as
+        // "ConstantBuffer<T> RootConstants : register( b0 )", so DXC emits a uniform buffer.
+        // Turning it into a push constant block needs [[vk::push_constant]] in RHI.esh, which
+        // Phase 4 rule 4 forbids. So the constants are copied into a per-command-buffer ring and
+        // a descriptor is pushed at the copy, which is what the binding model recorded.
+        VulkanBuffer* pRing = static_cast<VulkanBuffer*>( pVulkanCommandBuffer->m_pRootConstantRing );
+        EE_ASSERT( pRing != nullptr && pRing->m_pMappedAddress_WriteCombined != nullptr );
+
+        uint64_t const offset = pVulkanCommandBuffer->m_rootConstantRingOffset;
+        // Asserted rather than wrapped. Wrapping would overwrite constants the GPU is still
+        // reading and surface as a shader reading the wrong values, which is a miserable thing
+        // to chase.
+        EE_ASSERT( offset + constantSize <= g_rootConstantRingSize );
+
+        memcpy( static_cast<uint8_t*>( pRing->m_pMappedAddress_WriteCombined ) + offset, pConstantData, constantSize );
+        pVulkanCommandBuffer->m_rootConstantRingOffset = Math::RoundUpToNearestMultiple64( offset + constantSize, g_rootConstantAlignment );
+
+        VkDescriptorBufferInfo bufferInfo = {};
+        bufferInfo.buffer = pRing->m_buffer;
+        bufferInfo.offset = offset;
+        bufferInfo.range = constantSize;
+
+        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstBinding = pVulkanRootSignature->m_shaderResources[constantIndex].m_registerIndex;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        write.pBufferInfo = &bufferInfo;
+
+        EE_ASSERT( pVulkanCommandBuffer->m_vkCmdPushDescriptorSet != nullptr );
+        pVulkanCommandBuffer->m_vkCmdPushDescriptorSet( pVulkanCommandBuffer->m_commandBuffer, pVulkanCommandBuffer->m_boundBindPoint,
+                                                        pVulkanCommandBuffer->m_boundPipelineLayout, g_rootParameterSet, 1, &write );
     }
 
     void CmdSetRootParameter( CommandBuffer* pCommandBuffer, uint32_t parameterIndex, Buffer* pBuffer, size_t bufferOffset )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanCommandBuffer->m_pBoundRootSignature );
+        VulkanBuffer* pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
+
+        DescriptorReflection const& descriptorReflection = pVulkanRootSignature->m_descriptorReflections[parameterIndex];
+        EE_ASSERT( bufferOffset < pVulkanBuffer->m_size );
+
+        VkDescriptorType descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        if ( descriptorReflection.m_descriptorTypeFlags.IsFlagSet( DescriptorTypeFlags::ConstantBuffer ) )
+        {
+            EE_ASSERT( pVulkanBuffer->m_descriptorTypes.IsFlagSet( DescriptorTypeFlags::ConstantBuffer ) );
+            descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        }
+        else if ( descriptorReflection.m_descriptorTypeFlags.IsFlagSet( DescriptorTypeFlags::Buffer ) )
+        {
+            EE_ASSERT( pVulkanBuffer->m_descriptorTypes.IsFlagSet( DescriptorTypeFlags::Buffer ) );
+        }
+        else if ( descriptorReflection.m_descriptorTypeFlags.IsFlagSet( DescriptorTypeFlags::RWBuffer ) )
+        {
+            EE_ASSERT( pVulkanBuffer->m_descriptorTypes.IsFlagSet( DescriptorTypeFlags::RWBuffer ) );
+        }
+        else
+        {
+            EE_UNREACHABLE_CODE();
+        }
+
+        VkDescriptorBufferInfo bufferInfo = {};
+        bufferInfo.buffer = pVulkanBuffer->m_buffer;
+        bufferInfo.offset = bufferOffset;
+        // VK_WHOLE_SIZE, because a Direct3D 12 root descriptor is an address with no size and
+        // this has to mean the same thing. The binding model says so explicitly.
+        bufferInfo.range = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstBinding = pVulkanRootSignature->m_shaderResources[parameterIndex].m_registerIndex;
+        write.descriptorCount = 1;
+        write.descriptorType = descriptorType;
+        write.pBufferInfo = &bufferInfo;
+
+        EE_ASSERT( pVulkanCommandBuffer->m_vkCmdPushDescriptorSet != nullptr );
+        pVulkanCommandBuffer->m_vkCmdPushDescriptorSet( pVulkanCommandBuffer->m_commandBuffer, pVulkanCommandBuffer->m_boundBindPoint,
+                                                        pVulkanCommandBuffer->m_boundPipelineLayout, g_rootParameterSet, 1, &write );
     }
 
     void CmdSetIndexBuffer( CommandBuffer* pCommandBuffer, Buffer const* pIndexBuffer, IndexType indexType, uint64_t offset )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanBuffer const* pVulkanBuffer = static_cast<VulkanBuffer const*>( pIndexBuffer );
+
+        VkIndexType const vulkanIndexType = ( indexType == IndexType::Uint16 ) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+
+        vkCmdBindIndexBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanBuffer->m_buffer, offset, vulkanIndexType );
     }
 
     void CmdDraw( CommandBuffer* pCommandBuffer, uint32_t numVertices, uint32_t firstVertex )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        vkCmdDraw( pVulkanCommandBuffer->m_commandBuffer, numVertices, 1, firstVertex, 0 );
     }
 
     void CmdDrawInstanced( CommandBuffer* pCommandBuffer, uint32_t numVertices, uint32_t numInstances, uint32_t firstVertex, uint32_t firstInstance )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        vkCmdDraw( pVulkanCommandBuffer->m_commandBuffer, numVertices, numInstances, firstVertex, firstInstance );
     }
 
     void CmdDrawIndexed( CommandBuffer* pCommandBuffer, uint32_t numIndices, uint32_t firstIndex )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        vkCmdDrawIndexed( pVulkanCommandBuffer->m_commandBuffer, numIndices, 1, firstIndex, 0, 0 );
     }
 
     void CmdDrawIndexedInstanced( CommandBuffer* pCommandBuffer, uint32_t numIndices, uint32_t numInstances, uint32_t firstIndex, uint32_t firstInstance )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        vkCmdDrawIndexed( pVulkanCommandBuffer->m_commandBuffer, numIndices, numInstances, firstIndex, 0, firstInstance );
     }
 
     void CmdDispatchCompute( CommandBuffer* pCommandBuffer, uint32_t numGroupsX, uint32_t numGroupsY, uint32_t numGroupsZ )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        // A dispatch may not run inside a render pass. Direct3D 12 has no such rule, so the
+        // engine does not close anything before dispatching. P5.9 and P5.10 need this same call
+        // before a barrier or a copy.
+        EndRenderingIfActive( pVulkanCommandBuffer );
+
+        EE_ASSERT( numGroupsX <= MaxDispatchSize && numGroupsY <= MaxDispatchSize && numGroupsZ <= MaxDispatchSize );
+
+        vkCmdDispatch( pVulkanCommandBuffer->m_commandBuffer, numGroupsX, numGroupsY, numGroupsZ );
     }
+
 
     void CmdDispatchMesh( CommandBuffer* pCommandBuffer, uint32_t numGroupsX, uint32_t numGroupsY, uint32_t numGroupsZ )
     {
@@ -1836,30 +2258,6 @@ namespace EE::Render::RHI
     // Buffers
     //-------------------------------------------------------------------------
 
-    struct VulkanBuffer final : Buffer
-    {
-        VkBuffer                                            m_buffer = VK_NULL_HANDLE;
-        VmaAllocation                                       m_allocation = VK_NULL_HANDLE;
-        uint64_t                                            m_allocationSize = 0;
-
-        // Typed buffers, Buffer<T> and RWBuffer<T>, are texel buffers in Vulkan and a texel
-        // buffer descriptor takes a view rather than a range. Null for structured and raw
-        // buffers, which take the buffer directly.
-        VkBufferView                                        m_uniformTexelBufferView = VK_NULL_HANDLE;
-        VkBufferView                                        m_storageTexelBufferView = VK_NULL_HANDLE;
-
-        // BufferFlags::SubAllocations. The Direct3D 12 backend uses a D3D12MA virtual block for
-        // exactly this, and VMA has the same thing.
-        VmaVirtualBlock                                     m_virtualBlock = VK_NULL_HANDLE;
-
-        // A contiguous run in the resource heap, laid out the way Direct3D 12 lays it out:
-        // constant buffer first if present, then the read view, then the read-write view.
-        HandleAllocator<GenericResourceHandle>::Handle      m_descriptorHandles = {};
-        int8_t                                              m_srvDescriptorOffset = -1;
-        int8_t                                              m_uavDescriptorOffset = -1;
-
-        ReadRange                                           m_mappedRange = {};
-    };
 
     //-------------------------------------------------------------------------
 
@@ -2413,38 +2811,9 @@ namespace EE::Render::RHI
     // Shaders, root signatures and pipelines
     //-------------------------------------------------------------------------
 
-    struct VulkanShader final : Shader
-    {
-        VkDevice                                            m_device = VK_NULL_HANDLE;
-        TInlineVector<VkShaderModule, 2>                    m_shaderModules;
-    };
 
-    struct VulkanRootSignature final : RootSignature
-    {
-        VkDevice                                            m_device = VK_NULL_HANDLE;
-        VkPipelineLayout                                    m_pipelineLayout = VK_NULL_HANDLE;
 
-        // Set 0 of the binding model: per-pipeline, derived from reflection, and created with
-        // PUSH_DESCRIPTOR_BIT so CmdSetRootParameter is a push rather than a set allocation.
-        VkDescriptorSetLayout                               m_rootParameterSetLayout = VK_NULL_HANDLE;
-    };
 
-    struct VulkanPipeline final : Pipeline
-    {
-        VkDevice                                            m_device = VK_NULL_HANDLE;
-        VkPipeline                                          m_pipeline = VK_NULL_HANDLE;
-        VkPipelineBindPoint                                 m_bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        VkPrimitiveTopology                                 m_primitiveTopology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    };
-
-    struct VulkanPipelineCache final : PipelineCache
-    {
-        VkDevice                                            m_device = VK_NULL_HANDLE;
-        VkPipelineCache                                     m_pipelineCache = VK_NULL_HANDLE;
-
-        // GetPipelineCacheData hands back a view, so the bytes have to outlive the call.
-        TVector<uint8_t>                                    m_cacheData{ Memory::Allocators::g_RHI };
-    };
 
     //-------------------------------------------------------------------------
     // State mapping
@@ -2809,6 +3178,7 @@ namespace EE::Render::RHI
         VulkanRootSignature* pVulkanRootSignature = pVulkanContext->CreateObject<VulkanRootSignature>();
 
         pVulkanRootSignature->m_device = pVulkanContext->m_device;
+        pVulkanRootSignature->m_heapDescriptorSet = pVulkanContext->m_heapDescriptorSet;
 
         // Merge the per-stage reflections into one resource list, first seen wins, exactly as
         // RHI_Direct3D12.cpp:4946 does. The order decides m_parameterIndex, which
