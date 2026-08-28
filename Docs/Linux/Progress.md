@@ -61,8 +61,10 @@ The next thing to settle is the counter-variable blocker described below. It sto
 and the obvious fix for it needs the P4.3 binding model decision first, which the phase document
 says to make jointly with Phase 5. That decision has **not** been made.
 
-Not yet started in this phase: P4.2 (SPIRV-Reflect), P4.4 (replacing `ID3D12ShaderReflection`),
-P4.5 (`CompileShaders.sh`), P4.6.
+**P4.4 is closed as not applicable and P4.2 is moved to Phase 5**, both recorded below. The plan
+called P4.4 the bulk of the phase, so what is actually left is smaller than the task list
+suggests: the five shaders, the two decisions, and P4.5 and P4.6. P4.5 and P4.6 both need the
+shader pass to exit 0 first, so the five shaders gate everything remaining.
 
 **Two Phase 4 decisions are still unmade, and both are acceptance criteria.** Criterion 8, the
 bindless binding model, described above. And criterion 9, clip-space Y: the DXC argument list in
@@ -618,6 +620,40 @@ the port. **Move to a fork if the patching becomes substantial.**
   compilers is the patches.
 - Both patches are worth sending upstream. Defect 1 already has an open issue with no owner.
 
+### 2026-08-28 - P4.4 has nothing to replace, and P4.2 belongs to Phase 5
+
+**Context:** P4.4 is written as the largest task in the phase: "replace `ID3D12ShaderReflection`
+with SPIRV-Reflect", "this is the real work", "the one place in the port where a new abstraction
+is the right call". It describes `ShaderReflection_ShaderCompiler.h` as exposing reflection
+results in D3D terms and `ShaderReflection_ShaderInputReflector.cpp` as consuming them.
+
+**None of that is true of this codebase.** Checked before starting the work:
+
+- Every use of `ID3D12ShaderReflection` in the repository is in `RHI_Direct3D12.cpp`, lines 1007
+  to 1096. That file is in `Exclusions.txt` and is Phase 5's business. The Reflector only
+  *includes* `d3d12shader.h`, and never calls anything from it. Phase 3 noticed the same thing
+  and left a comment saying so at `ShaderReflection_ShaderCompiler.h:10`.
+- `ShaderCompiler` exposes no reflection results at all. Its members are a task system, two
+  paths, a mutex and some strings.
+- `ReflectedShader` is entirely platform-neutral: strings, paths, byte vectors, and a
+  `ParameterInfo` of type, name, stride and offset.
+- `m_parameters` and `m_resourceTable` are filled by `ShaderReflection_ShaderParser.cpp`, which
+  **parses the `.esh` source text**. `ShaderInputReflector` reads only those and writes C++
+  structs. No reflection API is involved on either side.
+
+So the pipeline never reflects bytecode, and there is no D3D-shaped intermediate to replace. The
+platform-neutral structure P4.4 asks for already exists, and is called `ReflectedShader`.
+
+**P4.2 follows from this.** Nothing in Phase 4 would consume SPIRV-Reflect. The only code that
+reflects compiled shader bytecode is the Direct3D 12 backend, building root signature and
+descriptor information at runtime. Its Vulkan sibling is what needs SPIRV-Reflect, so the
+dependency belongs to **Phase 5**, not here. Vendoring it now would pin a library with no caller.
+
+**Decision:** P4.4 is closed as not applicable, and P4.2 is moved to Phase 5. Both are marked in
+[Phase4-ShaderPipeline.md](Phases/Phase4-ShaderPipeline.md). This removes what the plan called
+the bulk of the phase, so what is really left in Phase 4 is the five shaders, the two decisions,
+and P4.5 and P4.6.
+
 ### 2026-08-28 - Defect 2 stops here, because the fix needs the binding model decision
 
 **Context:** assigning a counter-bearing resource from a descriptor heap fails with "cannot
@@ -677,15 +713,55 @@ maybe ten minutes from this entry.
 
 1. Decide the binding model, then teach DXC to emit a counter heap. Largest, and it is the work
    Phase 5 needs anyway.
-2. Have DXC skip the association when the source is a heap access with no counter, instead of
-   erroring, and error at any later `.Append()` or `.IncrementCounter()` instead. Small, and it
-   matches what this engine does: it never calls those, and drives its own `m_counterBuffer`.
-   Needs care not to turn a compile error into silently wrong code.
+2. ~~Have DXC skip the association when the source is a heap access with no counter, instead of
+   erroring.~~ **Tried on 2026-08-28, and it is wrong. Do not repeat it.** See below.
 3. Restructure `AppendBuffer.esh` to keep the `RWStructuredBuffer` out of the struct. Forbidden by
    Phase 4 rule 4, changes Windows, and **fixes only three of the five** anyway, because the
    other two come out of the Reflector's code generator. Escalate before anyone tries it.
 
-Option 2 is the cheapest way to unblock all five without pre-empting the binding decision.
+**Why option 2 is struck, in detail.** Skipping the association compiles all five shaders and
+produces a module that **passes `spirv-val`** and is silently wrong. The counter resolves to
+`OpUndef`:
+
+```
+%21 = OpUndef %_ptr_StorageBuffer_type_ACSBuffer_counter
+%23 = OpAccessChain %_ptr_StorageBuffer_int %21 %uint_0
+%24 = OpAtomicIAdd %int %23 %uint_1 %uint_0 %int_1        <- atomic on an undefined pointer
+```
+
+Compare the initialization path, which is correct, and addresses the counter heap by the same
+index as the resource:
+
+```
+%22 = OpAccessChain %_ptr_StorageBuffer_int %counter_var_ResourceDescriptorHeap %uint_1 %uint_0
+```
+
+So "make assignment behave like initialization" is the wrong description of the fix.
+Initialization does not skip anything: it resolves the counter properly. A green `spirv-val` is
+not evidence here, which is worth remembering for the rest of this phase.
+
+**What a correct fix needs, and why it is not small.** Two halves:
+
+- *Source side.* `getFinalACSBufferCounter` must recognise the heap, using `isDescriptorHeap` and
+  before the `AssocCounter#1` early return, as described above. This half is written, correct,
+  and about fifteen lines.
+- *Destination side.* The destination must have a counter to store into. It does not: a local
+  `RWStructuredBuffer`, or a field of a local struct, gets no counter alias. With only the source
+  half applied, the mismatch check still fails. This half is the work.
+
+And for this engine the destination is the hard case. `AppendBuffer<T>` is a **struct containing a
+structured buffer**, which DXC calls out as unsupported in its own source, at
+`DeclResultIdMapper.cpp:1289`:
+
+> Any kind of structured buffer has associated counters. The current DXC code is not written in a
+> way to place associated counters inside a structure. Changing this behavior is non-trivial.
+> There's also significant work to be done both in DXC (to properly generate binding numbers for
+> the resource and its associated counters at correct offsets) and in spirv-opt (to flatten such
+> structures and modify the binding numbers accordingly).
+
+So unblocking these five shaders means implementing counters-inside-structures in DXC, alongside
+the binding model decision. That is a real project, not a patch, and it is the point at which
+[AGENTS.md](../../AGENTS.md) says to move the DXC work to a fork.
 
 ### 2026-08-28 - A Windows-only `.cpp` is excluded, never wrapped in `#ifdef _WIN32`
 

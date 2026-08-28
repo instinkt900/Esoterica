@@ -68,7 +68,17 @@ Reverse the Phase 2 P2.3 exclusion here. Re-enable the `ShaderReflection/` sourc
 the build generator, and remove whatever guard or define P2.3 added. [Progress.md](../Progress.md)
 records exactly what P2.3 did.
 
-### P4.2 - Get SPIRV-Reflect
+### P4.2 - Get SPIRV-Reflect - **moved to Phase 5**
+
+**Nothing in Phase 4 consumes SPIRV-Reflect.** The only code that reflects compiled shader
+bytecode is `RHI_Direct3D12.cpp:1007-1096`, building root signature and descriptor information at
+runtime. Its Vulkan sibling is what needs SPIRV-Reflect, so this is a Phase 5 dependency.
+Vendoring it here would pin a library with no caller. See the 2026-08-28 entry in
+[Progress.md](../Progress.md), and P4.4 below for how this was found.
+
+The task text is kept below, unchanged, for whoever does it in Phase 5.
+
+#### Original text
 
 Vendor it into `External/SPIRV-Reflect/`, not `Code/**/ThirdParty/`. See Conventions rule 5. It
 is one `.c` and `.h` pair, plus headers. Pin the version.
@@ -97,9 +107,28 @@ Vulkan-targeting flags. What matters:
 - **Shader stage mapping** for `RHI::ShaderStage`, including the mesh, amplification, and
   raytracing stages, because parity is the goal.
 
-### P4.4 - Replace `ID3D12ShaderReflection` with SPIRV-Reflect
+### P4.4 - Replace `ID3D12ShaderReflection` with SPIRV-Reflect - **not applicable**
 
-This is the real work. `ShaderReflection_ShaderCompiler.h` currently exposes reflection results
+**There is nothing to replace.** This task rests on a premise that is not true of this codebase,
+checked on 2026-08-28 before starting it:
+
+- Every use of `ID3D12ShaderReflection` is in `RHI_Direct3D12.cpp`, which is excluded from the
+  Linux build and belongs to Phase 5. The Reflector only *includes* `d3d12shader.h` and never
+  calls it, which `ShaderReflection_ShaderCompiler.h:10` already says.
+- `ShaderCompiler` exposes no reflection results. `ReflectedShader` is platform-neutral.
+- `m_parameters` and `m_resourceTable` are filled by `ShaderReflection_ShaderParser.cpp` parsing
+  the `.esh` **source text**, not by any reflection API.
+
+The platform-neutral structure this task asks for already exists, and is called
+`ReflectedShader`. No new abstraction is needed, and none should be added. See the 2026-08-28
+entry in [Progress.md](../Progress.md).
+
+The task text is kept below, unchanged, because the semantic mismatch table is still useful
+reference for the Phase 5 backend, which does reflect bytecode.
+
+#### Original text
+
+`ShaderReflection_ShaderCompiler.h` currently exposes reflection results
 in D3D terms, and `ShaderReflection_ShaderInputReflector.cpp` consumes them.
 
 The approach:
