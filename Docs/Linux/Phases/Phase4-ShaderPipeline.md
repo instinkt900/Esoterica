@@ -216,9 +216,13 @@ these up. That is P0.4.
    include-only, so `Base` generates nothing and its directory stays empty. See the P4.5 entry
    in [Progress.md](../Progress.md).
 3. All 26 `.esh` files compile to valid SPIR-V. Check with `spirv-val`. Every module passes.
-   **Compilation: done, 2026-08-28** - all 46 shader stages compile. **`spirv-val`: not met** -
-   the mesh shaders fail `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036`, which is pre-existing
-   and unrelated. See the P4.1 entry in [Progress.md](../Progress.md).
+   **Done, 2026-08-28.** All 46 shader stages compile and validate. The shaders are the 28
+   `.esf` files, not the 26 `.esh` headers; see the P4.5 entry. **Validate with
+   `External/DirectXShaderCompiler/bin/x64/spirv-val`**, which `DownloadDependencies.sh` builds
+   from the SPIRV-Tools that DXC vendors. A distribution's `spirv-val` is not interchangeable
+   with it: Ubuntu 24.04's v2025.1 rejects all six mesh stages on
+   `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036` and is wrong to. See the entry in
+   [Progress.md](../Progress.md).
 4. No `.esh` file is edited.
 5. The generated `.cpp` files compile as part of `Esoterica.Base` and
    `Esoterica.Engine.Runtime`. **Done, 2026-08-28.** Re-run `NinjaGen.py` after the first shader
