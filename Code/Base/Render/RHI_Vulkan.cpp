@@ -192,6 +192,13 @@ namespace EE::Render::RHI
     // validation error. Set and cleared alongside g_meshShaderEnabled.
     static bool g_fragmentShadingRateEnabled = false;
 
+    // **CreateBuffer has no Context either**, and a raytracing build reads its inputs and stores
+    // its result in ordinary buffers, which need usage bits that only exist once
+    // VK_KHR_acceleration_structure is enabled. Naming a usage bit from a disabled extension is
+    // a validation error, so every buffer gets them only when this is true. Third and last of
+    // these; see g_meshShaderEnabled for why they exist at all.
+    static bool g_raytracingEnabled = false;
+
     struct VulkanContext : Context
     {
         VkInstance                                                      m_instance = VK_NULL_HANDLE;
@@ -294,6 +301,20 @@ namespace EE::Render::RHI
         // VK_KHR_fragment_shading_rate, optional for the same reason. See CmdSetShadingRate.
         bool                                                            m_fragmentShadingRate = false;
         PFN_vkCmdSetFragmentShadingRateKHR                              m_vkCmdSetFragmentShadingRate = nullptr;
+
+        // Raytracing: VK_KHR_acceleration_structure, VK_KHR_ray_tracing_pipeline and
+        // VK_KHR_deferred_host_operations, which the first of the three depends on. All three
+        // together or none, and optional like the rest. See the P5.16 section.
+        bool                                                            m_raytracing = false;
+        PFN_vkCreateAccelerationStructureKHR                            m_vkCreateAccelerationStructure = nullptr;
+        PFN_vkDestroyAccelerationStructureKHR                           m_vkDestroyAccelerationStructure = nullptr;
+        PFN_vkGetAccelerationStructureBuildSizesKHR                     m_vkGetAccelerationStructureBuildSizes = nullptr;
+        PFN_vkGetAccelerationStructureDeviceAddressKHR                  m_vkGetAccelerationStructureDeviceAddress = nullptr;
+        PFN_vkCmdBuildAccelerationStructuresKHR                         m_vkCmdBuildAccelerationStructures = nullptr;
+        PFN_vkCreateRayTracingPipelinesKHR                              m_vkCreateRayTracingPipelines = nullptr;
+        PFN_vkGetRayTracingShaderGroupHandlesKHR                        m_vkGetRayTracingShaderGroupHandles = nullptr;
+        PFN_vkCmdTraceRaysKHR                                           m_vkCmdTraceRays = nullptr;
+        PFN_vkCmdTraceRaysIndirect2KHR                                  m_vkCmdTraceRaysIndirect2 = nullptr;
 
         void*                                                           m_pRenderDocLibrary = nullptr;
         RENDERDOC_API_1_0_0*                                            m_pRenderDocAPI = nullptr;
@@ -1016,6 +1037,34 @@ namespace EE::Render::RHI
             }
         }
 
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
+        VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR };
+        if ( HasExtension( availableDeviceExtensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME ) &&
+             HasExtension( availableDeviceExtensions, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME ) &&
+             HasExtension( availableDeviceExtensions, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME ) )
+        {
+            accelerationStructureFeatures.pNext = &rayTracingPipelineFeatures;
+
+            VkPhysicalDeviceFeatures2 raytracingQuery = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+            raytracingQuery.pNext = &accelerationStructureFeatures;
+            vkGetPhysicalDeviceFeatures2( pVulkanContext->m_physicalDevice, &raytracingQuery );
+
+            if ( accelerationStructureFeatures.accelerationStructure && rayTracingPipelineFeatures.rayTracingPipeline )
+            {
+                // VK_KHR_deferred_host_operations carries no feature bit. It is a dependency of
+                // VK_KHR_acceleration_structure and has to be enabled for it to load.
+                deviceExtensions.emplace_back( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME );
+                deviceExtensions.emplace_back( VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME );
+                deviceExtensions.emplace_back( VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME );
+
+                rayTracingPipelineFeatures.pNext = enabledFeatures.m_mutableDescriptorType.pNext;
+                enabledFeatures.m_mutableDescriptorType.pNext = &accelerationStructureFeatures;
+
+                pVulkanContext->m_raytracing = true;
+                g_raytracingEnabled = true;
+            }
+        }
+
         if ( !pVulkanContext->m_meshShader )
         {
             // Loud, because the engine has no fallback: RenderPass_DebugDraw will halt in
@@ -1038,6 +1087,24 @@ namespace EE::Render::RHI
         pVulkanContext->m_vkSetDebugUtilsObjectName = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkSetDebugUtilsObjectNameEXT" ) );
         pVulkanContext->m_vkCmdBeginDebugUtilsLabel = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdBeginDebugUtilsLabelEXT" ) );
         pVulkanContext->m_vkCmdEndDebugUtilsLabel = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdEndDebugUtilsLabelEXT" ) );
+
+        if ( pVulkanContext->m_raytracing )
+        {
+            pVulkanContext->m_vkCreateAccelerationStructure = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCreateAccelerationStructureKHR" ) );
+            pVulkanContext->m_vkDestroyAccelerationStructure = reinterpret_cast<PFN_vkDestroyAccelerationStructureKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkDestroyAccelerationStructureKHR" ) );
+            pVulkanContext->m_vkGetAccelerationStructureBuildSizes = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkGetAccelerationStructureBuildSizesKHR" ) );
+            pVulkanContext->m_vkGetAccelerationStructureDeviceAddress = reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkGetAccelerationStructureDeviceAddressKHR" ) );
+            pVulkanContext->m_vkCmdBuildAccelerationStructures = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdBuildAccelerationStructuresKHR" ) );
+            pVulkanContext->m_vkCreateRayTracingPipelines = reinterpret_cast<PFN_vkCreateRayTracingPipelinesKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCreateRayTracingPipelinesKHR" ) );
+            pVulkanContext->m_vkGetRayTracingShaderGroupHandles = reinterpret_cast<PFN_vkGetRayTracingShaderGroupHandlesKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkGetRayTracingShaderGroupHandlesKHR" ) );
+            pVulkanContext->m_vkCmdTraceRays = reinterpret_cast<PFN_vkCmdTraceRaysKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdTraceRaysKHR" ) );
+            // Core to VK_KHR_ray_tracing_maintenance1 rather than the pipeline extension, so it
+            // is allowed to be null. CmdExecuteIndirect on a DispatchRays signature asserts on it.
+            pVulkanContext->m_vkCmdTraceRaysIndirect2 = reinterpret_cast<PFN_vkCmdTraceRaysIndirect2KHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdTraceRaysIndirect2KHR" ) );
+
+            EE_ASSERT( pVulkanContext->m_vkCreateAccelerationStructure != nullptr );
+            EE_ASSERT( pVulkanContext->m_vkCmdTraceRays != nullptr );
+        }
 
         if ( pVulkanContext->m_fragmentShadingRate )
         {
@@ -1224,6 +1291,7 @@ namespace EE::Render::RHI
         // outlives a context. See their declarations.
         g_meshShaderEnabled = false;
         g_fragmentShadingRateEnabled = false;
+        g_raytracingEnabled = false;
 
         if ( pVulkanContext->m_heapDescriptorPool != VK_NULL_HANDLE )
         {
@@ -1521,6 +1589,11 @@ namespace EE::Render::RHI
         PFN_vkCmdSetFragmentShadingRateKHR                  m_vkCmdSetFragmentShadingRate = nullptr;
         TBitFlags<ShadingRateCaps>                          m_shadingRateCaps = {};
 
+        // Raytracing, same reason again. Null when the three extensions are absent.
+        PFN_vkCmdBuildAccelerationStructuresKHR             m_vkCmdBuildAccelerationStructures = nullptr;
+        PFN_vkCmdTraceRaysKHR                               m_vkCmdTraceRays = nullptr;
+        PFN_vkCmdTraceRaysIndirect2KHR                      m_vkCmdTraceRaysIndirect2 = nullptr;
+
         // **Direct3D 12 binds the shading rate image with a command and Vulkan makes it a render
         // pass attachment**, so CmdSetShadingRate can only record it and BeginRenderingIfPending
         // chains it. Null when no image is bound.
@@ -1550,6 +1623,52 @@ namespace EE::Render::RHI
     {
         VkQueryPool                                         m_queryPool = VK_NULL_HANDLE;
         VkQueryType                                         m_queryType = VK_QUERY_TYPE_TIMESTAMP;
+    };
+
+    // One RHI acceleration structure is a bottom level and a top level together, which is the
+    // shape RHI_Direct3D12.cpp:1452 has. Vulkan splits a structure into the VkAccelerationStructureKHR
+    // handle and the buffer that holds it, so both are here.
+    struct VulkanAccelerationStructure final : AccelerationStructure
+    {
+        struct Level
+        {
+            VkAccelerationStructureKHR                      m_handle = VK_NULL_HANDLE;
+            Buffer*                                         m_pStructureBuffer = nullptr;
+            VkBuildAccelerationStructureFlagsKHR            m_flags = 0;
+        };
+
+        Level                                               m_bottomLevel = {};
+        Level                                               m_topLevel = {};
+
+        // The geometry descriptions outlive this call, because CmdBuildAccelerationStructure
+        // hands the same array to the build. Direct3D 12 keeps its own for the same reason.
+        TVector<VkAccelerationStructureGeometryKHR>         m_geometries{ Memory::Allocators::g_RHI };
+        TVector<VkAccelerationStructureBuildRangeInfoKHR>   m_buildRanges{ Memory::Allocators::g_RHI };
+
+        // Shared by both builds, sized for the larger of the two, exactly as the reference does.
+        Buffer*                                             m_pScratchBuffer = nullptr;
+
+        Buffer*                                             m_pInstanceBuffer = nullptr;
+        uint64_t                                            m_instanceBufferOffset = 0;
+        uint64_t                                            m_numInstances = 0;
+
+        // The top level build reads its instances through this, and it is also what
+        // VkAccelerationStructureInstanceKHR::accelerationStructureReference wants for a bottom
+        // level. Direct3D 12 uses a plain GPU virtual address for both.
+        VkDeviceAddress                                     m_bottomLevelDeviceAddress = 0;
+    };
+
+    // **Nothing creates one of these, on either backend.** RHI.h declares no factory for a
+    // RaytracingShaderTable and RHI_Direct3D12.cpp never constructs its own version either, so
+    // CmdDispatchRays is unreachable by construction. The type mirrors
+    // Direct3D12RaytracingShaderTable at RHI_Direct3D12.cpp:1473 field for field so that
+    // whichever group eventually builds a table has the same shape to fill in on both sides.
+    struct VulkanRaytracingShaderTable final : RaytracingShaderTable
+    {
+        Buffer*                                             m_pBuffer = nullptr;
+        uint64_t                                            m_maxEntrySize = 0;
+        uint64_t                                            m_missRecordSize = 0;
+        uint64_t                                            m_hitGroupRecordSize = 0;
     };
 
     struct VulkanBuffer final : Buffer
@@ -2458,6 +2577,9 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirect = pVulkanContext->m_vkCmdDrawMeshTasksIndirect;
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirectCount = pVulkanContext->m_vkCmdDrawMeshTasksIndirectCount;
         pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate = pVulkanContext->m_vkCmdSetFragmentShadingRate;
+        pVulkanCommandBuffer->m_vkCmdBuildAccelerationStructures = pVulkanContext->m_vkCmdBuildAccelerationStructures;
+        pVulkanCommandBuffer->m_vkCmdTraceRays = pVulkanContext->m_vkCmdTraceRays;
+        pVulkanCommandBuffer->m_vkCmdTraceRaysIndirect2 = pVulkanContext->m_vkCmdTraceRaysIndirect2;
         pVulkanCommandBuffer->m_shadingRateCaps = pContext->m_deviceCapabilities.m_shadingRateCaps;
         // Carried here because CmdSetShadingRate is handed a CommandBuffer and no Context, the
         // same reason the caps and the entry point come along.
@@ -3162,9 +3284,54 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasks( pVulkanCommandBuffer->m_commandBuffer, numGroupsX, numGroupsY, numGroupsZ );
     }
 
-    void CmdDispatchRays( CommandBuffer* pCommandBuffer, RaytracingShaderTable* pShaderTable, AccelerationStructure* pAccelerationStructure, uint32_t width, uint32_t height )
+    // The acceleration structure parameter has no name because it has no use: the structure the
+    // trace reads is bound through the heap handle the shader already holds, and the reference
+    // ignores its own copy of this argument at RHI_Direct3D12.cpp:3242 in the same way.
+    void CmdDispatchRays( CommandBuffer* pCommandBuffer, RaytracingShaderTable* pShaderTable, AccelerationStructure*, uint32_t width, uint32_t height )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer*           pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanRaytracingShaderTable*   pVulkanShaderTable = static_cast<VulkanRaytracingShaderTable*>( pShaderTable );
+        VulkanBuffer const*            pVulkanShaderTableBuffer = static_cast<VulkanBuffer const*>( pVulkanShaderTable->m_pBuffer );
+
+        // **Nothing can hand this a valid table**, because no factory for one exists on either
+        // backend. See the section note above CreateAccelerationStructure.
+        EE_ASSERT( pVulkanShaderTableBuffer != nullptr );
+        EE_ASSERT( pVulkanCommandBuffer->m_vkCmdTraceRays != nullptr );
+
+        VkDeviceAddress const tableStart = pVulkanShaderTableBuffer->m_deviceAddress;
+
+        // The same three regions Direct3D 12 builds at RHI_Direct3D12.cpp:3250, in the same
+        // order and at the same offsets: the ray generation record first, then the miss records,
+        // then the hit groups, all at one stride.
+        VkStridedDeviceAddressRegionKHR rayGenRegion = {};
+        rayGenRegion.deviceAddress = tableStart;
+        rayGenRegion.stride = pVulkanShaderTable->m_maxEntrySize;
+        // A ray generation region's size has to equal its stride, which Direct3D 12 says by
+        // taking a range rather than a range and a stride.
+        rayGenRegion.size = pVulkanShaderTable->m_maxEntrySize;
+
+        VkStridedDeviceAddressRegionKHR missRegion = {};
+        missRegion.deviceAddress = tableStart + pVulkanShaderTable->m_maxEntrySize;
+        missRegion.stride = pVulkanShaderTable->m_maxEntrySize;
+        missRegion.size = pVulkanShaderTable->m_missRecordSize;
+
+        VkStridedDeviceAddressRegionKHR hitGroupRegion = {};
+        hitGroupRegion.deviceAddress = tableStart + pVulkanShaderTable->m_maxEntrySize + pVulkanShaderTable->m_missRecordSize;
+        hitGroupRegion.stride = pVulkanShaderTable->m_maxEntrySize;
+        hitGroupRegion.size = pVulkanShaderTable->m_hitGroupRecordSize;
+
+        // Vulkan has a fourth region for callable shaders and the RHI has no concept of one, so
+        // it stays empty.
+        VkStridedDeviceAddressRegionKHR callableRegion = {};
+
+        CmdSetPipeline( pCommandBuffer, pVulkanShaderTable->m_pPipeline );
+
+        // A trace is not a draw. It may not run inside a render pass, so it leaves one the way a
+        // compute dispatch does.
+        FlushBarriers( pVulkanCommandBuffer );
+        SuspendRendering( pVulkanCommandBuffer );
+
+        pVulkanCommandBuffer->m_vkCmdTraceRays( pVulkanCommandBuffer->m_commandBuffer, &rayGenRegion, &missRegion, &hitGroupRegion, &callableRegion, width, height, 1 );
     }
 
     //-------------------------------------------------------------------------
@@ -3321,8 +3488,14 @@ namespace EE::Render::RHI
 
             case IndirectArgumentType::DispatchRays:
             {
-                // vkCmdTraceRaysIndirect2KHR, which is P5.16's.
-                EE_UNIMPLEMENTED_FUNCTION();
+                // **vkCmdTraceRaysIndirect2KHR takes one address and no count**, so it runs
+                // exactly one trace where Direct3D 12 runs min( maxNumCommands, count ). Same
+                // shape as the compute case above, and refused the same way.
+                EE_ASSERT( pVulkanCommandBuffer->m_vkCmdTraceRaysIndirect2 != nullptr );
+                EE_ASSERT( pVulkanCounterBuffer == nullptr );
+                EE_ASSERT( maxNumCommands == 1 );
+
+                pVulkanCommandBuffer->m_vkCmdTraceRaysIndirect2( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_deviceAddress + argumentOffset );
             }
             break;
 
@@ -3501,7 +3674,69 @@ namespace EE::Render::RHI
 
     void CmdBuildAccelerationStructure( CommandBuffer* pCommandBuffer, TArrayView<AccelerationStructure* const> accelerationStructures, TArrayView<uint32_t const> bottomLevelAccelerationStructureIndices )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        EE_ASSERT( pVulkanCommandBuffer->m_vkCmdBuildAccelerationStructures != nullptr );
+
+        // A build is not a draw and may not run inside a render pass, so it takes the same pair
+        // every copy and clear takes.
+        PrepareTransfer( pVulkanCommandBuffer );
+
+        // The bottom levels the caller named, then every top level, which is the order the
+        // reference builds them in at RHI_Direct3D12.cpp:3355 and :3378. A top level reads the
+        // bottom levels it references, so the order matters.
+        for ( uint32_t const bottomLevelIndex : bottomLevelAccelerationStructureIndices )
+        {
+            EE_ASSERT( bottomLevelIndex < accelerationStructures.size() );
+
+            VulkanAccelerationStructure* pVulkanAccelerationStructure = static_cast<VulkanAccelerationStructure*>( accelerationStructures[bottomLevelIndex] );
+            VulkanBuffer const* pVulkanScratchBuffer = static_cast<VulkanBuffer const*>( pVulkanAccelerationStructure->m_pScratchBuffer );
+
+            VkAccelerationStructureBuildGeometryInfoKHR buildInfo = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+            buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            buildInfo.flags = pVulkanAccelerationStructure->m_bottomLevel.m_flags;
+            buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            buildInfo.dstAccelerationStructure = pVulkanAccelerationStructure->m_bottomLevel.m_handle;
+            buildInfo.geometryCount = uint32_t( pVulkanAccelerationStructure->m_geometries.size() );
+            buildInfo.pGeometries = pVulkanAccelerationStructure->m_geometries.data();
+            buildInfo.scratchData.deviceAddress = pVulkanScratchBuffer->m_deviceAddress;
+
+            VkAccelerationStructureBuildRangeInfoKHR const* pBuildRanges = pVulkanAccelerationStructure->m_buildRanges.data();
+            pVulkanCommandBuffer->m_vkCmdBuildAccelerationStructures( pVulkanCommandBuffer->m_commandBuffer, 1, &buildInfo, &pBuildRanges );
+        }
+
+        for ( AccelerationStructure* pAccelerationStructure : accelerationStructures )
+        {
+            VulkanAccelerationStructure* pVulkanAccelerationStructure = static_cast<VulkanAccelerationStructure*>( pAccelerationStructure );
+            VulkanBuffer const* pVulkanScratchBuffer = static_cast<VulkanBuffer const*>( pVulkanAccelerationStructure->m_pScratchBuffer );
+            VulkanBuffer const* pVulkanInstanceBuffer = static_cast<VulkanBuffer const*>( pVulkanAccelerationStructure->m_pInstanceBuffer );
+
+            // **The reference crashes here and this does not.** RHI_Direct3D12.cpp:3981 has the
+            // line that fills in m_instanceBuffer commented out, and :3390 then dereferences it.
+            // CreateAccelerationStructure records the buffer, so there is one to read.
+            EE_ASSERT( pVulkanInstanceBuffer != nullptr );
+
+            VkAccelerationStructureGeometryKHR topLevelGeometry = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+            topLevelGeometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+            topLevelGeometry.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+            topLevelGeometry.geometry.instances.arrayOfPointers = VK_FALSE;
+            topLevelGeometry.geometry.instances.data.deviceAddress = pVulkanInstanceBuffer->m_deviceAddress + pVulkanAccelerationStructure->m_instanceBufferOffset;
+
+            VkAccelerationStructureBuildGeometryInfoKHR buildInfo = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+            buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+            buildInfo.flags = pVulkanAccelerationStructure->m_topLevel.m_flags;
+            buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            buildInfo.dstAccelerationStructure = pVulkanAccelerationStructure->m_topLevel.m_handle;
+            buildInfo.geometryCount = 1;
+            buildInfo.pGeometries = &topLevelGeometry;
+            buildInfo.scratchData.deviceAddress = pVulkanScratchBuffer->m_deviceAddress;
+
+            VkAccelerationStructureBuildRangeInfoKHR buildRange = {};
+            buildRange.primitiveCount = uint32_t( pVulkanAccelerationStructure->m_numInstances );
+
+            VkAccelerationStructureBuildRangeInfoKHR const* pBuildRange = &buildRange;
+            pVulkanCommandBuffer->m_vkCmdBuildAccelerationStructures( pVulkanCommandBuffer->m_commandBuffer, 1, &buildInfo, &pBuildRange );
+        }
     }
 
     //-------------------------------------------------------------------------
@@ -4240,16 +4475,216 @@ namespace EE::Render::RHI
         }
     }
 
+    //-------------------------------------------------------------------------
+    // Raytracing
+    //-------------------------------------------------------------------------
+    // **Nothing in the engine reaches any of this, on either backend.** No engine code creates an
+    // acceleration structure, `RHI.esh` defines `GetRaytracingAccelerationStructure` and no shader
+    // calls it, and `RHI.h` declares no way to build a `RaytracingShaderTable` at all, so
+    // `CmdDispatchRays` is unreachable by construction on Vulkan and on Direct3D 12 alike. It is
+    // written because the phase document asks for parity, and it is unverifiable here twice over:
+    // no caller, and no GPU in this machine has `VK_KHR_ray_tracing_pipeline`.
+    //
+    // **The heap question the binding model left open is answered without changing anything.**
+    // `GetAccelerationStructureHandle` returns a buffer handle on the structure buffer, exactly
+    // as `RHI_Direct3D12.cpp:4002` does, so `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` never
+    // has to join the heap's mutable type list. The day a shader actually writes
+    // `GetRaytracingAccelerationStructure`, that changes, and it is a Phase 4 binding model
+    // decision rather than this file's.
+
+    static VkBuildAccelerationStructureFlagsKHR VulkanAccelerationStructureBuildFlags( TBitFlags<AccelerationStructureBuildFlags> flags )
+    {
+        VkBuildAccelerationStructureFlagsKHR result = 0;
+
+        if ( flags.IsFlagSet( AccelerationStructureBuildFlags::AllowUpdate ) )      { result |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR; }
+        if ( flags.IsFlagSet( AccelerationStructureBuildFlags::AllowCompaction ) )  { result |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR; }
+        if ( flags.IsFlagSet( AccelerationStructureBuildFlags::PreferFastTrace ) )  { result |= VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR; }
+        if ( flags.IsFlagSet( AccelerationStructureBuildFlags::PreferFastBuild ) )  { result |= VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR; }
+        if ( flags.IsFlagSet( AccelerationStructureBuildFlags::MinimizeMemory ) )   { result |= VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR; }
+        // PerformUpdate is not a creation flag on Vulkan. It is the build mode, UPDATE against
+        // BUILD, which CmdBuildAccelerationStructure reads back out of the RHI flags.
+
+        return result;
+    }
+
+    static VkGeometryFlagsKHR VulkanGeometryFlags( TBitFlags<AccelerationStructureGeometryFlags> flags )
+    {
+        VkGeometryFlagsKHR result = 0;
+
+        if ( flags.IsFlagSet( AccelerationStructureGeometryFlags::Opaque ) )                        { result |= VK_GEOMETRY_OPAQUE_BIT_KHR; }
+        if ( flags.IsFlagSet( AccelerationStructureGeometryFlags::NoDuplicateAnyhitInvocation ) )   { result |= VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR; }
+
+        return result;
+    }
+
+    // The structure buffer and the scratch buffer, both device local and both sized by the
+    // driver's own answer. Direct3D 12 asks GetRaytracingAccelerationStructurePrebuildInfo for
+    // the same two numbers.
+    static Buffer* CreateAccelerationStructureBuffer( Context* pContext, uint64_t size, bool needsDescriptor, char const* pDebugName )
+    {
+        BufferParameters bufferParameters = {};
+        bufferParameters.m_bufferSize = size;
+        bufferParameters.m_bufferStride = sizeof( uint32_t );
+        bufferParameters.m_memoryType = ResourceMemoryType::DeviceLocal;
+        bufferParameters.m_debugName = pDebugName;
+
+        if ( needsDescriptor )
+        {
+            // **A divergence from the reference, and a deliberate one.**
+            // RHI_Direct3D12.cpp:3978 gives the top level structure buffer BufferFlags::
+            // NoDescriptors and descriptor types RWBuffer|Raw, and then
+            // GetAccelerationStructureHandle asks it for a DescriptorTypeFlags::Buffer handle,
+            // which it cannot have. Two asserts would fire there if anything called it. This
+            // buffer gets the descriptor it is about to be asked for.
+            bufferParameters.m_descriptorTypes.SetMultipleFlags( DescriptorTypeFlags::Buffer, DescriptorTypeFlags::RWBuffer, DescriptorTypeFlags::Raw );
+        }
+        else
+        {
+            bufferParameters.m_descriptorTypes = DescriptorTypeFlags::RWBuffer;
+            bufferParameters.m_flags.SetMultipleFlags( BufferFlags::OwnMemory, BufferFlags::NoDescriptors );
+        }
+
+        return CreateBuffer( pContext, bufferParameters );
+    }
+
     AccelerationStructure* CreateAccelerationStructure( Context* pContext, AccelerationStructureTopLevelCreateParameters const& topLevelParameters, AccelerationStructureBottomLevelCreateParameters const& bottomLevelParameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext*                 pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanAccelerationStructure*   pVulkanAccelerationStructure = pVulkanContext->CreateObject<VulkanAccelerationStructure>();
+
+        EE_ASSERT( pVulkanContext->m_raytracing );
+
+        pVulkanAccelerationStructure->m_bottomLevel.m_flags = VulkanAccelerationStructureBuildFlags( bottomLevelParameters.m_flags );
+        pVulkanAccelerationStructure->m_topLevel.m_flags = VulkanAccelerationStructureBuildFlags( topLevelParameters.m_flags );
+
+        // Bottom level
+        //-------------------------------------------------------------------------
+        TInlineVector<uint32_t, 8> maxPrimitiveCounts;
+
+        pVulkanAccelerationStructure->m_geometries.reserve( bottomLevelParameters.m_geometries.size() );
+        pVulkanAccelerationStructure->m_buildRanges.reserve( bottomLevelParameters.m_geometries.size() );
+
+        for ( AccelerationStructureGeometry const& geometry : bottomLevelParameters.m_geometries )
+        {
+            VulkanBuffer const* pVulkanIndexBuffer = static_cast<VulkanBuffer const*>( geometry.m_pIndexBuffer );
+            VulkanBuffer const* pVulkanVertexBuffer = static_cast<VulkanBuffer const*>( geometry.m_pVertexBuffer );
+
+            VkAccelerationStructureGeometryKHR vulkanGeometry = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+            vulkanGeometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            vulkanGeometry.flags = VulkanGeometryFlags( geometry.m_flags );
+
+            VkAccelerationStructureGeometryTrianglesDataKHR& triangles = vulkanGeometry.geometry.triangles;
+            triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triangles.vertexFormat = VulkanFormat( geometry.m_vertexFormat );
+            triangles.vertexData.deviceAddress = pVulkanVertexBuffer->m_deviceAddress + geometry.m_vertexOffset;
+            triangles.vertexStride = pVulkanVertexBuffer->m_stride;
+            // The highest index a vertex index may take, so one less than the count. Direct3D 12
+            // takes the count itself.
+            triangles.maxVertex = geometry.m_numVertices > 0 ? geometry.m_numVertices - 1 : 0;
+            triangles.indexType = ( geometry.m_indexType == IndexType::Uint16 ) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+            triangles.indexData.deviceAddress = pVulkanIndexBuffer->m_deviceAddress + geometry.m_indexOffset;
+
+            pVulkanAccelerationStructure->m_geometries.push_back( vulkanGeometry );
+
+            // **Direct3D 12 counts indices and Vulkan counts triangles.** The offsets are folded
+            // into the device addresses above, the way the reference folds them in, so the range
+            // itself starts at zero.
+            uint32_t const numPrimitives = geometry.m_numIndices / 3;
+
+            VkAccelerationStructureBuildRangeInfoKHR buildRange = {};
+            buildRange.primitiveCount = numPrimitives;
+            pVulkanAccelerationStructure->m_buildRanges.push_back( buildRange );
+
+            maxPrimitiveCounts.push_back( numPrimitives );
+        }
+
+        VkAccelerationStructureBuildGeometryInfoKHR bottomLevelBuildInfo = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+        bottomLevelBuildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        bottomLevelBuildInfo.flags = pVulkanAccelerationStructure->m_bottomLevel.m_flags;
+        bottomLevelBuildInfo.geometryCount = uint32_t( pVulkanAccelerationStructure->m_geometries.size() );
+        bottomLevelBuildInfo.pGeometries = pVulkanAccelerationStructure->m_geometries.data();
+
+        VkAccelerationStructureBuildSizesInfoKHR bottomLevelSizes = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+        pVulkanContext->m_vkGetAccelerationStructureBuildSizes( pVulkanContext->m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                                                &bottomLevelBuildInfo, maxPrimitiveCounts.data(), &bottomLevelSizes );
+
+        pVulkanAccelerationStructure->m_bottomLevel.m_pStructureBuffer =
+            CreateAccelerationStructureBuffer( pContext, bottomLevelSizes.accelerationStructureSize, false, "AccelerationStructure BottomLevel" );
+
+        VkAccelerationStructureCreateInfoKHR bottomLevelCreateInfo = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
+        bottomLevelCreateInfo.buffer = static_cast<VulkanBuffer*>( pVulkanAccelerationStructure->m_bottomLevel.m_pStructureBuffer )->m_buffer;
+        bottomLevelCreateInfo.size = bottomLevelSizes.accelerationStructureSize;
+        bottomLevelCreateInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+
+        VkResult result = pVulkanContext->m_vkCreateAccelerationStructure( pVulkanContext->m_device, &bottomLevelCreateInfo, nullptr, &pVulkanAccelerationStructure->m_bottomLevel.m_handle );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        VkAccelerationStructureDeviceAddressInfoKHR bottomLevelAddressInfo = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR };
+        bottomLevelAddressInfo.accelerationStructure = pVulkanAccelerationStructure->m_bottomLevel.m_handle;
+        pVulkanAccelerationStructure->m_bottomLevelDeviceAddress = pVulkanContext->m_vkGetAccelerationStructureDeviceAddress( pVulkanContext->m_device, &bottomLevelAddressInfo );
+
+        // Top level
+        //-------------------------------------------------------------------------
+        VulkanBuffer const* pVulkanInstanceBuffer = static_cast<VulkanBuffer const*>( topLevelParameters.m_pInstanceBuffer );
+        EE_ASSERT( pVulkanInstanceBuffer != nullptr );
+
+        pVulkanAccelerationStructure->m_pInstanceBuffer = topLevelParameters.m_pInstanceBuffer;
+        pVulkanAccelerationStructure->m_instanceBufferOffset = topLevelParameters.m_instanceBufferOffset;
+        pVulkanAccelerationStructure->m_numInstances = topLevelParameters.m_numInstances;
+
+        // **AccelerationStructureInstance is VkAccelerationStructureInstanceKHR field for
+        // field** - twelve floats, a 24 and an 8 bit field, another pair, and a 64 bit
+        // reference - so the engine's instance buffer is readable as it stands.
+        VkAccelerationStructureGeometryKHR topLevelGeometry = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+        topLevelGeometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+        topLevelGeometry.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+        topLevelGeometry.geometry.instances.arrayOfPointers = VK_FALSE;
+        topLevelGeometry.geometry.instances.data.deviceAddress = pVulkanInstanceBuffer->m_deviceAddress + topLevelParameters.m_instanceBufferOffset;
+
+        uint32_t const numInstances = uint32_t( topLevelParameters.m_numInstances );
+
+        VkAccelerationStructureBuildGeometryInfoKHR topLevelBuildInfo = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+        topLevelBuildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+        topLevelBuildInfo.flags = pVulkanAccelerationStructure->m_topLevel.m_flags;
+        topLevelBuildInfo.geometryCount = 1;
+        topLevelBuildInfo.pGeometries = &topLevelGeometry;
+
+        VkAccelerationStructureBuildSizesInfoKHR topLevelSizes = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+        pVulkanContext->m_vkGetAccelerationStructureBuildSizes( pVulkanContext->m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                                                &topLevelBuildInfo, &numInstances, &topLevelSizes );
+
+        pVulkanAccelerationStructure->m_topLevel.m_pStructureBuffer =
+            CreateAccelerationStructureBuffer( pContext, topLevelSizes.accelerationStructureSize, true, "AccelerationStructure TopLevel" );
+
+        VkAccelerationStructureCreateInfoKHR topLevelCreateInfo = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
+        topLevelCreateInfo.buffer = static_cast<VulkanBuffer*>( pVulkanAccelerationStructure->m_topLevel.m_pStructureBuffer )->m_buffer;
+        topLevelCreateInfo.size = topLevelSizes.accelerationStructureSize;
+        topLevelCreateInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+
+        result = pVulkanContext->m_vkCreateAccelerationStructure( pVulkanContext->m_device, &topLevelCreateInfo, nullptr, &pVulkanAccelerationStructure->m_topLevel.m_handle );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        // Scratch
+        //-------------------------------------------------------------------------
+        // **Sized for the larger of the two builds, where the reference sizes it for the bottom
+        // level alone.** RHI_Direct3D12.cpp:3969 reads ScratchDataSizeInBytes out of the bottom
+        // level prebuild and then uses the same buffer for the top level build at :3392, which
+        // overruns whenever the top level needs more. Both builds share one buffer here too,
+        // because the RHI has one field for it, so the size is the maximum.
+        uint64_t const scratchSize = Math::Max( bottomLevelSizes.buildScratchSize, topLevelSizes.buildScratchSize );
+        pVulkanAccelerationStructure->m_pScratchBuffer = CreateAccelerationStructureBuffer( pContext, scratchSize, false, "AccelerationStructure Scratch" );
+
+        return pVulkanAccelerationStructure;
     }
 
     AccelerationStructureHandle GetAccelerationStructureHandle( AccelerationStructure const* pAccelerationStructure )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return AccelerationStructureHandle();
+        VulkanAccelerationStructure const* pVulkanAccelerationStructure = static_cast<VulkanAccelerationStructure const*>( pAccelerationStructure );
+
+        // The top level structure buffer, read as a buffer, which is what
+        // RHI_Direct3D12.cpp:4002 returns. See the section note above for why this does not need
+        // an acceleration structure descriptor in the heap.
+        return GetBufferHandle( pVulkanAccelerationStructure->m_topLevel.m_pStructureBuffer, DescriptorTypeFlags::Buffer );
     }
 
     //-------------------------------------------------------------------------
@@ -4661,6 +5096,21 @@ namespace EE::Render::RHI
         // bufferDeviceAddress is a device feature CreateContext requires, and Buffer holds an
         // m_deviceAddress the engine reads, so every buffer carries the bit.
         usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+        // **Direct3D 12 needs none of this and Vulkan needs all of it.** A raytracing build reads
+        // its geometry and instances out of ordinary buffers, writes the structure into one and
+        // scratches in another, and the shader binding table is one more; each is a usage bit,
+        // and CreateAccelerationStructure is handed buffers the caller already made. So every
+        // buffer carries them, rather than the RHI growing a flag it does not have.
+        //
+        // Only when the extension is enabled: naming a usage bit from a disabled extension is a
+        // validation error. CreateBuffer has no Context, hence the file static.
+        if ( g_raytracingEnabled )
+        {
+            usage |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                     VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
+        }
 
         VkBufferCreateInfo bufferCreateInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferCreateInfo.size = allocationSize;
@@ -6388,13 +6838,151 @@ namespace EE::Render::RHI
 
     Pipeline* CreatePipeline( Context* pContext, RaytracingPipelineParameters const& parameters )
     {
-        // P5.16. It needs VK_KHR_ray_tracing_pipeline, VK_KHR_acceleration_structure and
-        // VK_KHR_deferred_host_operations at device creation, and it also has to settle the one
-        // question the binding model left open: whether
-        // VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR may appear in a mutable descriptor type
-        // list, since RHI.esh reads an acceleration structure straight out of the heap.
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext*       pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanPipelineCache* pVulkanPipelineCache = static_cast<VulkanPipelineCache*>( parameters.m_pPipelineCache );
+        VulkanRootSignature* pVulkanGlobalRootSignature = static_cast<VulkanRootSignature*>( parameters.m_pGlobalRootSignature );
+        VulkanPipeline*      pVulkanPipeline = pVulkanContext->CreateObject<VulkanPipeline>();
+
+        EE_ASSERT( pVulkanContext->m_raytracing );
+        EE_ASSERT( pVulkanPipelineCache == nullptr ); // Not implemented yet, as on the reference
+        EE_ASSERT( pVulkanGlobalRootSignature != nullptr );
+
+        pVulkanPipeline->m_device = pVulkanContext->m_device;
+        pVulkanPipeline->m_pRootSignature = pVulkanGlobalRootSignature;
+        pVulkanPipeline->m_pipelineType = PipelineType::RayTracing;
+        pVulkanPipeline->m_bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
+
+        // **The stage a raytracing shader plays comes from where it sits in the parameters, not
+        // from the shader itself.** RHI.h has one ShaderStage::RayTracing for all five roles, so
+        // VulkanShaderStage cannot tell a miss shader from a closest hit one. The role is decided
+        // here, by which field the Shader arrived in.
+        TInlineVector<VkPipelineShaderStageCreateInfo, 8> stages;
+        TInlineVector<VkRayTracingShaderGroupCreateInfoKHR, 8> groups;
+
+        // Vulkan wants null terminated entry point names and RHI.h hands over StringViews, which
+        // are not. The copies have to outlive vkCreateRayTracingPipelinesKHR, so they live here.
+        //
+        // **Reserved to the exact maximum before the first one is added**, because every
+        // VkPipelineShaderStageCreateInfo::pName points into this vector. One reallocation part
+        // way through would leave every pointer taken so far dangling.
+        size_t const maxEntryPointNames = 1 + parameters.m_rayMissShaders.size() + parameters.m_hitGroups.size() * 3;
+
+        TVector<TInlineString<MaxEntryPointNameLength>> entryPointNames{ Memory::Allocators::g_RHI };
+        entryPointNames.reserve( maxEntryPointNames );
+
+        auto AddStage = [&stages, &entryPointNames] ( Shader const* pShader, VkShaderStageFlagBits stage, StringView entryPoint ) -> uint32_t
+        {
+            VulkanShader const* pVulkanShader = static_cast<VulkanShader const*>( pShader );
+
+            // One module per raytracing Shader. Each role is created as its own Shader, so there
+            // is nothing to pick between.
+            EE_ASSERT( pVulkanShader->m_shaderModules.size() == 1 );
+
+            entryPointNames.emplace_back( entryPoint.data(), entryPoint.size() );
+
+            VkPipelineShaderStageCreateInfo stageCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+            stageCreateInfo.stage = stage;
+            stageCreateInfo.module = pVulkanShader->m_shaderModules[0];
+            stageCreateInfo.pName = entryPointNames.back().c_str();
+
+            uint32_t const stageIndex = uint32_t( stages.size() );
+            stages.emplace_back( stageCreateInfo );
+            return stageIndex;
+        };
+
+        // Ray generation first, then the miss shaders, then the hit groups. That is the order
+        // CmdDispatchRays reads the shader binding table in, and the group order is what the
+        // table records map onto.
+        {
+            EE_ASSERT( parameters.m_pRayGenShader != nullptr );
+            uint32_t const rayGenStageIndex = AddStage( parameters.m_pRayGenShader, VK_SHADER_STAGE_RAYGEN_BIT_KHR, parameters.m_rayGenEntryPoint );
+
+            VkRayTracingShaderGroupCreateInfoKHR group = { VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR };
+            group.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+            group.generalShader = rayGenStageIndex;
+            group.closestHitShader = VK_SHADER_UNUSED_KHR;
+            group.anyHitShader = VK_SHADER_UNUSED_KHR;
+            group.intersectionShader = VK_SHADER_UNUSED_KHR;
+            groups.emplace_back( group );
+        }
+
+        EE_ASSERT( parameters.m_rayMissShaders.size() == parameters.m_rayMissEntryPoints.size() );
+        for ( size_t missIndex = 0; missIndex < parameters.m_rayMissShaders.size(); ++missIndex )
+        {
+            uint32_t const missStageIndex = AddStage( parameters.m_rayMissShaders[missIndex], VK_SHADER_STAGE_MISS_BIT_KHR, parameters.m_rayMissEntryPoints[missIndex] );
+
+            VkRayTracingShaderGroupCreateInfoKHR group = { VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR };
+            group.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+            group.generalShader = missStageIndex;
+            group.closestHitShader = VK_SHADER_UNUSED_KHR;
+            group.anyHitShader = VK_SHADER_UNUSED_KHR;
+            group.intersectionShader = VK_SHADER_UNUSED_KHR;
+            groups.emplace_back( group );
+        }
+
+        for ( RaytracingHitGroup const& hitGroup : parameters.m_hitGroups )
+        {
+            VkRayTracingShaderGroupCreateInfoKHR group = { VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR };
+            group.generalShader = VK_SHADER_UNUSED_KHR;
+            group.closestHitShader = VK_SHADER_UNUSED_KHR;
+            group.anyHitShader = VK_SHADER_UNUSED_KHR;
+            group.intersectionShader = VK_SHADER_UNUSED_KHR;
+
+            // An intersection shader is what makes a group procedural; without one the geometry
+            // is triangles. Direct3D 12 decides the same way, from whether D3D12_HIT_GROUP_DESC
+            // names one.
+            group.type = ( hitGroup.m_pIntersectionShader != nullptr )
+                       ? VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR
+                       : VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+
+            if ( hitGroup.m_pIntersectionShader != nullptr )
+            {
+                group.intersectionShader = AddStage( hitGroup.m_pIntersectionShader, VK_SHADER_STAGE_INTERSECTION_BIT_KHR, hitGroup.m_intersectionEntryPoint );
+            }
+
+            if ( hitGroup.m_pAnyHitShader != nullptr )
+            {
+                group.anyHitShader = AddStage( hitGroup.m_pAnyHitShader, VK_SHADER_STAGE_ANY_HIT_BIT_KHR, hitGroup.m_anyHitEntryPoint );
+            }
+
+            if ( hitGroup.m_pClosestHitShader != nullptr )
+            {
+                group.closestHitShader = AddStage( hitGroup.m_pClosestHitShader, VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR, hitGroup.m_closestHitEntryPoint );
+            }
+
+            groups.emplace_back( group );
+        }
+
+        VkRayTracingPipelineCreateInfoKHR pipelineCreateInfo = { VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };
+        pipelineCreateInfo.stageCount = uint32_t( stages.size() );
+        pipelineCreateInfo.pStages = stages.data();
+        pipelineCreateInfo.groupCount = uint32_t( groups.size() );
+        pipelineCreateInfo.pGroups = groups.data();
+        pipelineCreateInfo.maxPipelineRayRecursionDepth = parameters.m_maxTraceRecursionDepth;
+        pipelineCreateInfo.layout = pVulkanGlobalRootSignature->m_pipelineLayout;
+
+        // **Four parameters have no Vulkan equivalent and are dropped on purpose.**
+        //
+        // m_pEmptyRootSignature, m_pRayGenRootSignature, m_rayMissRootSignatures and the per hit
+        // group m_pRootSignature are Direct3D 12 *local* root signatures, which let each shader
+        // record in the table carry its own bindings. Vulkan has one pipeline layout for the
+        // whole raytracing pipeline and nothing else; the per record data would have to move
+        // into the shader binding table and be read by the shader, which is a shader change.
+        //
+        // m_payloadSize and m_attributeSize are Direct3D's shader config. Vulkan reads both out
+        // of the SPIR-V, so there is nothing to pass.
+        //
+        // m_maxNumRays has no Vulkan counterpart at all.
+        EE_ASSERT( parameters.m_rayMissRootSignatures.empty() );
+
+        VkPipelineCache const cache = ( pVulkanPipelineCache != nullptr ) ? pVulkanPipelineCache->m_pipelineCache : VK_NULL_HANDLE;
+
+        VkResult const result = pVulkanContext->m_vkCreateRayTracingPipelines( pVulkanContext->m_device, VK_NULL_HANDLE, cache, 1, &pipelineCreateInfo, nullptr, &pVulkanPipeline->m_pipeline );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_PIPELINE, uint64_t( pVulkanPipeline->m_pipeline ), parameters.m_debugName );
+
+        return pVulkanPipeline;
     }
 
     void DestroyPipeline( Context* pContext, Pipeline*&& pPipeline )
