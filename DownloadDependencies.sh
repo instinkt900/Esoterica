@@ -275,9 +275,10 @@ fetch_dxc()
         info "resetting the DXC source tree"
         # build/ is excluded from the clean on purpose. It is untracked, so a plain clean would
         # delete it and turn every re-run into a full rebuild. Keeping it means a re-run only
-        # recompiles the files the patches touch.
+        # recompiles the files the patches touch. build-spirv-tools/ is excluded for the same
+        # reason; git clean's -e takes a path, so it needs naming separately.
         git -C "${source_dir}" reset -q --hard
-        git -C "${source_dir}" clean -qfd -e build
+        git -C "${source_dir}" clean -qfd -e build -e build-spirv-tools
     else
         info "cloning DXC ${DXC_VERSION}"
         rm -rf "${source_dir}"
@@ -334,6 +335,28 @@ fetch_dxc()
     cp -r "${source_dir}/tools/clang/lib/Headers/hlsl" "${target}/inc/"
     cp -P "${source_dir}/build/lib/libdxcompiler.so"* "${target}/lib/x64/"
     cp "${source_dir}/build/bin/dxc" "${target}/bin/x64/"
+
+    # spirv-val is built from the SPIRV-Tools that DXC vendors, and installed next to dxc,
+    # because a distribution's spirv-val is not interchangeable with it.
+    #
+    # Ubuntu 24.04 ships SPIRV-Tools v2025.1, and that version rejects every mesh shader here
+    # with VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036, "needs to be a boolean value array",
+    # on a variable that is already an array of bool. The check was rewritten upstream since.
+    # v2026.3, which is what DXC vendors and validates with internally, accepts all 46 stages.
+    #
+    # Acceptance criterion 3 of Phase 4 is checked with spirv-val, so the criterion is only
+    # meaningful against the validator that matches the compiler. Building it costs about a
+    # minute against DXC's twenty, and needs no extra download: the source is already in the
+    # clone.
+    info "building spirv-val from DXC's vendored SPIRV-Tools"
+    cmake -S "${source_dir}/external/SPIRV-Tools" -B "${source_dir}/build-spirv-tools" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DSPIRV-Headers_SOURCE_DIR="${source_dir}/external/SPIRV-Headers" \
+        -DSPIRV_SKIP_TESTS=ON \
+        -DSPIRV_SKIP_EXECUTABLES=OFF \
+        >/dev/null
+    ninja -C "${source_dir}/build-spirv-tools" -j "${BUILD_JOBS}" spirv-val
+    cp "${source_dir}/build-spirv-tools/tools/spirv-val" "${target}/bin/x64/"
 
     info "DXC installed"
 }
