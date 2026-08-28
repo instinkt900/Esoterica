@@ -73,17 +73,15 @@ called P4.4 the bulk of the phase, so what is actually left is smaller than the 
 suggests: the five shaders, the two decisions, and P4.5 and P4.6. P4.5 and P4.6 both need the
 shader pass to exit 0 first, so the five shaders gate everything remaining.
 
-**One Phase 4 decision is still unmade, and it is an acceptance criterion.** Criterion 9,
-clip-space Y: the DXC argument list in `ShaderReflection_ShaderCompiler.cpp` passes neither
-`-fvk-invert-y` nor `-fvk-use-dx-position-w`, so nothing inverts Y today and no layer has been
-chosen to do it. Doing it in both the shader compiler and the Vulkan viewport, or in neither, is
-the classic porting bug the phase document warns about.
+**Criteria 8 and 9 are both decided.** The bindless binding model, and clip-space Y: the Vulkan
+viewport inverts Y with a negative height, the shader compiler does not, and `-fvk-invert-y` must
+not be added. Both are recorded below, and the Y decision is also written into `RHI_Vulkan.cpp`
+at the stub that implements it.
 
-Criterion 8, the bindless binding model, is **done**. Two related P4.3 items are also still
-open and neither has been investigated: the constant buffer layout rule
-(`-fvk-use-dx-layout` against Vulkan-native, which the phase document asks to settle in this
-phase because a mismatch is silently wrong), and the shader stage mapping for the raytracing
-stages.
+**One P4.3 item is still open and has not been investigated:** the constant buffer layout rule,
+`-fvk-use-dx-layout` against Vulkan-native, which the phase document asks to settle in this phase
+because a mismatch is silently wrong. The shader stage mapping for the raytracing stages is also
+untouched, and matters only once Phase 5 reaches P5.16.
 
 ---
 
@@ -766,6 +764,98 @@ the reasoning, not just the outcome.
 **Rationale:** ...
 **Alternatives rejected:** ...
 -->
+
+### 2026-08-28 - Clip-space Y is inverted in the Vulkan viewport, not in the shader compiler
+
+Acceptance criterion 9. It names one layer, as the criterion demands.
+
+**Context.** The engine builds its projection matrices from DirectXMath, and says so:
+`Math::CreatePerspectiveProjectionMatrix` is commented "Taken from DirectXMath:
+XMMatrixPerspectiveFovRH", and the orthographic pair likewise (`ViewVolume.cpp:9` and `:29`).
+Those are right-handed with a **Y-up NDC and a 0..1 depth range**. Vulkan agrees on the depth
+range, which is why nothing here needs a depth fix, and disagrees on Y: Vulkan's NDC has +Y
+pointing down. Uncorrected, every rendered image is vertically mirrored.
+
+`RHI_Direct3D12.cpp:3049` sets the viewport straight through, with no flip of its own, so the
+Direct3D path is the plain DirectXMath convention end to end.
+
+**Decision: `RHI_Vulkan.cpp`'s `CmdSetViewport` performs the inversion, with a negative viewport
+height. The shader compiler does not. `-fvk-invert-y` is not passed, and must not be added.**
+
+```
+vkViewport.y      = y + height;
+vkViewport.height = -height;
+```
+
+`x`, `width`, `minDepth` and `maxDepth` pass through unchanged. A negative viewport height needs
+no extension: it is core Vulkan from 1.1, and the baseline is 1.3.
+
+The decision is written into `RHI_Vulkan.cpp` at the `CmdSetViewport` stub, not only here,
+because the failure this criterion guards against is doing the flip twice, and the second flip is
+silent. A comment in the function Phase 5 is about to fill in is the cheapest place to stop that.
+
+**Why not `-fvk-invert-y`, which is what the phase document suggested first.**
+
+- **It is a hard error on pixel and compute shaders.** Measured, not assumed:
+  `error: -fvk-invert-y can only be used in VS/DS/GS/MS/Lib`. It compiles fine on `vs_6_6` and
+  `ms_6_6`, and emits exactly what it says - an `OpFNegate` on component 1 before the
+  `OpStore` to `gl_Position` - but the Reflector builds one `COMMON_DXC_ARGUMENTS` list and
+  hands it to every stage. Adopting the flag means splitting that list per stage inside
+  `ShaderReflection_ShaderCompiler.cpp`, a file the Windows build shares, for no capability the
+  viewport does not already give.
+- **A flip baked into bytecode is invisible at the API level.** Nothing in the backend would show
+  it. The viewport version sits in the function anyone debugging an upside-down frame opens
+  first.
+- **It keeps the SPIR-V a faithful translation of the HLSL**, which matters for P4.6: a
+  compiler-inserted negate in every vertex and mesh shader is noise in a structural comparison
+  against the DXIL output.
+- It is also the mapping every Direct3D-to-Vulkan translation layer uses, vkd3d-proton included.
+
+**Why not flip the projection matrices.** They are engine code, shared with the Direct3D path,
+and shaders do their own clip-space arithmetic against them. `RendererTypes.esh:92` converts a
+projected bounding box from clip space to UV space with
+`aabb.xwzy * float4( 0.5, -0.5, 0.5, -0.5 ) + 0.5`, where the negative Y terms encode the
+Direct3D convention, and then samples a depth pyramid with the result. Flipping the matrix breaks
+that; flipping the viewport does not, because the pyramid is rasterised through the same flipped
+viewport and lands in memory the same way it does on Direct3D. This is the whole reason the flip
+belongs in the rasteriser and not in the maths.
+
+**The consequence that is easy to miss: front-face winding.**
+
+Mirroring the viewport inverts triangle winding in framebuffer space, so the front-face mapping
+has to absorb it. Two inversions apply on the way to Vulkan and they cancel:
+
+1. `RHI_Direct3D12.cpp:5287` sets
+   `FrontCounterClockwise = ( m_frontFace == FrontFace::ClockWise )`. That reads backwards -
+   `FrontFace::CounterClockWise`, the RHI default, means front faces are **clockwise** in screen
+   space on Direct3D. It is upstream's code and Conventions rule 3 says to leave it alone. To
+   match Direct3D with no Y flip, Vulkan would have to invert the enum the same way.
+2. The negative viewport height inverts winding again.
+
+**So `RHI_Vulkan.cpp` maps `FrontFace` literally** - `ClockWise` to `VK_FRONT_FACE_CLOCKWISE` -
+and it is only correct *because* of the viewport flip. Remove the flip and this has to be swapped
+in the same commit. That derivation is recorded at the `CreatePipeline` stub too.
+
+**What needs nothing, checked rather than assumed:**
+
+- **`-fvk-use-dx-position-w` is not needed.** In Vulkan the `w` of `SV_Position` read by a pixel
+  shader holds `1/w` where Direct3D holds `w`. **No pixel shader in this engine reads
+  `SV_Position.w`.** Two read `SV_Position.xy`, `BilateralUpsample.esf:66` and
+  `OITResolve.esf:32`, both as integer pixel coordinates for a `Load`. `FragCoord.xy` is
+  framebuffer space with an upper-left origin in Vulkan exactly as `SV_Position.xy` is in
+  Direct3D, so both are already right. The `.w` uses elsewhere are on clip positions the shaders
+  compute themselves, not on the pixel shader input.
+- **Depth.** DirectXMath's projections already produce 0..1, which is Vulkan's range. Nothing to
+  do, and no `depthClipControl`.
+- **The fullscreen triangle.** `FullscreenTriangle.esh` writes clip-space positions directly,
+  bypassing the projection matrix, and encodes the same Direct3D convention: uv `(0,0)` maps to
+  clip `(-1, 1)`, the top of the screen with Y up. It goes through the viewport like everything
+  else, so the one flip covers it.
+
+**Not verified, and cannot be until Phase 5 renders.** Everything above is derived from the
+source and from measured compiler behaviour. The first real check is bring-up step 6, the
+offscreen clear, and step 7, the offscreen triangle: if the image is upside down, the flip is
+being applied twice or not at all. Check that before believing anything downstream of it.
 
 ### 2026-08-28 - P4.3 The bindless binding model
 
