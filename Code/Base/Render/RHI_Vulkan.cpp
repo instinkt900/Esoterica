@@ -186,6 +186,12 @@ namespace EE::Render::RHI
     // DestroyContext clears it.
     static bool g_meshShaderEnabled = false;
 
+    // **The pipeline dynamic state list has the same problem**, and no Context either.
+    // CreateGraphicsOrMeshPipeline declares VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR only when
+    // the extension is enabled, because declaring a dynamic state from a disabled extension is a
+    // validation error. Set and cleared alongside g_meshShaderEnabled.
+    static bool g_fragmentShadingRateEnabled = false;
+
     struct VulkanContext : Context
     {
         VkInstance                                                      m_instance = VK_NULL_HANDLE;
@@ -284,6 +290,10 @@ namespace EE::Render::RHI
         PFN_vkCmdDrawMeshTasksEXT                                       m_vkCmdDrawMeshTasks = nullptr;
         PFN_vkCmdDrawMeshTasksIndirectEXT                               m_vkCmdDrawMeshTasksIndirect = nullptr;
         PFN_vkCmdDrawMeshTasksIndirectCountEXT                          m_vkCmdDrawMeshTasksIndirectCount = nullptr;
+
+        // VK_KHR_fragment_shading_rate, optional for the same reason. See CmdSetShadingRate.
+        bool                                                            m_fragmentShadingRate = false;
+        PFN_vkCmdSetFragmentShadingRateKHR                              m_vkCmdSetFragmentShadingRate = nullptr;
 
         void*                                                           m_pRenderDocLibrary = nullptr;
         RENDERDOC_API_1_0_0*                                            m_pRenderDocAPI = nullptr;
@@ -985,6 +995,27 @@ namespace EE::Render::RHI
             }
         }
 
+        VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragmentShadingRateFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR };
+        if ( HasExtension( availableDeviceExtensions, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME ) )
+        {
+            VkPhysicalDeviceFeatures2 fragmentShadingRateQuery = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+            fragmentShadingRateQuery.pNext = &fragmentShadingRateFeatures;
+            vkGetPhysicalDeviceFeatures2( pVulkanContext->m_physicalDevice, &fragmentShadingRateQuery );
+
+            // Both, because the RHI exposes a per-draw rate and a per-tile image and
+            // CmdSetShadingRate takes them in one call.
+            if ( fragmentShadingRateFeatures.pipelineFragmentShadingRate && fragmentShadingRateFeatures.attachmentFragmentShadingRate )
+            {
+                deviceExtensions.emplace_back( VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME );
+                // Chained after the mesh shader features, which may or may not be there.
+                fragmentShadingRateFeatures.pNext = enabledFeatures.m_mutableDescriptorType.pNext;
+                enabledFeatures.m_mutableDescriptorType.pNext = &fragmentShadingRateFeatures;
+
+                pVulkanContext->m_fragmentShadingRate = true;
+                g_fragmentShadingRateEnabled = true;
+            }
+        }
+
         if ( !pVulkanContext->m_meshShader )
         {
             // Loud, because the engine has no fallback: RenderPass_DebugDraw will halt in
@@ -1007,6 +1038,12 @@ namespace EE::Render::RHI
         pVulkanContext->m_vkSetDebugUtilsObjectName = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkSetDebugUtilsObjectNameEXT" ) );
         pVulkanContext->m_vkCmdBeginDebugUtilsLabel = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdBeginDebugUtilsLabelEXT" ) );
         pVulkanContext->m_vkCmdEndDebugUtilsLabel = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdEndDebugUtilsLabelEXT" ) );
+
+        if ( pVulkanContext->m_fragmentShadingRate )
+        {
+            pVulkanContext->m_vkCmdSetFragmentShadingRate = reinterpret_cast<PFN_vkCmdSetFragmentShadingRateKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdSetFragmentShadingRateKHR" ) );
+            EE_ASSERT( pVulkanContext->m_vkCmdSetFragmentShadingRate != nullptr );
+        }
 
         if ( pVulkanContext->m_meshShader )
         {
@@ -1183,8 +1220,10 @@ namespace EE::Render::RHI
         pVulkanContext->m_resourceHeapAllocator.Shutdown();
         pVulkanContext->m_samplerHeapAllocator.Shutdown();
 
-        // The barrier mapping reads this and outlives no context. See its declaration.
+        // The barrier mapping and the pipeline dynamic state list read these, and neither
+        // outlives a context. See their declarations.
         g_meshShaderEnabled = false;
+        g_fragmentShadingRateEnabled = false;
 
         if ( pVulkanContext->m_heapDescriptorPool != VK_NULL_HANDLE )
         {
@@ -1475,6 +1514,19 @@ namespace EE::Render::RHI
         PFN_vkCmdDrawMeshTasksEXT                           m_vkCmdDrawMeshTasks = nullptr;
         PFN_vkCmdDrawMeshTasksIndirectEXT                   m_vkCmdDrawMeshTasksIndirect = nullptr;
         PFN_vkCmdDrawMeshTasksIndirectCountEXT              m_vkCmdDrawMeshTasksIndirectCount = nullptr;
+
+        // Variable rate shading. m_shadingRateCaps is copied from DeviceCapabilities the way
+        // Direct3D 12 copies it at RHI_Direct3D12.cpp:2862, and CmdSetShadingRate guards on it
+        // exactly as the reference does.
+        PFN_vkCmdSetFragmentShadingRateKHR                  m_vkCmdSetFragmentShadingRate = nullptr;
+        TBitFlags<ShadingRateCaps>                          m_shadingRateCaps = {};
+
+        // **Direct3D 12 binds the shading rate image with a command and Vulkan makes it a render
+        // pass attachment**, so CmdSetShadingRate can only record it and BeginRenderingIfPending
+        // chains it. Null when no image is bound.
+        VkImageView                                         m_shadingRateImageView = VK_NULL_HANDLE;
+        // DeviceCapabilities::m_shadingRateTexelWidth and Height, copied at creation.
+        VkExtent2D                                          m_shadingRateTexelSize = {};
 
         // The same two fields Direct3D12CommandBuffer carries at RHI_Direct3D12.cpp:1526, with
         // the same starting value, so a marker gets the same colour on both backends.
@@ -2405,6 +2457,15 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasks = pVulkanContext->m_vkCmdDrawMeshTasks;
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirect = pVulkanContext->m_vkCmdDrawMeshTasksIndirect;
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirectCount = pVulkanContext->m_vkCmdDrawMeshTasksIndirectCount;
+        pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate = pVulkanContext->m_vkCmdSetFragmentShadingRate;
+        pVulkanCommandBuffer->m_shadingRateCaps = pContext->m_deviceCapabilities.m_shadingRateCaps;
+        // Carried here because CmdSetShadingRate is handed a CommandBuffer and no Context, the
+        // same reason the caps and the entry point come along.
+        pVulkanCommandBuffer->m_shadingRateTexelSize =
+        {
+            pContext->m_deviceCapabilities.m_shadingRateTexelWidth,
+            pContext->m_deviceCapabilities.m_shadingRateTexelHeight
+        };
         pVulkanCommandBuffer->m_pQueue = parameters.m_pCommandPool->m_pQueue;
         pVulkanCommandBuffer->m_pCommandPool = parameters.m_pCommandPool;
         pVulkanCommandBuffer->m_nodeIndex = parameters.m_pCommandPool->m_pQueue->m_nodeIndex;
@@ -2477,6 +2538,18 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_isRendering = false;
         pVulkanCommandBuffer->m_needsRenderingBegin = false;
         pVulkanCommandBuffer->m_rootConstantRingOffset = 0;
+        pVulkanCommandBuffer->m_shadingRateImageView = VK_NULL_HANDLE;
+
+        // **A declared dynamic state that is never set leaves every draw undefined.** Every
+        // pipeline declares the fragment shading rate state when the extension is enabled, and
+        // nothing in the engine sets it, so the full rate is set once here. It is what a
+        // pipeline without variable rate shading does anyway.
+        if ( pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate != nullptr )
+        {
+            VkExtent2D const fullRate = { 1, 1 };
+            VkFragmentShadingRateCombinerOpKHR const keepBoth[2] = { VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR };
+            pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate( pVulkanCommandBuffer->m_commandBuffer, &fullRate, keepBoth );
+        }
 
         // A barrier that outlived its command buffer would apply to the wrong work. Direct3D 12
         // asserts the same three lists are empty at RHI_Direct3D12.cpp:2906.
@@ -2531,6 +2604,19 @@ namespace EE::Render::RHI
         renderingInfo.pColorAttachments = pVulkanCommandBuffer->m_colorAttachments.data();
         renderingInfo.pDepthAttachment = pVulkanCommandBuffer->m_hasDepthAttachment ? &pVulkanCommandBuffer->m_depthAttachment : nullptr;
         renderingInfo.pStencilAttachment = pVulkanCommandBuffer->m_hasStencilAttachment ? &pVulkanCommandBuffer->m_stencilAttachment : nullptr;
+
+        // The shading rate image, which CmdSetShadingRate recorded because Vulkan makes it an
+        // attachment where Direct3D 12 makes it a command. Chained rather than set, so a pass
+        // without one carries no pNext at all.
+        VkRenderingFragmentShadingRateAttachmentInfoKHR shadingRateAttachment = { VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR };
+        if ( pVulkanCommandBuffer->m_shadingRateImageView != VK_NULL_HANDLE )
+        {
+            shadingRateAttachment.imageView = pVulkanCommandBuffer->m_shadingRateImageView;
+            shadingRateAttachment.imageLayout = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+            shadingRateAttachment.shadingRateAttachmentTexelSize = pVulkanCommandBuffer->m_shadingRateTexelSize;
+
+            renderingInfo.pNext = &shadingRateAttachment;
+        }
 
         vkCmdBeginRendering( pVulkanCommandBuffer->m_commandBuffer, &renderingInfo );
 
@@ -2739,12 +2825,90 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_needsRenderingBegin = true;
     }
 
+    // A Direct3D shading rate is a pair of coarse pixel dimensions and so is the Vulkan one, so
+    // these two line up exactly. Read next to D3D12ShadingRate at RHI_Direct3D12.cpp:579.
+    static VkExtent2D VulkanFragmentSize( ShadingRate shadingRate )
+    {
+        switch ( shadingRate )
+        {
+            case ShadingRate::Full:     return { 1, 1 };
+            case ShadingRate::Rate1x2:  return { 1, 2 };
+            case ShadingRate::Rate2x1:  return { 2, 1 };
+            case ShadingRate::Half:     return { 2, 2 };
+            case ShadingRate::Rate2x4:  return { 2, 4 };
+            case ShadingRate::Rate4x2:  return { 4, 2 };
+            case ShadingRate::Quarter:  return { 4, 4 };
+            default: break;
+        }
+
+        EE_ASSERT( false );
+        return { 1, 1 };
+    }
+
+    // **Four of the five combiners map and the fifth does not.** Direct3D's SUM adds the two
+    // rates and Vulkan's nearest operation, MUL, multiplies them. There is no Vulkan combiner
+    // that sums, so SUM is mapped to MUL and the two backends would disagree on it. Nothing in
+    // the engine calls CmdSetShadingRate at all, so nothing disagrees today. Written up in the
+    // P5.15 entry in Docs/Linux/Progress.md.
+    static VkFragmentShadingRateCombinerOpKHR VulkanShadingRateCombiner( ShadingRateCombiner combiner )
+    {
+        switch ( combiner )
+        {
+            case ShadingRateCombiner::Passthrough:  return VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR;
+            case ShadingRateCombiner::Override:     return VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR;
+            case ShadingRateCombiner::Min:          return VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MIN_KHR;
+            case ShadingRateCombiner::Max:          return VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR;
+            case ShadingRateCombiner::Sum:          return VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR;
+    }
+
     void CmdSetShadingRate( CommandBuffer* pCommandBuffer, ShadingRate shadingRate, Texture* pShadingRateTexture, ShadingRateCombiner postRasterizerCombiner, ShadingRateCombiner finalCombiner )
     {
-        // P5.15. It needs VK_KHR_fragment_shading_rate at device creation, and
-        // FillDeviceCapabilities has to stop reporting ShadingRate::NotSupported before the
-        // engine will ever call this.
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        // **Both guards are the reference's, and both are false today.** `FillDeviceCapabilities`
+        // reports `ShadingRateCaps::NotSupported`, matching `RHI_Direct3D12.cpp:2178`, which
+        // reports the same with a TODO. Changing it on one backend and not the other would make
+        // Linux and Windows render the same scene differently, which acceptance criterion 7
+        // exists to catch.
+        //
+        // Turning variable rate shading on needs three things, not one. The capability line here
+        // and in the Direct3D 12 backend is the first. The second and third are below, in the
+        // per-tile branch.
+        if ( pVulkanCommandBuffer->m_shadingRateCaps.IsFlagSet( ShadingRateCaps::PerDraw ) )
+        {
+            EE_ASSERT( pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate != nullptr );
+
+            VkExtent2D const fragmentSize = VulkanFragmentSize( shadingRate );
+            VkFragmentShadingRateCombinerOpKHR const combiners[2] =
+            {
+                VulkanShadingRateCombiner( postRasterizerCombiner ),
+                VulkanShadingRateCombiner( finalCombiner )
+            };
+
+            pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate( pVulkanCommandBuffer->m_commandBuffer, &fragmentSize, combiners );
+        }
+
+        if ( pShadingRateTexture != nullptr && pVulkanCommandBuffer->m_shadingRateCaps.IsFlagSet( ShadingRateCaps::PerTile ) )
+        {
+            VulkanTexture const* pVulkanTexture = static_cast<VulkanTexture const*>( pShadingRateTexture );
+
+            // Recorded, not bound. RSSetShadingRateImage is a command on Direct3D 12 and the
+            // Vulkan equivalent is an attachment of the render pass, so BeginRenderingIfPending
+            // is where it reaches the device. Mip 0 of layer 0, which is what a rate image is.
+            //
+            // **Two things this path still needs, and neither can be written before something
+            // creates a rate image.** CreateTexture does not set
+            // VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR, which such an image
+            // requires, and the view below is the render target view, which P5.6 only builds for
+            // a texture created with DescriptorTypeFlags::RenderTarget. A rate image wants a view
+            // of its own. Both are one small change each, and both are guesswork until there is a
+            // caller to check them against.
+            pVulkanCommandBuffer->m_shadingRateImageView = pVulkanTexture->RenderTargetView( 0, 0 );
+        }
     }
 
     void CmdSetViewport( CommandBuffer* pCommandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth )
@@ -6102,16 +6266,22 @@ namespace EE::Render::RHI
         // when independentBlend is supported, and writes the same state to every attachment
         // otherwise. The engine fills every attachment either way, so the flag has no effect.
 
-        VkDynamicState const dynamicStates[3] =
+        TInlineVector<VkDynamicState, 4> dynamicStates;
+        dynamicStates.emplace_back( VK_DYNAMIC_STATE_VIEWPORT );
+        dynamicStates.emplace_back( VK_DYNAMIC_STATE_SCISSOR );
+        dynamicStates.emplace_back( VK_DYNAMIC_STATE_STENCIL_REFERENCE );
+
+        // Only when the extension is enabled: declaring a dynamic state from a disabled
+        // extension is a validation error. BeginCommandBuffer sets the full rate once so the
+        // state is never left undefined.
+        if ( g_fragmentShadingRateEnabled )
         {
-            VK_DYNAMIC_STATE_VIEWPORT,
-            VK_DYNAMIC_STATE_SCISSOR,
-            VK_DYNAMIC_STATE_STENCIL_REFERENCE,
-        };
+            dynamicStates.emplace_back( VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR );
+        }
 
         VkPipelineDynamicStateCreateInfo dynamicState = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
-        dynamicState.dynamicStateCount = 3;
-        dynamicState.pDynamicStates = dynamicStates;
+        dynamicState.dynamicStateCount = uint32_t( dynamicStates.size() );
+        dynamicState.pDynamicStates = dynamicStates.data();
 
         // Dynamic rendering, so there is no VkRenderPass and no framebuffer. The formats the
         // pipeline will be used with are declared here instead.

@@ -14,15 +14,15 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 answered: the plain loader, not `volk`. **P5.1 to P5.10 are all written and have never been
 run.**
 
-**Which of the 16 groups are real: P5.1 to P5.12 and P5.14, all unverified.** That is thirteen of
-the sixteen. P5.7 covers graphics and compute pipelines, with raytracing left to P5.16. **The three
-that are not real are P5.13, which cannot be, and P5.15 and P5.16, which nothing uses.** Phase 5's
-own note says this count is the single most important piece of state, so it leads this section.
+**Which of the 16 groups are real: P5.1 to P5.12, P5.14 and P5.15, all unverified.** That is
+fourteen of the sixteen. P5.7 covers graphics and compute pipelines, with raytracing left to P5.16.
+**The two that are not are P5.13, which cannot be until open question 7 is answered, and P5.16.**
+Phase 5's own note says this count is the single most important piece of state, so it leads this
+section.
 
-**10 `EE_UNIMPLEMENTED_FUNCTION` remain, and every one is accounted for**: six are P5.16
-raytracing, one is P5.15 variable rate shading, one is the indirect refusal from open question 7,
-and two are markers rather than functions - the custom sampler border colour and the
-static-sampler path.
+**9 `EE_UNIMPLEMENTED_FUNCTION` remain, and every one is accounted for**: six are P5.16
+raytracing, one is the indirect refusal from open question 7, and two are markers rather than
+functions - the custom sampler border colour and the static-sampler path.
 
 **Neither GPU in this development machine supports mesh shaders**, so the engine's debug draw
 cannot run here. `VK_EXT_mesh_shader` is present only on `llvmpipe`, the software rasteriser. The
@@ -115,7 +115,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.12 and P5.14 written, never run**, and P5.13 is half written. 10 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and all 10 belong to P5.15, P5.16 or open question 7. **13 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.12, P5.14 and P5.15 written, never run**, and P5.13 is half written. 9 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and all 9 belong to P5.16 or open question 7. **14 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -128,17 +128,17 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.14-mesh-shaders`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.15-variable-rate-shading`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
 `p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
 `p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34),
 `p5.3-swapchain` (#35), `p5.13-indirect-draws` (#36), `p5.12-debug-utilities` (#37),
-`p5.11-query-pools` (#38), then this. None merged yet. Nothing has run any of it.
+`p5.11-query-pools` (#38), `p5.14-mesh-shaders` (#39), then this. None merged yet. Nothing has run
+any of it.
 
-**Every group the engine's frame uses is now written.** What is left is P5.15 variable rate
-shading and P5.16 raytracing, and **the engine calls neither**. `CmdSetShadingRate` is only
-reached once `FillDeviceCapabilities` stops reporting `ShadingRate::NotSupported`, which the
-Direct3D 12 backend also reports, and nothing anywhere creates an acceleration structure.
+**Next and last: P5.16, raytracing.** Nothing anywhere creates an acceleration structure, so it is
+parity work rather than something the frame needs. It is the largest of the optional groups and it
+holds the last six `EE_UNIMPLEMENTED_FUNCTION`.
 
 **Open question 7 blocks the frame and is not scheduled.** It is the indirect-draw decision
 described above and in the P5.13 entry. **No amount of further Phase 5 work moves past it**, so it
@@ -185,6 +185,84 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.15 Variable rate shading. Written, and deliberately switched off
+
+**`CmdSetShadingRate` is implemented and the reported capability stays `NotSupported`.** 9
+`EE_UNIMPLEMENTED_FUNCTION` remain, down from 10. Nothing has run, and **nothing can reach this
+code until a decision is taken on the Direct3D 12 side.**
+
+#### Why it is off, which is the whole of the group
+
+`RHI_Direct3D12.cpp:2177` sets `m_shadingRate` and `m_shadingRateCaps` to `NotSupported` with a
+TODO, so `CmdSetShadingRate` is a no-op on the reference too. Nothing in the engine calls it either
+way.
+
+Reporting the real device capability here would be a divergence **we** introduced: the engine would
+start shading at a reduced rate on Linux and not on Windows, and acceptance criterion 7 is a
+screenshot comparison between the two. So the capability line matches the reference exactly, and
+the code behind it is written and reachable the moment both backends change together.
+
+#### Turning it on needs three things, not one
+
+| What | Where |
+|---|---|
+| The capability line | `FillDeviceCapabilities` here and `RHI_Direct3D12.cpp:2177` there. Both, or the two backends diverge. |
+| `VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR` on a rate image | `CreateTexture` does not set it, and a rate image requires it. |
+| A view for the rate image | The per-tile path uses the render target view, which P5.6 only builds for a texture created with `DescriptorTypeFlags::RenderTarget`. A rate image wants a view of its own. |
+
+The last two are guesswork until something creates a rate image, and both are small.
+
+#### The structural difference: a command against an attachment
+
+**Direct3D 12 binds the shading rate image with `RSSetShadingRateImage`, a command. Vulkan makes it
+an attachment of the render pass.** So `CmdSetShadingRate` records the view on the command buffer
+and `BeginRenderingIfPending` chains a `VkRenderingFragmentShadingRateAttachmentInfoKHR` onto the
+`VkRenderingInfo`. A pass without one carries no `pNext` at all.
+
+The per-draw rate maps directly: `vkCmdSetFragmentShadingRateKHR`, guarded on the same
+`m_shadingRateCaps` the reference copies onto its command buffer at `RHI_Direct3D12.cpp:2862`.
+
+#### Four combiners map and the fifth does not
+
+`Passthrough`, `Override`, `Min` and `Max` are `KEEP`, `REPLACE`, `MIN` and `MAX`. **Direct3D's
+`SUM` adds the two rates and Vulkan's nearest operation, `MUL`, multiplies them.** There is no
+Vulkan combiner that sums, so `Sum` maps to `MUL` and the two backends would disagree on it.
+Nothing calls `CmdSetShadingRate`, so nothing disagrees today.
+
+#### A dynamic state that has to be set even though nothing uses it
+
+Every graphics pipeline declares `VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR` when the extension is
+enabled, because `vkCmdSetFragmentShadingRateKHR` needs it. **A declared dynamic state that is
+never set leaves every draw undefined**, and nothing in the engine sets it, so `BeginCommandBuffer`
+sets the full rate once per command buffer. That is what a pipeline without variable rate shading
+does anyway.
+
+The list is built conditionally, through a second file static, `g_fragmentShadingRateEnabled`,
+for the same reason `g_meshShaderEnabled` exists: declaring a dynamic state from a disabled
+extension is a validation error, and `CreateGraphicsOrMeshPipeline` has no `Context`.
+
+`VK_KHR_fragment_shading_rate` is optional like `VK_EXT_mesh_shader`, and needs both
+`pipelineFragmentShadingRate` and `attachmentFragmentShadingRate`.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 111 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. Unchanged on purpose:
+  `vkCmdSetFragmentShadingRateKHR` is an extension function looked up through
+  `vkGetDeviceProcAddr`.
+- The new code adds no compiler warning.
+
+#### Not verified, and unverifiable as it stands
+
+Nothing here runs while the capability says `NotSupported`. **The pipeline change is the one to
+watch**: every graphics pipeline now declares one more dynamic state on a device that has the
+extension, and a mistake there breaks every draw rather than only the shading rate. The default
+rate set in `BeginCommandBuffer` is what stops that.
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.14 Mesh shaders. No GPU in this machine has them
 
