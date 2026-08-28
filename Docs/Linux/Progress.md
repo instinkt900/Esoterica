@@ -11,13 +11,17 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5, P5.7 and P5.8 are written and
-have never been run.**
+answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7 and P5.8 are
+written and have never been run.**
 
-**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5, P5.7 and P5.8, all unverified.** P5.2
-is complete except `QueuePresent`, which needs P5.3's swapchain; P5.7 covers graphics and compute
-pipelines, with mesh and raytracing left to P5.14 and P5.16. Phase 5's own note says this count is
-the single most important piece of state, so it leads this section.
+**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5, P5.6, P5.7 and P5.8, all unverified.**
+P5.2 is complete except `QueuePresent`, which needs P5.3's swapchain; P5.7 covers graphics and
+compute pipelines, with mesh and raytracing left to P5.14 and P5.16. Phase 5's own note says this
+count is the single most important piece of state, so it leads this section.
+
+**The `DataFormat` to `VkFormat` mapping is complete, and there is exactly one of it.** All 99
+formats map, the three `DeviceCapabilities` format arrays are filled from the device, and every
+texture, buffer view and pipeline attachment format reads the same function.
 
 **Both Phase 4 decisions are now implemented, each in exactly one place.** Clip-space Y is
 inverted in `CmdSetViewport` with a negative viewport height, and nowhere else. Heap set 1 is
@@ -78,7 +82,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5, P5.7 and P5.8 written, never run**; 52 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 52 are markers rather than RHI functions: the `VulkanFormat` default, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **6 of the 16 groups are real, all unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7 and P5.8 written, never run**; 45 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 45 are markers rather than RHI functions: the custom sampler border colour, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **7 of the 16 groups are real, all unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -91,22 +95,20 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.8-draw-commands`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.6-textures-samplers`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
-`p5.5-buffers` (#28), `p5.7-pipelines` (#30), then this. None merged yet. Nothing has run any of
-it.
+`p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31), then this. None merged
+yet. Nothing has run any of it.
 
-**Next: P5.6, textures and samplers.** It is the largest remaining group and it blocks a lot: the
-rest of `VulkanFormat`, the three `DeviceCapabilities` format arrays, and the per-subresource
-image views that `CmdSetRenderTargets` currently asserts against. P5.9, barriers, is the other
-candidate and is smaller.
+**Next: P5.9, barriers.** It is now the one group that everything already written is waiting on.
+Nothing can execute a correct frame until image layouts move, and P5.6 hands it three specific
+obligations, listed below. P5.10, copies and clears, is the other candidate and is smaller.
 
-**P5.8 left three things for other groups to finish**, each asserted or commented at the line
-rather than silently skipped:
+**Still owed to other groups**, each asserted or commented at the line rather than silently
+skipped:
 
 | Owed by | What |
 |---|---|
-| P5.6 | Per-subresource image views. `CmdSetRenderTargets` asserts that `colorArraySlices`, `colorMipSlices`, `depthArraySlice` and `depthMipSlice` are all zero or empty, rather than quietly rendering to mip 0 of slice 0. It also extends the placeholder `VulkanTexture`. |
 | P5.9 | Every barrier must call `EndRenderingIfActive` first. A barrier inside dynamic rendering is invalid. |
 | P5.10 | Same, for every copy and clear. |
 
@@ -115,8 +117,8 @@ rather than silently skipped:
 | Group | What it owes |
 |---|---|
 | P5.3 | `QueuePresent`, which is still a stub. `VkPresentInfoKHR` takes binary semaphores only, so the swapchain has to carry one per image, the submit before the present must signal it next to the timeline value, and the present waits on it. Acquire needs the mirror of the same thing. |
-| P5.6 | `DeviceCapabilities::m_canShaderReadFrom`, `m_canShaderWriteTo`, `m_canRenderTargetWriteTo`, all left false. Fill them in the same task as the `DataFormat` to `VkFormat` mapping, never separately. **Complete the existing `VulkanFormat` function; do not write a second mapping.** It holds the six entries buffers need and asserts on the rest. |
-| P5.9 | `EndCommandBuffer` is where a batched barrier flush belongs, if the Vulkan side batches them the way Direct3D 12 does. The line is marked. |
+| P5.9 | **Three obligations from P5.6, and getting any of them wrong looks like a texture bug.** (1) A `VkImage` is always created in `VK_IMAGE_LAYOUT_UNDEFINED`, whatever `TextureParameters::m_initialState` says, so the first barrier on a texture has to transition from `VulkanTexture::m_currentLayout` and not from the state the caller passes. (2) A texture the shader reads has to reach `VulkanTexture::m_shaderReadLayout`, which is `GENERAL` rather than `SHADER_READ_ONLY_OPTIMAL` when the texture is also an `RWTexture`, because that is the layout its heap descriptor was written with. (3) Every `RWTexture` access needs `GENERAL`. Also: `EndCommandBuffer` is where a batched barrier flush belongs, if the Vulkan side batches them the way Direct3D 12 does. The line is marked. |
+| P5.10 | `vkCmdCopyBufferToImage`'s `bufferRowLength` must come from `GetTextureCopyRowStride`. The engine writes its staging rows at that stride and the copy has to read them at it. |
 | P5.9, P5.12 | Two `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT` sites in `QueueDeviceWait` and `QueueSubmit`, listed below. P5.12 builds its nine `SetDebugName` overloads on `SetVulkanObjectName`, which P5.2 wrote. |
 
 ## `ALL_COMMANDS` sites
@@ -143,6 +145,122 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.6 Textures and samplers. The format mapping is complete
+
+**All seven functions are implemented, and the `DataFormat` to `VkFormat` mapping is finished.**
+45 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 52. Nothing has run.
+
+**All 99 `DataFormat` members map, and there is exactly one mapping.** The phase document warns
+that two mappings which disagree corrupt textures in a way that looks like a bug somewhere else,
+so `VulkanFormat` is the only one: image creation, buffer views, pipeline attachment formats and
+the device capability query all come through it.
+
+#### Two things in the format mapping that are easy to get backwards
+
+**Vulkan names a packed format most significant component first, and DXGI names it least
+significant first.** So `DXGI_FORMAT_B5G6R5_UNORM` is `VK_FORMAT_R5G6B5_UNORM_PACK16`, not
+`VK_FORMAT_B5G6R5_UNORM_PACK16`. The same reversal applies to every packed entry:
+`B5G5R5A1` becomes `A1R5G5B5`, `B4G4R4A4` becomes `A4R4G4B4`, `R10G10B10A2` becomes
+`A2B10G10R10`, `R11G11B10` becomes `B10G11R11`, `R9G9B9E5` becomes `E5B9G9R9`. Getting one
+backwards swaps red and blue on that format alone, which is exactly the kind of failure that
+looks like a bug in the asset.
+
+**`RGB565_UNorm` and `BGR565_UNorm` deliberately map to the same `VkFormat`.** Vulkan can tell
+them apart and Direct3D cannot, so mapping them faithfully would make the two backends draw the
+same asset differently. See the upstream note below. Nothing in the engine uses either.
+
+Two places where Vulkan is the more exact of the two, and the mapping says so rather than
+copying Direct3D:
+
+| `DataFormat` | Direct3D 12 | Vulkan |
+|---|---|---|
+| `DXBC1_RGB_*` against `DXBC1_RGBA_*` | Both are `DXGI_FORMAT_BC1_UNORM` | `VK_FORMAT_BC1_RGB_*` and `VK_FORMAT_BC1_RGBA_*`, which is the distinction the `DataFormat` enum already makes |
+| The 28 ASTC formats | `DXGI_FORMAT_UNKNOWN`, no ASTC in Direct3D | All present, gated on `textureCompressionASTC_LDR`, which nothing enables. `FillDeviceCapabilities` reports each one honestly |
+
+`R1_UNorm` has no Vulkan equivalent at all and returns `VK_FORMAT_UNDEFINED` without asserting,
+which mirrors what the Direct3D 12 backend does with the ASTC formats it cannot express.
+
+#### Views, because Vulkan puts the subresource in the view
+
+Direct3D 12 selects a subresource in the descriptor. Vulkan selects it in the `VkImageView`, so
+`CreateTexture` builds every view the engine can ask for, up front:
+
+| View | How many | Why |
+|---|---|---|
+| Sampled | one | Covers every mip and layer. A depth-stencil image must name one aspect, and depth is the one the engine reads, matching `RHI_Direct3D12.cpp:4597`. |
+| Storage | one per mip level | An `RWTexture` handle names a mip. `RenderPass_GTAO.cpp:263` asks for five of them on one texture. |
+| Attachment | one per mip level per array layer | `RenderPass_GlobalEnvironmentMap.cpp:304` renders to one face of a cube at one mip, and `RenderPass_CascadedShadow.cpp` to one of four array slices. |
+
+**That closes the assert P5.8 left.** `CmdSetRenderTargets` now honours `colorArraySlices`,
+`colorMipSlices`, `depthArraySlice` and `depthMipSlice`, and the render area is the mip's extent
+rather than the whole texture's.
+
+An attachment view takes every aspect the image has and the sampled view takes one, which is not
+a detail either API makes obvious.
+
+#### Three things P5.9 has to know, and none of them are guessable from `RHI.h`
+
+These are the reason the "owed by later groups" table above now has a long P5.9 row.
+
+1. **A `VkImage` is always created in `VK_IMAGE_LAYOUT_UNDEFINED`.** `vkCreateImage` accepts that
+   or `PREINITIALIZED`, and the second is for linear tiling. Direct3D 12 takes the initial layout
+   directly, so the engine believes a fresh texture is already in `m_initialState` and the image
+   is not. `VulkanTexture::m_currentLayout` records the truth, and the first barrier has to read
+   it rather than the state the caller passes.
+2. **A texture that is both `Texture` and `RWTexture` sits in `VK_IMAGE_LAYOUT_GENERAL`**, not in
+   `SHADER_READ_ONLY_OPTIMAL`. A storage image descriptor may name no other layout and one image
+   cannot be in two layouts at once. `VulkanTexture::m_shaderReadLayout` carries the layout the
+   descriptor was actually written with. `RenderPass_GTAO.cpp:111` creates such a texture.
+3. **`GetTextureCopyRowStride` is P5.10's `bufferRowLength`.** Direct3D 12 reads its answer out of
+   `GetCopyableFootprints`; Vulkan has no such call because the staging layout is the caller's to
+   choose, so the row stride is `ComputeFormatRowStride` rounded up to the device's
+   `optimalBufferCopyRowPitchAlignment`. The engine writes its rows at that stride and
+   `vkCmdCopyBufferToImage` has to read them at it.
+
+#### Samplers
+
+Six samplers, created once in `RenderSystem::Initialize`, and two of them need something Vulkan
+puts outside `VkSamplerCreateInfo`:
+
+- **`FilterMode::Min` and `FilterMode::Max` are a reduction mode**, not a filter.
+  `COMMON_SAMPLER_LINEAR_CLAMP_MAX` is one of the six, so `samplerFilterMinmax` is now a device
+  requirement. It is core in Vulkan 1.2.
+- **The border colour is one of six fixed values.** Direct3D 12 takes any colour;
+  `VK_EXT_custom_border_color` is the only way to that and it is not enabled. Transparent black,
+  opaque black and opaque white map; anything else halts and names the sampler. Every sampler the
+  engine creates leaves the default of transparent black, and only a `ClampToBorder` address mode
+  reads it at all.
+
+#### One correction to P5.5
+
+**`descriptorBindingStorageTexelBufferUpdateAfterBind` was missing.** Every descriptor type in
+the heap's mutable list has to support update-after-bind, and the list holds a storage texel
+buffer for `RWBuffer<T>`. The other five types were asked for and this one was not, so creating
+the set layout would have failed validation on the first run. It is one line, next to its five
+siblings, and it changes nothing else.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build still compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged; confirmed by building them without this change.
+- 86 `vk*` symbols resolve against `libvulkan.so.1`, up from 81. None unresolved.
+- Every one of the 99 `DataFormat` members has a case in `VulkanFormat`, checked by script
+  against the enum in `RHI.h` rather than by reading.
+
+#### Not verified
+
+No image created, no view bound, no texture sampled. The order to check things in when Phase 6
+makes that possible:
+
+1. **The packed formats.** Nothing in the engine uses one today, so a mistake there will surface
+   the first time an asset does, long after this.
+2. That a cube face at a given mip is the subresource the attachment view actually names. Six
+   faces and nine mips give 54 views and only one right answer per draw.
+3. That the sampled and storage descriptors of one texture agree with the layout P5.9 puts it in.
+
+**Upstream files edited: none.**
 
 ### 2026-08-28 - P5.8 Render pass and draw commands. Both Phase 4 decisions land
 
@@ -2520,6 +2638,15 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `RHI_Direct3D12.cpp:284` - `RGB565_UNorm` and `BGR565_UNorm` map to the same DXGI format
+
+Both return `DXGI_FORMAT_B5G6R5_UNORM`. Under DXGI's naming, which lists a packed format's
+components least significant first, that is the `BGR565` one; `RGB565` has no DXGI format at all.
+Vulkan has both, so the Vulkan backend could tell them apart and chooses not to: mapping them
+faithfully would make the two backends draw the same asset differently. Nothing in the engine uses
+either format, so this costs nothing today. Recorded because a future reader will see two
+`DataFormat` members reaching one `VkFormat` and assume it is a copy-paste slip.
 
 ### Eleven functions are `inline` on one side of the declaration only
 
