@@ -2851,9 +2851,159 @@ namespace EE::Render::RHI
         EE_UNIMPLEMENTED_FUNCTION();
     }
 
+    //-------------------------------------------------------------------------
+    // Indirect draws and command signatures
+    //-------------------------------------------------------------------------
+    // **The engine's command signatures cannot be expressed by a Vulkan indirect draw, and no
+    // amount of work in this file changes that.** A Direct3D 12 command signature can set root
+    // constants and bind root descriptors per command. Vulkan's indirect draws read draw
+    // arguments and nothing else, and a compute pre-pass does not help, because a pre-pass
+    // cannot bind a descriptor either.
+    //
+    // Every signature the engine builds carries both. `EngineShader.cpp:108` walks the root
+    // signature's descriptor reflections and emits one argument per root parameter before the
+    // draw argument, so one material command is laid out like this:
+    //
+    //     [ root constants   40 bytes ]   set 0 binding b0, a uniform buffer on Vulkan
+    //     [ root CBV address  8 bytes ]   set 0 binding b1, a uniform buffer on Vulkan
+    //     [ dispatch args    12 bytes ]   VkDispatchIndirectCommand
+    //
+    // `vkCmdDrawIndirect` takes a stride, so it can read the last block out of a fat struct. It
+    // cannot rebind the first two per command, and `BucketResolve.esf:36` writes a different
+    // value into them for each command in the buffer.
+    //
+    // **So this group lands its mechanical half and refuses the rest, by decision.**
+    // `CreateCommandSignature` and `DestroyCommandSignature` are complete and record the layout
+    // any later answer needs. `CmdExecuteIndirect` is complete for a signature that carries only
+    // a draw or dispatch argument, and halts with the reason for one that carries root data.
+    // **No engine call site takes the working path today**, so nothing in the frame draws yet.
+    //
+    // Closing it needs a change on the shader side, which is Phase 4's, and there are two
+    // shapes for it. Neither is this file's to choose:
+    //
+    // - The shader reads its own command's root data by indexing the argument buffer with
+    //   `SV_DrawIndex`, which Vulkan has as core `gl_DrawID`. One indirect call then covers the
+    //   whole buffer and no extension is needed. It changes `RHI.esh` and the renderer shaders,
+    //   so all 46 stages recompile and Windows sees it too.
+    // - Root constants become Vulkan push constants and root descriptors become buffer device
+    //   addresses, driven by `VK_EXT_device_generated_commands`. That extension can set push
+    //   constants per command and still cannot bind a descriptor set, so it needs the same
+    //   shader change plus a device requirement the Phase 4 list does not have.
+
+    // Declared here rather than with CreateCommandSignature below, because CmdExecuteIndirect
+    // reads it and is defined first.
+    struct VulkanCommandSignature final : CommandSignature
+    {
+        // Where the draw or dispatch argument sits inside one command. Direct3D 12 packs the
+        // root arguments ahead of it and Vulkan reads only this part, at CommandSignature::
+        // m_stride, so this is the offset the indirect call is given.
+        uint32_t                                            m_drawArgumentOffset = 0;
+
+        // True when the signature also sets root constants or binds root descriptors per
+        // command, which is the part Vulkan has no command for. See the note above.
+        bool                                                m_hasRootArguments = false;
+    };
+
     void CmdExecuteIndirect( CommandBuffer* pCommandBuffer, CommandSignature const* pCommandSignature, uint32_t maxNumCommands, Buffer const* pIndirectBuffer, uint64_t indirectBufferOffset, Buffer const* pCounterBuffer, uint64_t counterBufferOffset )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer*            pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanCommandSignature const*   pVulkanCommandSignature = static_cast<VulkanCommandSignature const*>( pCommandSignature );
+        VulkanBuffer const*             pVulkanIndirectBuffer = static_cast<VulkanBuffer const*>( pIndirectBuffer );
+        VulkanBuffer const*             pVulkanCounterBuffer = static_cast<VulkanBuffer const*>( pCounterBuffer );
+
+        EE_ASSERT( ( pVulkanIndirectBuffer->m_stride % IndirectCommandAlignment ) == 0 );
+        EE_ASSERT( pVulkanIndirectBuffer->m_stride == pVulkanCommandSignature->m_stride );
+
+        if ( pVulkanCommandSignature->m_hasRootArguments )
+        {
+            EE_LOG_ERROR( LogCategory::Render, "RHI/CmdExecuteIndirect", "This command signature sets root constants or binds root descriptors per command, which no Vulkan indirect draw can do. See the note above CmdExecuteIndirect in RHI_Vulkan.cpp." );
+            EE_UNIMPLEMENTED_FUNCTION();
+            return;
+        }
+
+        // **A draw stays inside the render pass and a dispatch may not.** This corrects what
+        // P5.10 recorded as owed here, which said to leave the pass in both cases: an indirect
+        // draw wants exactly what PrepareDraw gives an ordinary one.
+        bool const isDraw = pVulkanCommandSignature->m_argumentType == IndirectArgumentType::Draw ||
+                            pVulkanCommandSignature->m_argumentType == IndirectArgumentType::DrawIndexed ||
+                            pVulkanCommandSignature->m_argumentType == IndirectArgumentType::DispatchMesh;
+
+        if ( isDraw )
+        {
+            PrepareDraw( pVulkanCommandBuffer );
+        }
+        else
+        {
+            FlushBarriers( pVulkanCommandBuffer );
+            SuspendRendering( pVulkanCommandBuffer );
+        }
+
+        VkDeviceSize const argumentOffset = indirectBufferOffset + pVulkanCommandSignature->m_drawArgumentOffset;
+
+        switch ( pVulkanCommandSignature->m_argumentType )
+        {
+            case IndirectArgumentType::Draw:
+            {
+                if ( pVulkanCounterBuffer != nullptr )
+                {
+                    vkCmdDrawIndirectCount( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset,
+                                            pVulkanCounterBuffer->m_buffer, counterBufferOffset, maxNumCommands, pVulkanCommandSignature->m_stride );
+                }
+                else
+                {
+                    vkCmdDrawIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset,
+                                       maxNumCommands, pVulkanCommandSignature->m_stride );
+                }
+            }
+            break;
+
+            case IndirectArgumentType::DrawIndexed:
+            {
+                if ( pVulkanCounterBuffer != nullptr )
+                {
+                    vkCmdDrawIndexedIndirectCount( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset,
+                                                   pVulkanCounterBuffer->m_buffer, counterBufferOffset, maxNumCommands, pVulkanCommandSignature->m_stride );
+                }
+                else
+                {
+                    vkCmdDrawIndexedIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset,
+                                              maxNumCommands, pVulkanCommandSignature->m_stride );
+                }
+            }
+            break;
+
+            case IndirectArgumentType::DispatchCompute:
+            {
+                // **vkCmdDispatchIndirect runs exactly one dispatch and reads no count buffer**,
+                // where Direct3D 12 runs min( maxNumCommands, count ) of them. A caller that
+                // passes either would silently get one dispatch, so both are refused instead.
+                EE_ASSERT( pVulkanCounterBuffer == nullptr );
+                EE_ASSERT( maxNumCommands == 1 );
+
+                vkCmdDispatchIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset );
+            }
+            break;
+
+            case IndirectArgumentType::DispatchMesh:
+            {
+                // vkCmdDrawMeshTasksIndirectEXT, once P5.14 enables VK_EXT_mesh_shader. The
+                // entry point does not exist until the extension is, so it cannot be called yet.
+                EE_UNIMPLEMENTED_FUNCTION();
+            }
+            break;
+
+            case IndirectArgumentType::DispatchRays:
+            {
+                // vkCmdTraceRaysIndirect2KHR, which is P5.16's.
+                EE_UNIMPLEMENTED_FUNCTION();
+            }
+            break;
+
+            default:
+            {
+                EE_ASSERT( false );
+            }
+        }
     }
 
     // Copies and clears, and the four things they all have to do first. The commands themselves
@@ -3434,13 +3584,119 @@ namespace EE::Render::RHI
 
     CommandSignature* CreateCommandSignature( Context* pContext, CommandSignatureParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext*          pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanCommandSignature* pVulkanCommandSignature = pVulkanContext->CreateObject<VulkanCommandSignature>();
+
+        // **There is no Vulkan object to create.** A command signature is a Direct3D 12 concept;
+        // the Vulkan side of it is the byte layout of one command, which is what this records.
+        // The arithmetic walks the arguments in order and accumulates the same byte sizes
+        // RHI_Direct3D12.cpp:3746 does, because both backends read one buffer that a shader
+        // wrote and they have to agree on where every field is.
+        uint32_t commandStride = 0;
+
+        for ( IndirectArgumentDescriptor const& argument : parameters.m_indirectArgumentParameters )
+        {
+            DescriptorReflection const* pDescriptorReflection = nullptr;
+            if ( argument.m_type != IndirectArgumentType::Draw &&
+                 argument.m_type != IndirectArgumentType::DrawIndexed &&
+                 argument.m_type != IndirectArgumentType::DispatchCompute &&
+                 argument.m_type != IndirectArgumentType::DispatchMesh &&
+                 argument.m_type != IndirectArgumentType::DispatchRays )
+            {
+                EE_ASSERT( parameters.m_pRootSignature != nullptr );
+                EE_ASSERT( argument.m_index < parameters.m_pRootSignature->m_descriptorReflections.size() );
+                pDescriptorReflection = &parameters.m_pRootSignature->m_descriptorReflections[argument.m_index];
+            }
+
+            switch ( argument.m_type )
+            {
+                // The draw and dispatch arguments end the command, and their byte offset is what
+                // CmdExecuteIndirect hands to Vulkan.
+                case IndirectArgumentType::Draw:
+                {
+                    pVulkanCommandSignature->m_argumentType = argument.m_type;
+                    pVulkanCommandSignature->m_drawArgumentOffset = commandStride;
+                    commandStride += sizeof( IndirectDrawArguments );
+                }
+                break;
+
+                case IndirectArgumentType::DrawIndexed:
+                {
+                    pVulkanCommandSignature->m_argumentType = argument.m_type;
+                    pVulkanCommandSignature->m_drawArgumentOffset = commandStride;
+                    commandStride += sizeof( IndirectDrawIndexedArguments );
+                }
+                break;
+
+                case IndirectArgumentType::DispatchCompute:
+                case IndirectArgumentType::DispatchMesh:
+                case IndirectArgumentType::DispatchRays:
+                {
+                    pVulkanCommandSignature->m_argumentType = argument.m_type;
+                    pVulkanCommandSignature->m_drawArgumentOffset = commandStride;
+                    commandStride += sizeof( IndirectDispatchArguments );
+                }
+                break;
+
+                // Everything below is a root argument, which is the half Vulkan cannot execute.
+                // The sizes are still counted, because the stride has to match what the shader
+                // wrote and what the Direct3D 12 backend reads.
+                case IndirectArgumentType::VertexBuffer:
+                case IndirectArgumentType::IndexBuffer:
+                {
+                    // A Direct3D 12 buffer view is an address, a size and a stride or format.
+                    commandStride += 16;
+                    pVulkanCommandSignature->m_hasRootArguments = true;
+                }
+                break;
+
+                case IndirectArgumentType::Constant:
+                {
+                    EE_ASSERT( argument.m_byteSize == sizeof( uint32_t ) * pDescriptorReflection->m_numConstants );
+
+                    commandStride += sizeof( uint32_t ) * pDescriptorReflection->m_numConstants;
+                    pVulkanCommandSignature->m_hasRootArguments = true;
+                }
+                break;
+
+                case IndirectArgumentType::ConstantBufferView:
+                case IndirectArgumentType::ShaderResourceView:
+                case IndirectArgumentType::UnorderedAccessView:
+                {
+                    // A GPU virtual address. RendererTypes.esh:268 calls it "device address of
+                    // this CBV, workaround for lack of HLSL buffer address support", and a
+                    // Vulkan descriptor takes a buffer and an offset rather than an address, so
+                    // there is nothing to turn one back into.
+                    commandStride += 8;
+                    pVulkanCommandSignature->m_hasRootArguments = true;
+                }
+                break;
+
+                case IndirectArgumentType::Invalid:
+                default:
+                {
+                    EE_ASSERT( false );
+                }
+            }
+        }
+
+        EE_ASSERT( pVulkanCommandSignature->m_argumentType != IndirectArgumentType::Invalid );
+
+        pVulkanCommandSignature->m_stride = Math::RoundUpToNearestMultiple32( commandStride, IndirectCommandAlignment );
+
+        return pVulkanCommandSignature;
     }
 
     void DestroyCommandSignature( Context* pContext, CommandSignature*&& pCommandSignature )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pCommandSignature != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanCommandSignature* pVulkanCommandSignature = static_cast<VulkanCommandSignature*>( pCommandSignature );
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanCommandSignature ) );
+            pCommandSignature = nullptr;
+        }
     }
 
     AccelerationStructure* CreateAccelerationStructure( Context* pContext, AccelerationStructureTopLevelCreateParameters const& topLevelParameters, AccelerationStructureBottomLevelCreateParameters const& bottomLevelParameters )
