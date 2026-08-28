@@ -10,16 +10,25 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 3 (all build and compile criteria met).** `EsotericaResourceCompiler` builds, links and
-compiles 22 of the 27 real resources under `Data/` into 38 output files: every texture, mesh,
-physics mesh, physics material database and the map. Debug and Release produce byte-identical
-output. All four libraries link. The file system watcher passes a 15-check
+**Phase: 4 (in progress).** DXC is now built from source with a patch that fixes its SPIR-V back
+end, and the four material mesh shaders compile to SPIR-V. Five shaders still fail, on a second
+and unrelated DXC limitation. See the 2026-08-28 entries below.
+
+Previously: **Phase 3 (all build and compile criteria met).** `EsotericaResourceCompiler` builds,
+links and compiles 22 of the 27 real resources under `Data/` into 38 output files: every texture,
+mesh, physics mesh, physics material database and the map. Debug and Release produce
+byte-identical output. All four libraries link. The file system watcher passes a 15-check
 scratch test, including a subdirectory created after watching started and `IN_Q_OVERFLOW`.
 
 The 5 that do not compile are the `.material` files, and they fail for one reason: they
 deserialize `EE::Render::Shaders::DefaultPBRParameters`, a type that only the Reflector's shader
-pass generates. That pass needs DXC to compile every `.esh` first, and DXC's SPIR-V back end
-crashes on the `ResourceDescriptorHeap` bindless model. Phases 4 and 5 own that.
+pass generates.
+
+**Correction.** Phase 3 recorded that pass as blocked because "DXC crashes on the
+`ResourceDescriptorHeap` bindless model". That is wrong, and it sent this session looking in the
+wrong place. Bindless is fine: a shader using `ResourceDescriptorHeap` and `SamplerDescriptorHeap`
+compiles to SPIR-V cleanly. There are two unrelated defects in DXC's SPIR-V back end, and neither
+has anything to do with bindless. Both are described below.
 
 Previously: **Phase 2 (complete on Linux).** `./RunReflection.sh` generates reflection for all five modules
 and exits 0. 245 files, 238 of them `.cpp`. The run is idempotent, and clean plus rebuild
@@ -31,7 +40,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 1 - Base Platform Layer | **done** (Tester itself still blocked on Phase 2) |
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux**, except the 5 materials and byte-comparison, both of which need Phase 4 or a Windows machine |
-| 4 - Shader Pipeline | not started |
+| 4 - Shader Pipeline | **in progress.** DXC builds from source and is patched; 4 of the 9 failing shaders now compile |
 | 5 - Vulkan RHI | not started |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
@@ -45,8 +54,22 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-Nothing. Phase 3 is finished to the extent Linux alone allows. Phase 4, the shader pipeline, is
-next, and it is what unblocks the 5 materials and the renderer.
+**Phase 4, on `linux/p4-shader-pipeline`.** P4.1 is done: DXC is built from source, patched, and
+compiles the four material mesh shaders to SPIR-V.
+
+The next thing to settle is the counter-variable blocker described below. It stops five shaders,
+and the obvious fix for it needs the P4.3 binding model decision first, which the phase document
+says to make jointly with Phase 5. That decision has **not** been made.
+
+Not yet started in this phase: P4.2 (SPIRV-Reflect), P4.4 (replacing `ID3D12ShaderReflection`),
+P4.5 (`CompileShaders.sh`), P4.6.
+
+**Two Phase 4 decisions are still unmade, and both are acceptance criteria.** Criterion 8, the
+bindless binding model, described above. And criterion 9, clip-space Y: the DXC argument list in
+`ShaderReflection_ShaderCompiler.cpp` passes neither `-fvk-invert-y` nor `-fvk-use-dx-position-w`,
+so nothing inverts Y today and no layer has been chosen to do it. Doing it in both the shader
+compiler and the Vulkan viewport, or in neither, is the classic porting bug the phase document
+warns about.
 
 ---
 
@@ -62,6 +85,66 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-28 - P4.1 DXC is built from source and patched, and the material shaders compile
+
+DXC's SPIR-V back end has two defects that stop this engine's shaders. Neither is about bindless,
+which is what Phase 3 assumed. Both were reduced to minimal shaders of under ten lines, and both
+were confirmed against the official prebuilt DXC so they are not artifacts of building it here.
+
+**Defect 1, fixed.** A mesh shader output struct with a **struct member** segfaults the compiler,
+in `SpirvEmitter::assignToMSOutAttribute` by way of `SpirvBuilder::createAccessChain`. This is
+[DXC issue 8475](https://github.com/microsoft/DirectXShaderCompiler/issues/8475), open since
+2026-05 with no fix and no comments; the stack there matches ours exactly. It stops five shaders,
+because `PrimitiveOutput` in `RendererTypes.esh` holds a `PrimitiveOutputFlags m_primitiveFlags`
+member. The same shaders compile on DXIL, so this is Linux-only and Windows is unaffected.
+
+The fix is `Code/Scripts/DXCPatches/0001-spirv-nested-struct-in-mesh-shader-output.patch`, which
+carries the full explanation. In short, `createStructOutputVar` flattens such an output into one
+stage variable per **leaf** field, and the emitter never mirrored that. Three things were needed,
+and the first two are the ones that are easy to get wrong:
+
+- Recurse on the **type alone**, not on whether the member has a semantic. A struct member with
+  its own semantic is flattened too. Testing the semantic looks right, compiles, fixes the toy
+  case, and still leaves the engine's shaders crashing. It cost a build to find out.
+- Extract by the **lowered** field index, not the AST one. Bitfields merge into one member when a
+  struct is lowered, and `PrimitiveOutputFlags` is all bitfields, so the AST index runs off the
+  end and the validator rejects the module with "Index is out of bounds". The bitfield's own bits
+  then have to come back out with `createBitFieldExtract`.
+- `collectArrayStructIndices` stopped walking at the first member, so `prims[i].f.a = x` pushed
+  an index for a struct that has no SPIR-V counterpart.
+
+**Defect 2, not fixed.** Assigning a **counter-bearing** resource from `ResourceDescriptorHeap`
+fails with "cannot handle associated counter variable assignment". It stops the other five
+shaders. See the decision entry below for why it stopped here.
+
+**Verified:**
+
+- **The Reflector's shader pass runs end to end with no crashes, and 23 of the 28 shaders it
+  parses compile to SPIR-V.** Before this, DXC segfaulted inside `libdxcompiler.so`. Every
+  remaining failure is now a clean diagnostic, and all five are defect 2.
+- All four material mesh shaders (`DefaultPBR`, `DefaultColorOnlyPBR`, `ComplexSurfacePBR`,
+  `Placeholder`) compile to SPIR-V. `DebugDrawMesh` moved off the segfault onto defect 2.
+- `libdxcompiler.so` builds and `Esoterica.Applications.Reflector` links against it, which is
+  acceptance criterion 1. Confirmed with `ldd`.
+- Seven reduced shaders covering every shape of the bug pass, and the flat-struct controls that
+  worked before still work.
+- The patch applies cleanly to the pristine tag, and a build from pristine-plus-patch reproduces
+  the result. That is the path `DownloadDependencies.sh` takes, not just my working tree.
+- **No regression:** for a shader the patch does not affect, the patched compiler produces
+  **byte-identical** SPIR-V to the official prebuilt one.
+
+**`spirv-val` note.** The compiled material shaders fail `spirv-val --target-env vulkan1.3` on
+`VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036`. **This is pre-existing and unrelated.** The
+unpatched official DXC produces the identical error for a flat output struct with
+`SV_CullPrimitive`, which `PrimitiveOutput` has at `RendererTypes.esh:473`. DXC's own internal
+validation passes, so it is a disagreement between DXC and the system `spirv-val`. Acceptance
+criterion 3 depends on it and cannot be met until somebody works out which one is right.
+
+**Files added:** `Code/Scripts/DXCPatches/0001-*.patch`.
+**Files edited:** `DownloadDependencies.sh` (`fetch_dxc`, `requirements_dxc`). No upstream
+`Code/` file was touched, so [TouchedFiles.md](TouchedFiles.md) is unchanged. No `.esh` was
+edited, as Phase 4 requires.
 
 ### 2026-08-28 - P3.1-P3.7 Resource compiler builds, links and compiles data
 
@@ -491,6 +574,118 @@ the reasoning, not just the outcome.
 **Rationale:** ...
 **Alternatives rejected:** ...
 -->
+
+### 2026-08-28 - DXC is built from source and patched, rather than forked or vendored
+
+**Context:** two defects in DXC's SPIR-V back end stop nine of this engine's shaders. We are on
+the newest DXC release, so there is no version to upgrade to, and no flag avoids either defect
+(`-fspv-use-descriptor-heap`, `-fvk-bind-counter-heap` and include-order variants were all
+tried). The alternatives were to patch DXC, or to restructure the `.esh` files, which Phase 4
+rule 4 forbids and which would change what Windows compiles.
+
+**Decision: patch DXC.** The patches live in `Code/Scripts/DXCPatches/` and
+`DownloadDependencies.sh` applies them to a pinned source clone, in name order, before building.
+A patch that fails to apply is fatal: that means the pin moved and nobody re-checked the fix,
+which is exactly the silent-breakage case worth stopping on.
+
+**Why not vendor the DXC tree into this repository.** It is a 250MB LLVM fork with four
+submodules, `/External/` is in `.gitignore` and nothing in it is tracked, and every other
+dependency is fetched rather than vendored. Vendoring would also bury our two fixes among three
+million lines of Microsoft's code, where no reviewer would ever find them.
+
+**Why not fork DXC on GitHub, yet.** A fork is the right home once the patches grow or need to
+track DXC `main`, and it is the mechanism for submitting upstream. For two fixes in one file, a
+patch file next to the port's own documentation is easier to review and keeps the rationale with
+the port. **Move to a fork if the patching becomes substantial.**
+
+**Consequences.**
+
+- The dependency now takes about 20 minutes to build, on 8 jobs, and is by far the slowest.
+- **A re-run takes 20 seconds**, recompiling `SpirvEmitter.cpp` and relinking. Measured, after
+  the fix below.
+- **Two settings protect that, and both are easy to undo by accident.** `git clean` in
+  `fetch_dxc` excludes `build`, or the clean deletes the build tree. And the configure passes
+  `-DLLVM_APPEND_VC_REV=OFF`, against DXC's own cache file, which turns it on: with it on the
+  generated version header derives from git state, and anything that moves the commit count
+  rewrites that header and rebuilds **all 1018 targets**. That was measured the hard way, by
+  committing a patch locally while debugging it and watching the next run rebuild the world.
+  Being careful about the claim: the reset in `fetch_dxc` keeps the tree on the pinned tag, so
+  the commit count should be stable without the flag as well. The flag pins the LLVM half of the
+  version too, and costs nothing, so it stays.
+- `libdxil.so` is no longer installed. It signs DXIL containers, which is a Windows concern.
+- The reported version changes from the official `1.10(5373-c4d8f4f9)`. The **source** is the same
+  commit the official binary was built from, `c4d8f4f9`, so the only difference between the two
+  compilers is the patches.
+- Both patches are worth sending upstream. Defect 1 already has an open issue with no owner.
+
+### 2026-08-28 - Defect 2 stops here, because the fix needs the binding model decision
+
+**Context:** assigning a counter-bearing resource from a descriptor heap fails with "cannot
+handle associated counter variable assignment". It stops `DebugDraw` MS, `DebugDrawMesh` MS, and
+`DebugDrawResolve`, `InstancePickingResolve` and `WorldUpdate` CS.
+
+**What it actually is,** narrowed with minimal shaders so nobody has to re-derive it:
+
+| Case | Result |
+|---|---|
+| `RWStructuredBuffer` **initialized** from the heap, as a local | works |
+| `RWStructuredBuffer` **assigned** from the heap, to a local | fails |
+| `RWStructuredBuffer` **assigned** from the heap, to a struct field | fails |
+| `RWBuffer` or `RWByteAddressBuffer`, either way | works, they carry no counter |
+
+So it is assignment, not initialization, and only for a type that carries a hidden counter.
+`AppendBuffer<T>` in `AppendBuffer.esh` holds a `RWStructuredBuffer<T>` and is built exactly this
+way. `RawAppendBuffer` next to it uses `RWByteAddressBuffer` and was never affected.
+
+**The Reflector's own code generator emits this pattern too**, which matters for option 3 below.
+Two of the five failures are not in hand-written shader source at all:
+
+```
+_AutoGenerated/ShaderReflection/WorldUpdate.esh:91
+    result.m_meshInstanceBuffer = ResourceDescriptorHeap[NonUniformResourceIndex( ... )];
+_AutoGenerated/ShaderReflection/DebugDrawResolve.esh:54
+    result.ArgumentBuffer_TransparentDepthOn = ResourceDescriptorHeap[NonUniformResourceIndex( ... )];
+```
+
+Those come from `ShaderReflection_CodeGenerator.cpp` building a resource table struct. Rewriting
+`AppendBuffer.esh` by hand would therefore fix three of the five and leave these two, so option 3
+is not sufficient on its own even if somebody were willing to break the no-`.esh`-edits rule.
+
+`tryToAssignCounterVar` requires source and destination to agree on whether they have a counter.
+The destination gets one created on demand; the source never resolves to one, so they disagree.
+`getFinalACSBufferCounter` cannot see the heap for two reasons at once: `heap[i]` is a
+`CXXOperatorCallExpr`, so `getReferencedDef` resolves it to the subscript operator and the
+`AssocCounter#1` early return hands back that operator's null pair; and the heap branch below it
+tests `isResourceDescriptorHeap` against the expression's own type, which is the indexed resource,
+where `.Resource` is the type of the heap object being indexed. `isDescriptorHeap`, which
+`getDescriptorHeapOperands` already asserts on, is the predicate that would work.
+
+**Why that is not enough, and why this stopped.** Correcting both only gets as far as
+`getOrCreateCounterIdAliasPair`, which looks in `counterVars` and `declRWSBuffers`. A
+`ResourceDescriptorHeap` declaration is in neither, so **no counter exists for a heap-sourced
+`RWStructuredBuffer` at all.** Making one exist means emitting a counter heap, which is what
+`-fvk-bind-counter-heap` binds, and that defines a descriptor set and binding the engine must
+then bind. That is the P4.3 bindless binding model decision, which
+[Phase4-ShaderPipeline.md](Phases/Phase4-ShaderPipeline.md) calls the most consequential in the
+phase and says to make **jointly with Phase 5**. It has not been made.
+
+The reordering fix was written and then **reverted**, so it is not in the shipped patch. It
+changes behaviour without fixing the shaders, which is unverified risk for no gain. Redoing it is
+maybe ten minutes from this entry.
+
+**Options, for whoever picks this up:**
+
+1. Decide the binding model, then teach DXC to emit a counter heap. Largest, and it is the work
+   Phase 5 needs anyway.
+2. Have DXC skip the association when the source is a heap access with no counter, instead of
+   erroring, and error at any later `.Append()` or `.IncrementCounter()` instead. Small, and it
+   matches what this engine does: it never calls those, and drives its own `m_counterBuffer`.
+   Needs care not to turn a compile error into silently wrong code.
+3. Restructure `AppendBuffer.esh` to keep the `RWStructuredBuffer` out of the struct. Forbidden by
+   Phase 4 rule 4, changes Windows, and **fixes only three of the five** anyway, because the
+   other two come out of the Reflector's code generator. Escalate before anyone tries it.
+
+Option 2 is the cheapest way to unblock all five without pre-empting the binding decision.
 
 ### 2026-08-28 - A Windows-only `.cpp` is excluded, never wrapped in `#ifdef _WIN32`
 
