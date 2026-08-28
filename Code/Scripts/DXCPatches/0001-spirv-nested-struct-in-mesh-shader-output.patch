@@ -1,0 +1,189 @@
+Fix a SPIR-V back end crash on a nested struct in a mesh shader output.
+
+Upstream issue: https://github.com/microsoft/DirectXShaderCompiler/issues/8475
+Applies to: v1.10.2605.37 (c4d8f4f9). Also applies to main as of 2026-08-28.
+
+A mesh shader output struct with a struct member crashes DXC's SPIR-V back
+end. The DXIL back end compiles the same shader, so this is Windows-clean and
+Linux-only. It stops five of this engine's shaders, all four material mesh
+shaders among them, because PrimitiveOutput in RendererTypes.esh holds a
+PrimitiveOutputFlags member:
+
+    struct PrimitiveOutputFlags { RendererGlobalFlags m_a : 6; ... };
+    struct PrimitiveOutput
+    {
+        uint4 m_data0 : TEXCOORD4;
+        PrimitiveOutputFlags m_primitiveFlags : TEXCOORD6;
+    };
+
+DeclResultIdMapper::createStructOutputVar flattens such an output and records
+one stage variable per *leaf* field. SpirvEmitter never mirrors that
+flattening: it looks up a stage variable for the enclosing member, which was
+never recorded, and stores through the null pointer that comes back.
+getStageVarInstruction asserts in a debug build and returns null in a release
+one, so the shipped compiler segfaults in SpirvBuilder::createAccessChain.
+
+Three things are fixed, and all three are needed to compile the shaders above.
+
+1. assignToMSOutAttribute recurses into a struct member, extracting one
+   sub-value per field, the way DeclResultIdMapper::writeBackOutputStream
+   already does for geometry shader output streams. This covers whole-struct
+   and whole-member assignment, `prims[i] = p` and `prims[i].f = flags`.
+
+   The recursion is chosen on the type alone, deliberately not on the
+   semantic. createStageVars maps a decl to a single stage variable only when
+   it has a semantic *and* is not a structure type, so a struct member
+   carrying a semantic of its own is flattened too, its members inheriting
+   that semantic at increasing indices. Testing the semantic here misses
+   exactly the case this engine hits.
+
+   A leaf reached through the recursion inherits its semantic and so has none
+   of its own, which makes getStageVarSemantic invalid. The three
+   semantic-dependent special cases - clip/cull distance, SV_Position Y
+   inversion, and the CullPrimitive exception to the boolean cast - are
+   therefore guarded on isValid(). An inherited semantic is a user semantic,
+   never one of those.
+
+2. The recursion extracts by the lowered field index, not the AST one.
+   Bitfields are merged into a single member when a struct is lowered, so
+   several AST fields share one SPIR-V member and every later field shifts
+   down. Extracting by AST index produces "Index is out of bounds" from the
+   validator on any output struct with bitfields, which is what
+   PrimitiveOutputFlags is. FieldInfo::fieldIndex carries the lowered index.
+   Because extracting a bitfield yields the whole merged member, the field's
+   own bits are then taken back out with createBitFieldExtract; a stage
+   variable exists per AST field, so each bitfield is written separately.
+
+3. collectArrayStructIndices returned as soon as it recognized the mesh output
+   attribute, so for a member chain two levels deep, `prims[i].f.a = x`, it
+   returned the *outer* member and pushed the inner field index into the
+   access chain. That index addresses a SPIR-V struct that does not exist. It
+   now keeps walking up so the caller sees the leaf declaration, and pushes no
+   field index for a struct with no SPIR-V counterpart.
+
+   That branch is reachable only for a member chain of depth two or more under
+   a vertices/primitives declaration, which is precisely the case that crashes
+   today, so it cannot regress a working shader.
+
+Not addressed: a mesh shader output struct using C++ base classes. The
+pre-existing loop in tryToAssignToMSOutAttrsOrIndices already skips base
+sub-objects, so that case is broken independently of this fix and is left as
+it was.
+
+diff --git a/tools/clang/lib/SPIRV/SpirvEmitter.cpp b/tools/clang/lib/SPIRV/SpirvEmitter.cpp
+index 288b926f..eff12e0c 100644
+--- a/tools/clang/lib/SPIRV/SpirvEmitter.cpp
++++ b/tools/clang/lib/SPIRV/SpirvEmitter.cpp
+@@ -8620,6 +8620,58 @@ void SpirvEmitter::assignToMSOutAttribute(
+     const llvm::SmallVector<SpirvInstruction *, 4> &indices) {
+   assert(spvContext.isMS() && !indices.empty());
+ 
++  auto semanticInfo = declIdMapper.getStageVarSemantic(decl);
++  const auto loc = decl->getLocation();
++
++  // A member whose type is itself a struct has no stage variable of its own:
++  // DeclResultIdMapper::createStructOutputVar flattens it and records one
++  // stage variable per leaf field. Mirror that flattening here, the way
++  // writeBackOutputStream does for geometry shader output streams. Without
++  // this we look up a stage variable that was never recorded and store
++  // through the null pointer that comes back.
++  //
++  // The test is the type alone, and deliberately not the semantic.
++  // createStageVars maps a decl to a single stage variable only when it has a
++  // semantic *and* is not a structure type, so a struct member carrying a
++  // semantic of its own is flattened too, with its members inheriting that
++  // semantic at increasing indices.
++  if (decl->getType()->isStructureType()) {
++    const QualType declType = decl->getType();
++
++    // The AST field index is not the index to extract with. Bitfields are
++    // merged into one member when the struct is lowered, so several AST fields
++    // can share a SPIR-V member, and every later field is shifted down.
++    // FieldInfo::fieldIndex carries the lowered index, and getFieldIndexInStruct
++    // is the same lookup collectArrayStructIndices uses.
++    LowerTypeVisitor lowerTypeVisitor(astContext, spvContext, spirvOptions,
++                                      spvBuilder);
++    const StructType *spirvStructType =
++        lowerStructType(spirvOptions, lowerTypeVisitor, declType);
++    assert(spirvStructType != nullptr);
++
++    const auto *structDecl = declType->getAs<RecordType>()->getDecl();
++    for (const auto *field : structDecl->fields()) {
++      const uint32_t indexAST =
++          getNumBaseClasses(declType) + field->getFieldIndex();
++      const auto &spirvField = spirvStructType->getFields()[indexAST];
++
++      SpirvInstruction *subValue = spvBuilder.createCompositeExtract(
++          field->getType(), value, {spirvField.fieldIndex}, loc);
++
++      // Extracting a bitfield yields the whole merged member, so take the
++      // field's own bits back out of it. A stage variable was created per AST
++      // field, so each bitfield is written separately.
++      if (spirvField.bitfield.hasValue()) {
++        subValue = spvBuilder.createBitFieldExtract(
++            field->getType(), subValue, spirvField.bitfield->offsetInBits,
++            spirvField.bitfield->sizeInBits, loc, {});
++      }
++
++      assignToMSOutAttribute(field, subValue, indices);
++    }
++    return;
++  }
++
+   // Extract attribute index and vecComponent (if any).
+   SpirvInstruction *attrIndex = indices.front();
+   SpirvInstruction *vecComponent = nullptr;
+@@ -8627,11 +8679,12 @@ void SpirvEmitter::assignToMSOutAttribute(
+     vecComponent = indices.back();
+   }
+ 
+-  auto semanticInfo = declIdMapper.getStageVarSemantic(decl);
+-  assert(semanticInfo.isValid());
+-  const auto loc = decl->getLocation();
+-  // Special handle writes to clip/cull distance attributes.
+-  if (declIdMapper.glPerVertex.tryToAccess(
++  // Special handle writes to clip/cull distance attributes. A leaf field
++  // reached through the recursion above inherits its semantic from the
++  // enclosing member and so carries none of its own; an inherited semantic is
++  // never SV_ClipDistance or SV_CullDistance, so there is nothing to do here.
++  if (semanticInfo.isValid() &&
++      declIdMapper.glPerVertex.tryToAccess(
+           hlsl::DXIL::SigPointKind::MSOut, semanticInfo.semantic->GetKind(),
+           semanticInfo.index, attrIndex, &value, /*noWriteBack=*/false,
+           vecComponent, loc)) {
+@@ -8642,14 +8695,16 @@ void SpirvEmitter::assignToMSOutAttribute(
+   auto *varInstr = declIdMapper.getStageVarInstruction(decl);
+   QualType valueType = value->getAstResultType();
+   if (valueType->isBooleanType() &&
+-      semanticInfo.getKind() != hlsl::Semantic::Kind::CullPrimitive) {
++      (!semanticInfo.isValid() ||
++       semanticInfo.getKind() != hlsl::Semantic::Kind::CullPrimitive)) {
+     // Externally visible variables are changed to uint, so we need to cast the
+     // value to uint.
+     value = castToInt(value, valueType, astContext.UnsignedIntTy, loc);
+     valueType = astContext.UnsignedIntTy;
+   }
+   varInstr = spvBuilder.createAccessChain(valueType, varInstr, indices, loc);
+-  if (semanticInfo.semantic->GetKind() == hlsl::Semantic::Kind::Position)
++  if (semanticInfo.isValid() &&
++      semanticInfo.semantic->GetKind() == hlsl::Semantic::Kind::Position)
+     value = invertYIfRequested(value, semanticInfo.loc);
+ 
+   spvBuilder.createStore(varInstr, value, loc);
+@@ -8970,6 +9025,16 @@ const Expr *SpirvEmitter::collectArrayStructIndices(
+           }
+         }
+       }
++      // A member of a member of a mesh shader output attribute. The frame
++      // below already recognized the attribute, so keep walking up and let
++      // the caller see the innermost member. The stage variables for such an
++      // output are created one per leaf field, by
++      // DeclResultIdMapper::createStructOutputVar, so an enclosing struct
++      // member has no SPIR-V counterpart to index into and must not push a
++      // field index here.
++      if (*isMSOutAttribute && isa<MemberExpr>(base)) {
++        return expr;
++      }
+     }
+ 
+     {

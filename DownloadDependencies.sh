@@ -60,8 +60,10 @@ requirements_llvm()
 
 requirements_dxc()
 {
-    require_command curl curl
-    require_command tar tar
+    require_command cmake cmake
+    require_command ninja ninja-build
+    require_command python3 python3
+    require_command c++ build-essential
 }
 
 requirements_directx_headers() { :; }
@@ -202,13 +204,22 @@ fetch_llvm()
 # pipeline both need it, and eight Engine Render files include generated .esh reflection headers
 # that only exist once it has run.
 #
-# Microsoft ships official prebuilt Linux binaries, so this is a download rather than a build.
-# DXC is LLVM-based and building it from source takes tens of minutes.
+# Built from source, not downloaded. Microsoft ships prebuilt Linux binaries, and Phases 2 and 3
+# used them, but the SPIR-V back end crashes on the engine's mesh shaders. The fix is in
+# Code/Scripts/DXCPatches, so the source has to be compiled here. See the 2026-08-28 decision in
+# Docs/Linux/Progress.md, and Docs/Linux/Phases/Phase4-ShaderPipeline.md.
 #
-# DXC.props expects External/DirectXShaderCompiler with inc/ and lib/x64/, so the tarball is
+# This takes tens of minutes and is by far the slowest dependency. It is also the only one whose
+# output differs from what upstream ships, which is why the patches carry a full explanation
+# each.
+#
+# The tag is the same one the prebuilt binaries were built from, so the only difference between
+# this compiler and the official one is the patches.
+#
+# DXC.props expects External/DirectXShaderCompiler with inc/ and lib/x64/, so the build output is
 # rearranged to match rather than inventing a second layout.
+DXC_REPO="https://github.com/microsoft/DirectXShaderCompiler.git"
 DXC_VERSION="v1.10.2605.37"
-DXC_URL="https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_VERSION}/linux_dxc_2026_08_11.x86_64.tar.gz"
 
 # DirectX-Headers. Microsoft's cross-platform D3D12 headers.
 #
@@ -247,6 +258,8 @@ fetch_directx_headers()
 fetch_dxc()
 {
     local target="${EXTERNAL_DIR}/DirectXShaderCompiler"
+    local source_dir="${EXTERNAL_DIR}/DirectXShaderCompiler_src"
+    local patch_dir="${REPO_ROOT}/Code/Scripts/DXCPatches"
 
     if [[ -f "${target}/lib/x64/libdxcompiler.so" ]]
     then
@@ -254,20 +267,73 @@ fetch_dxc()
         return
     fi
 
-    info "fetching DXC ${DXC_VERSION}"
-    rm -rf "${target}" "${target}.tar.gz" "${target}.tmp"
-    curl -fL --no-progress-meter -o "${target}.tar.gz" "${DXC_URL}"
+    # The source tree is kept between runs, because it is a 250MB clone and the build tree next
+    # to it is several GB. A re-run resets it instead of fetching it again, which also discards
+    # any hand editing done while debugging a patch.
+    if [[ -d "${source_dir}/.git" ]]
+    then
+        info "resetting the DXC source tree"
+        # build/ is excluded from the clean on purpose. It is untracked, so a plain clean would
+        # delete it and turn every re-run into a full rebuild. Keeping it means a re-run only
+        # recompiles the files the patches touch.
+        git -C "${source_dir}" reset -q --hard
+        git -C "${source_dir}" clean -qfd -e build
+    else
+        info "cloning DXC ${DXC_VERSION}"
+        rm -rf "${source_dir}"
+        git clone -q --depth 1 --branch "${DXC_VERSION}" \
+            --recurse-submodules --shallow-submodules "${DXC_REPO}" "${source_dir}"
+    fi
 
-    mkdir -p "${target}.tmp"
-    tar -xzf "${target}.tar.gz" -C "${target}.tmp"
-    rm -f "${target}.tar.gz"
+    # Every patch is applied, in name order, and a failure to apply is fatal. A patch that no
+    # longer applies means the pin moved and nobody re-checked the fix, which is exactly the
+    # silent-breakage case worth stopping on.
+    local patch
+    for patch in "${patch_dir}"/*.patch
+    do
+        [[ -e "${patch}" ]] || break
+        info "applying $( basename "${patch}" )"
+        git -C "${source_dir}" apply "${patch}" \
+            || fail "${patch} does not apply to DXC ${DXC_VERSION}"
+    done
 
+    # LLVM_TARGETS_TO_BUILD is set to None by DXC's own cache file: this compiler emits DXIL and
+    # SPIR-V, and needs no LLVM hardware back end. Tests are off because they roughly double the
+    # build and nothing here runs them.
+    #
+    # LLVM_APPEND_VC_REV is off, against DXC's cache file, which turns it on. With it on, the
+    # generated version header derives from git state, and anything that moves the commit count
+    # rewrites that header and rebuilds all 1018 targets rather than the one file a patch
+    # touched. That was measured, by committing a patch while debugging it. The reset below keeps
+    # the tree on the pinned tag, so the count should be stable anyway; this pins the LLVM half
+    # of the version too, and costs nothing.
+    info "configuring DXC"
+    cmake -S "${source_dir}" -B "${source_dir}/build" -G Ninja \
+        -C "${source_dir}/cmake/caches/PredefinedParams.cmake" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DHLSL_INCLUDE_TESTS=OFF \
+        -DSPIRV_BUILD_TESTS=OFF \
+        -DLLVM_INCLUDE_TESTS=OFF \
+        -DCLANG_INCLUDE_TESTS=OFF \
+        -DLLVM_APPEND_VC_REV=OFF \
+        -DLLVM_PARALLEL_LINK_JOBS=1 \
+        >/dev/null
+
+    info "building DXC, this takes tens of minutes"
+    ninja -C "${source_dir}/build" -j "${BUILD_JOBS}" dxcompiler dxc
+
+    # libdxil.so is not installed, unlike the prebuilt tarball which ships it. It signs DXIL
+    # containers, which is a Windows concern: SPIR-V is not signed, and the DXC property sheet
+    # links dxcompiler only.
+    # inc/hlsl holds the HLSL library headers, which the prebuilt tarball ships next to inc/dxc.
+    # Only inc/dxc is on this project's include path, so they are copied for parity with the
+    # tarball rather than because anything here needs them. In the source tree they do not sit
+    # under include/, unlike the dxc ones.
     mkdir -p "${target}/inc" "${target}/lib/x64" "${target}/bin/x64"
-    cp -r "${target}.tmp"/include/* "${target}/inc/" 2>/dev/null || true
-    find "${target}.tmp" -name 'libdxcompiler.so*' -exec cp -P {} "${target}/lib/x64/" \;
-    find "${target}.tmp" -name 'libdxil.so*' -exec cp -P {} "${target}/lib/x64/" \;
-    find "${target}.tmp" -name 'dxc' -type f -exec cp {} "${target}/bin/x64/" \;
-    rm -rf "${target}.tmp"
+    cp -r "${source_dir}/include/dxc" "${target}/inc/"
+    cp -r "${source_dir}/tools/clang/lib/Headers/hlsl" "${target}/inc/"
+    cp -P "${source_dir}/build/lib/libdxcompiler.so"* "${target}/lib/x64/"
+    cp "${source_dir}/build/bin/dxc" "${target}/bin/x64/"
 
     info "DXC installed"
 }
