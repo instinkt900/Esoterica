@@ -109,6 +109,10 @@ Vulkan-targeting flags. What matters:
   setup in `RHI_Direct3D12.cpp` and the engine's projection matrices, and decide whether the
   inversion belongs here or in the Vulkan backend's viewport. Pick one place. Doing it in both,
   or in neither, is the classic Vulkan porting bug.
+  **Decided on 2026-08-28: the Vulkan viewport, with a negative height.** `-fvk-invert-y` is a
+  hard error on pixel and compute shaders, and the Reflector passes one argument list to every
+  stage. The front-face mapping absorbs the winding flip that comes with it. Full reasoning in
+  [Progress.md](../Progress.md).
 - **Shader stage mapping** for `RHI::ShaderStage`, including the mesh, amplification, and
   raytracing stages, because parity is the goal.
 
@@ -235,6 +239,10 @@ these up. That is P0.4.
    detail for Phase 5 to implement against it. **Done, 2026-08-28.** See the "P4.3 The bindless
    binding model" entry.
 9. The clip-space Y decision is recorded, and it names which layer performs the inversion.
+   **Done, 2026-08-28.** The **Vulkan viewport** inverts Y, with a negative height, in
+   `RHI_Vulkan.cpp`'s `CmdSetViewport`. The shader compiler does not: `-fvk-invert-y` is not
+   passed and must not be added. `-fvk-use-dx-position-w` is not needed either. See the entry in
+   [Progress.md](../Progress.md), and the comment at the stub itself.
 10. **The Windows MSBuild build still succeeds**, the Windows Reflector still compiles shaders to
     DXIL, and its generated output is unchanged from before this phase.
 11. Every upstream file you edited is in [TouchedFiles.md](../TouchedFiles.md) with status
