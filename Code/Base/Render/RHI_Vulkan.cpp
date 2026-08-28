@@ -153,6 +153,14 @@ namespace EE::Render::RHI
     struct VulkanCommandBuffer;
     static void EndRenderingIfActive( VulkanCommandBuffer* pVulkanCommandBuffer );
 
+    // The one DataFormat to VkFormat mapping, defined in the resources section below next to
+    // its first caller. FillDeviceCapabilities is far above it and asks the device about every
+    // format, so it needs the declaration here.
+    static VkFormat VulkanFormat( DataFormat format );
+
+    // Defined in the state mapping section, which sits after the samplers that need it.
+    static VkCompareOp VulkanCompareOp( CompareMode mode );
+
     //-------------------------------------------------------------------------
 
     struct ResourceAllocStats
@@ -333,6 +341,12 @@ namespace EE::Render::RHI
         if ( !available.m_vulkan12.descriptorBindingStorageImageUpdateAfterBind )  { return "descriptorBindingStorageImageUpdateAfterBind"; }
         if ( !available.m_vulkan12.descriptorBindingStorageBufferUpdateAfterBind ) { return "descriptorBindingStorageBufferUpdateAfterBind"; }
         if ( !available.m_vulkan12.descriptorBindingUniformTexelBufferUpdateAfterBind ) { return "descriptorBindingUniformTexelBufferUpdateAfterBind"; }
+        // Every type in the heap's mutable list has to support update-after-bind, and the list
+        // holds a storage texel buffer for RWBuffer<T>. Missed by P5.5; see Docs/Linux/Progress.md.
+        if ( !available.m_vulkan12.descriptorBindingStorageTexelBufferUpdateAfterBind ) { return "descriptorBindingStorageTexelBufferUpdateAfterBind"; }
+        // FilterMode::Min and FilterMode::Max on a sampler. RenderSystem::Initialize creates
+        // COMMON_SAMPLER_LINEAR_CLAMP_MAX, so this is used on the first frame.
+        if ( !available.m_vulkan12.samplerFilterMinmax )            { return "samplerFilterMinmax"; }
         // NonUniformResourceIndex in the shaders indexes the heap with a divergent index.
         if ( !available.m_vulkan12.shaderSampledImageArrayNonUniformIndexing )  { return "shaderSampledImageArrayNonUniformIndexing"; }
         if ( !available.m_vulkan12.shaderStorageImageArrayNonUniformIndexing )  { return "shaderStorageImageArrayNonUniformIndexing"; }
@@ -501,11 +515,35 @@ namespace EE::Render::RHI
         // HDR needs a swapchain colour space, which is P5.3's business.
         capabilities.m_hdr = false;
 
-        // m_canShaderReadFrom, m_canShaderWriteTo and m_canRenderTargetWriteTo stay false.
-        // Filling them needs the complete DataFormat to VkFormat mapping, which is P5.6's task
-        // and its largest piece. Duplicating a partial mapping here would be the worst of both:
-        // the phase document warns that a disagreement between the two corrupts textures in a
-        // way that looks like a bug somewhere else.
+        // What the device can do with each DataFormat, asked one format at a time. Mirrors the
+        // loop in RHI_Direct3D12.cpp:2205, including which question each array answers:
+        //
+        //   D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE   -> VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
+        //   D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE -> VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT
+        //   D3D12_FORMAT_SUPPORT1_RENDER_TARGET   -> VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT
+        //
+        // m_canRenderTargetWriteTo is colour only on both backends. Direct3D 12 reports depth
+        // through a separate D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL bit that the reference does not
+        // read, so a depth format reads false here exactly as it does there.
+        //
+        // Optimal tiling, because CreateTexture creates every image with VK_IMAGE_TILING_OPTIMAL.
+        for ( uint32_t formatIndex = 0; formatIndex < NumDataFormats; ++formatIndex )
+        {
+            VkFormat const vulkanFormat = VulkanFormat( DataFormat( formatIndex ) );
+            if ( vulkanFormat == VK_FORMAT_UNDEFINED )
+            {
+                continue;
+            }
+
+            VkFormatProperties formatProperties = {};
+            vkGetPhysicalDeviceFormatProperties( pVulkanContext->m_physicalDevice, vulkanFormat, &formatProperties );
+
+            VkFormatFeatureFlags const features = formatProperties.optimalTilingFeatures;
+
+            capabilities.m_canShaderReadFrom[formatIndex] = ( features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT ) != 0;
+            capabilities.m_canShaderWriteTo[formatIndex] = ( features & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT ) != 0;
+            capabilities.m_canRenderTargetWriteTo[formatIndex] = ( features & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT ) != 0;
+        }
     }
 
     //-------------------------------------------------------------------------
@@ -824,6 +862,8 @@ namespace EE::Render::RHI
         enabledFeatures.m_vulkan12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
         enabledFeatures.m_vulkan12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
         enabledFeatures.m_vulkan12.descriptorBindingUniformTexelBufferUpdateAfterBind = VK_TRUE;
+        enabledFeatures.m_vulkan12.descriptorBindingStorageTexelBufferUpdateAfterBind = VK_TRUE;
+        enabledFeatures.m_vulkan12.samplerFilterMinmax = VK_TRUE;
         enabledFeatures.m_vulkan12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
         enabledFeatures.m_vulkan12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
         enabledFeatures.m_vulkan12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
@@ -1302,9 +1342,70 @@ namespace EE::Render::RHI
     struct VulkanTexture final : Texture
     {
         VkImage                                             m_image = VK_NULL_HANDLE;
-        VkImageView                                         m_imageView = VK_NULL_HANDLE;
-        VkFormat                                            m_format = VK_FORMAT_UNDEFINED;
+        VmaAllocation                                       m_allocation = VK_NULL_HANDLE;
+        uint64_t                                            m_allocationSize = 0;
+
+        // Named m_vulkanFormat rather than m_format on purpose. Texture::m_format is the
+        // DataFormat the caller asked for, and a member of the same name here would hide it
+        // behind a different type depending on which pointer the reader has.
+        VkFormat                                            m_vulkanFormat = VK_FORMAT_UNDEFINED;
         VkExtent3D                                          m_extent = {};
+
+        // Every aspect the image has: colour, or depth and stencil. A view picks a subset.
+        VkImageAspectFlags                                  m_aspectMask = 0;
+
+        // False when the image belongs to somebody else: a swapchain image handed in through
+        // TextureParameters::m_pNativeHandle, or the texture this one aliases. The views are
+        // still ours, the image is not.
+        bool                                                m_ownsImage = true;
+
+        // **A Vulkan image is always created in VK_IMAGE_LAYOUT_UNDEFINED**, whatever
+        // TextureParameters::m_initialState says, because those are the only two layouts
+        // vkCreateImage accepts and the other one is for linear tiling. Direct3D 12 takes the
+        // initial layout directly. So the engine believes this texture is already in
+        // m_initialState and the image is not, and P5.9 has to transition from what is recorded
+        // here rather than from the state the caller passes to the first barrier.
+        VkImageLayout                                       m_currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        // The layout the sampled-image descriptor in the heap was written with, and therefore
+        // the layout P5.9 has to put this texture in before a shader reads it. GENERAL for a
+        // texture that is also an RWTexture, because one image cannot be in two layouts and a
+        // storage image descriptor has to say GENERAL.
+        VkImageLayout                                       m_shaderReadLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        // The view a shader samples, covering every mip and layer. One per texture.
+        VkImageView                                         m_shaderResourceView = VK_NULL_HANDLE;
+
+        // One storage view per mip level, because an RWTexture handle names a mip level.
+        TVector<VkImageView>                                m_storageViews{ Memory::Allocators::g_RHI };
+
+        // One attachment view per subresource, indexed the way Direct3D 12 indexes its render
+        // target descriptors at RHI_Direct3D12.cpp:1387: m_mipLevels * arrayLayer + mipLevel.
+        TVector<VkImageView>                                m_renderTargetViews{ Memory::Allocators::g_RHI };
+
+        // A contiguous run in the resource heap, in the same order Direct3D 12 uses: the read
+        // view first if present, then one read-write view per mip level.
+        HandleAllocator<GenericResourceHandle>::Handle      m_descriptorHandles = {};
+        int8_t                                              m_uavDescriptorOffset = -1;
+
+        // DeviceCapabilities::m_uploadBufferTextureRowAlignment, copied here because
+        // GetTextureCopyRowStride takes no Context.
+        uint32_t                                            m_copyRowAlignment = 1;
+
+        VkImageView RenderTargetView( uint32_t arrayLayer, uint32_t mipLevel ) const
+        {
+            uint32_t const viewIndex = m_mipLevels * arrayLayer + mipLevel;
+            EE_ASSERT( viewIndex < m_renderTargetViews.size() );
+            return m_renderTargetViews[viewIndex];
+        }
+    };
+
+    struct VulkanSampler final : Sampler
+    {
+        VkSampler                                           m_sampler = VK_NULL_HANDLE;
+
+        // One slot in the sampler heap, set 1 binding 1.
+        HandleAllocator<GenericResourceHandle>::Handle      m_descriptorHandle = {};
     };
 
     struct VulkanShader final : Shader
@@ -1828,8 +1929,13 @@ namespace EE::Render::RHI
         {
             VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( renderTargets[renderTargetIndex] );
 
+            // Which subresource of the target to draw into. Direct3D 12 picks a different
+            // render target view; here it is a different VkImageView, created by CreateTexture.
+            uint32_t const colorArraySlice = colorArraySlices.empty() ? 0 : colorArraySlices[renderTargetIndex];
+            uint32_t const colorMipSlice = colorMipSlices.empty() ? 0 : colorMipSlices[renderTargetIndex];
+
             VkRenderingAttachmentInfo attachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-            attachment.imageView = pVulkanTexture->m_imageView;
+            attachment.imageView = pVulkanTexture->RenderTargetView( colorArraySlice, colorMipSlice );
             attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -1848,8 +1954,8 @@ namespace EE::Render::RHI
 
             colorAttachments.push_back( attachment );
 
-            renderArea.width = Math::Max( renderArea.width, pVulkanTexture->m_extent.width );
-            renderArea.height = Math::Max( renderArea.height, pVulkanTexture->m_extent.height );
+            renderArea.width = Math::Max( renderArea.width, Math::Max( pVulkanTexture->m_extent.width >> colorMipSlice, 1U ) );
+            renderArea.height = Math::Max( renderArea.height, Math::Max( pVulkanTexture->m_extent.height >> colorMipSlice, 1U ) );
         }
 
         VkRenderingAttachmentInfo depthAttachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
@@ -1861,13 +1967,10 @@ namespace EE::Render::RHI
         {
             VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( pDepthStencil );
 
-            hasDepth = pVulkanTexture->m_format != VK_FORMAT_S8_UINT;
-            hasStencil = ( pVulkanTexture->m_format == VK_FORMAT_S8_UINT ) ||
-                         ( pVulkanTexture->m_format == VK_FORMAT_D16_UNORM_S8_UINT ) ||
-                         ( pVulkanTexture->m_format == VK_FORMAT_D24_UNORM_S8_UINT ) ||
-                         ( pVulkanTexture->m_format == VK_FORMAT_D32_SFLOAT_S8_UINT );
+            hasDepth = ( pVulkanTexture->m_aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT ) != 0;
+            hasStencil = ( pVulkanTexture->m_aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT ) != 0;
 
-            depthAttachment.imageView = pVulkanTexture->m_imageView;
+            depthAttachment.imageView = pVulkanTexture->RenderTargetView( depthArraySlice, depthMipSlice );
             depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -1885,8 +1988,8 @@ namespace EE::Render::RHI
                 stencilAttachment.clearValue.depthStencil.stencil = pLoadAction->m_depthClearValue.m_stencil;
             }
 
-            renderArea.width = Math::Max( renderArea.width, pVulkanTexture->m_extent.width );
-            renderArea.height = Math::Max( renderArea.height, pVulkanTexture->m_extent.height );
+            renderArea.width = Math::Max( renderArea.width, Math::Max( pVulkanTexture->m_extent.width >> depthMipSlice, 1U ) );
+            renderArea.height = Math::Max( renderArea.height, Math::Max( pVulkanTexture->m_extent.height >> depthMipSlice, 1U ) );
         }
 
         VkRenderingInfo renderingInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
@@ -1901,13 +2004,6 @@ namespace EE::Render::RHI
 
         vkCmdBeginRendering( pVulkanCommandBuffer->m_commandBuffer, &renderingInfo );
         pVulkanCommandBuffer->m_isRendering = true;
-
-        // colorArraySlices, colorMipSlices, depthArraySlice and depthMipSlice select a subresource
-        // of the target. Direct3D 12 does it by picking a different render target view; Vulkan
-        // does it with a different VkImageView. P5.6 creates per-subresource views on the
-        // texture, so this is left asserting rather than silently rendering to mip 0 of slice 0.
-        EE_ASSERT( colorArraySlices.empty() && colorMipSlices.empty() );
-        EE_ASSERT( depthArraySlice == 0 && depthMipSlice == 0 );
     }
 
     void CmdSetShadingRate( CommandBuffer* pCommandBuffer, ShadingRate shadingRate, Texture* pShadingRateTexture, ShadingRateCombiner postRasterizerCombiner, ShadingRateCombiner finalCombiner )
@@ -2261,48 +2357,239 @@ namespace EE::Render::RHI
 
     //-------------------------------------------------------------------------
 
-    // The one DataFormat to VkFormat mapping. **P5.6 completes this function; it must never
-    // write a second one.** The phase document warns that two mappings which disagree corrupt
-    // textures in a way that looks like a bug somewhere else, so the entries buffers need are
-    // filled in here and everything else asserts rather than guessing.
+    // **The one DataFormat to VkFormat mapping. There must never be a second one.** The phase
+    // document warns that two mappings which disagree corrupt textures in a way that looks like
+    // a bug somewhere else. Everything that needs a VkFormat comes here: buffer views, image
+    // creation, pipeline attachment formats and the device capability query.
     //
-    // Only three formats reach a buffer today, all typed texel buffers: R32_UInt, RG32_UInt and
-    // R32_SFloat. Measured by reading every BufferParameters::m_format assignment in
-    // Code/Engine, not assumed.
+    // Read next to DXGIFormat in RHI_Direct3D12.cpp:276, which is the specification. Two notes
+    // on where the two backends do not line up one for one:
+    //
+    // - **Vulkan names packed formats most significant component first, and DXGI names them
+    //   least significant first.** So DXGI_FORMAT_B5G6R5_UNORM is VK_FORMAT_R5G6B5_UNORM_PACK16,
+    //   not VK_FORMAT_B5G6R5_UNORM_PACK16, and the same reversal applies to every other packed
+    //   entry below. Getting one of these backwards swaps red and blue on that format alone.
+    // - **RGB565_UNorm and BGR565_UNorm both map to the same VkFormat**, because the Direct3D 12
+    //   backend maps both to DXGI_FORMAT_B5G6R5_UNORM. Vulkan can tell them apart and Direct3D
+    //   cannot, so mapping them faithfully here would make the two backends draw the same asset
+    //   differently. Nothing in the engine uses either format. Recorded in Docs/Linux/Progress.md.
     static VkFormat VulkanFormat( DataFormat format )
     {
         switch ( format )
         {
-            case DataFormat::Undefined:     return VK_FORMAT_UNDEFINED;
+            case DataFormat::Undefined: return VK_FORMAT_UNDEFINED;
 
-            case DataFormat::R32_UInt:      return VK_FORMAT_R32_UINT;
-            case DataFormat::R32_SInt:      return VK_FORMAT_R32_SINT;
-            case DataFormat::R32_SFloat:    return VK_FORMAT_R32_SFLOAT;
-            case DataFormat::RG32_UInt:     return VK_FORMAT_R32G32_UINT;
-            case DataFormat::RG32_SInt:     return VK_FORMAT_R32G32_SINT;
-            case DataFormat::RG32_SFloat:   return VK_FORMAT_R32G32_SFLOAT;
-
-            // Render target and depth formats, added by P5.7. Measured the same way: every
-            // DataFormat a texture or a pipeline is created with in Code/Engine.
-            case DataFormat::R8_UNorm:      return VK_FORMAT_R8_UNORM;
-            case DataFormat::R16_SFloat:    return VK_FORMAT_R16_SFLOAT;
-            case DataFormat::RG16_SFloat:   return VK_FORMAT_R16G16_SFLOAT;
-            case DataFormat::RGBA8_UNorm:   return VK_FORMAT_R8G8B8A8_UNORM;
-            case DataFormat::RGBA8_sRGB:    return VK_FORMAT_R8G8B8A8_SRGB;
+                // Uncompressed formats
+                //
+                // R1_UNorm has no Vulkan equivalent at all. Returning UNDEFINED without
+                // asserting mirrors what the Direct3D 12 backend does with the ASTC formats it
+                // cannot express.
+            case DataFormat::R1_UNorm: return VK_FORMAT_UNDEFINED;
+            case DataFormat::RGB565_UNorm: return VK_FORMAT_R5G6B5_UNORM_PACK16;
+            case DataFormat::BGR565_UNorm: return VK_FORMAT_R5G6B5_UNORM_PACK16;
+            case DataFormat::BGR555_A1_UNorm: return VK_FORMAT_A1R5G5B5_UNORM_PACK16;
+            case DataFormat::R8_UNorm: return VK_FORMAT_R8_UNORM;
+            case DataFormat::R8_SNorm: return VK_FORMAT_R8_SNORM;
+            case DataFormat::R8_UInt: return VK_FORMAT_R8_UINT;
+            case DataFormat::R8_SInt: return VK_FORMAT_R8_SINT;
+            case DataFormat::RG8_UNorm: return VK_FORMAT_R8G8_UNORM;
+            case DataFormat::RG8_SNorm: return VK_FORMAT_R8G8_SNORM;
+            case DataFormat::RG8_UInt: return VK_FORMAT_R8G8_UINT;
+            case DataFormat::RG8_SInt: return VK_FORMAT_R8G8_SINT;
+            case DataFormat::BGRA4_UNorm: return VK_FORMAT_A4R4G4B4_UNORM_PACK16;
+            case DataFormat::RGBA8_UNorm: return VK_FORMAT_R8G8B8A8_UNORM;
+            case DataFormat::RGBA8_SNorm: return VK_FORMAT_R8G8B8A8_SNORM;
+            case DataFormat::RGBA8_UInt: return VK_FORMAT_R8G8B8A8_UINT;
+            case DataFormat::RGBA8_SInt: return VK_FORMAT_R8G8B8A8_SINT;
+            case DataFormat::RGBA8_sRGB: return VK_FORMAT_R8G8B8A8_SRGB;
+            case DataFormat::BGRA8_UNorm: return VK_FORMAT_B8G8R8A8_UNORM;
+            case DataFormat::BGRA8_sRGB: return VK_FORMAT_B8G8R8A8_SRGB;
+            case DataFormat::RGB10_A2_UNorm: return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+            case DataFormat::RGB10_A2_UInt: return VK_FORMAT_A2B10G10R10_UINT_PACK32;
+            case DataFormat::R16_UNorm: return VK_FORMAT_R16_UNORM;
+            case DataFormat::R16_SNorm: return VK_FORMAT_R16_SNORM;
+            case DataFormat::R16_UInt: return VK_FORMAT_R16_UINT;
+            case DataFormat::R16_SInt: return VK_FORMAT_R16_SINT;
+            case DataFormat::R16_SFloat: return VK_FORMAT_R16_SFLOAT;
+            case DataFormat::RG16_UNorm: return VK_FORMAT_R16G16_UNORM;
+            case DataFormat::RG16_SNorm: return VK_FORMAT_R16G16_SNORM;
+            case DataFormat::RG16_UInt: return VK_FORMAT_R16G16_UINT;
+            case DataFormat::RG16_SInt: return VK_FORMAT_R16G16_SINT;
+            case DataFormat::RG16_SFloat: return VK_FORMAT_R16G16_SFLOAT;
+            case DataFormat::RGBA16_UNorm: return VK_FORMAT_R16G16B16A16_UNORM;
+            case DataFormat::RGBA16_SNorm: return VK_FORMAT_R16G16B16A16_SNORM;
+            case DataFormat::RGBA16_UInt: return VK_FORMAT_R16G16B16A16_UINT;
+            case DataFormat::RGBA16_SInt: return VK_FORMAT_R16G16B16A16_SINT;
             case DataFormat::RGBA16_SFloat: return VK_FORMAT_R16G16B16A16_SFLOAT;
+            case DataFormat::R32_UInt: return VK_FORMAT_R32_UINT;
+            case DataFormat::R32_SInt: return VK_FORMAT_R32_SINT;
+            case DataFormat::R32_SFloat: return VK_FORMAT_R32_SFLOAT;
+            case DataFormat::RG32_UInt: return VK_FORMAT_R32G32_UINT;
+            case DataFormat::RG32_SInt: return VK_FORMAT_R32G32_SINT;
+            case DataFormat::RG32_SFloat: return VK_FORMAT_R32G32_SFLOAT;
+            case DataFormat::RGB32_UInt: return VK_FORMAT_R32G32B32_UINT;
+            case DataFormat::RGB32_SInt: return VK_FORMAT_R32G32B32_SINT;
+            case DataFormat::RGB32_SFloat: return VK_FORMAT_R32G32B32_SFLOAT;
+            case DataFormat::RGBA32_UInt: return VK_FORMAT_R32G32B32A32_UINT;
+            case DataFormat::RGBA32_SInt: return VK_FORMAT_R32G32B32A32_SINT;
             case DataFormat::RGBA32_SFloat: return VK_FORMAT_R32G32B32A32_SFLOAT;
             case DataFormat::RG11_B10_UFloat: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
-            case DataFormat::D32_SFloat:    return VK_FORMAT_D32_SFLOAT;
-            case DataFormat::S8_Uint:       return VK_FORMAT_S8_UINT;
+            case DataFormat::RGB9_E5_UFloat: return VK_FORMAT_E5B9G9R9_UFLOAT_PACK32;
+            case DataFormat::D32_SFloat: return VK_FORMAT_D32_SFLOAT;
+            case DataFormat::D32_SFloat_S8_UInt: return VK_FORMAT_D32_SFLOAT_S8_UINT;
+                // Direct3D 12 has no stencil-only format and maps this to
+                // DXGI_FORMAT_D24_UNORM_S8_UINT. Vulkan has the exact format, and support for it
+                // is optional, so a device without it now reports the format unusable in
+                // DeviceCapabilities rather than silently getting a depth buffer it never asked
+                // for.
+            case DataFormat::S8_Uint: return VK_FORMAT_S8_UINT;
+
+                // Compressed DXBC formats
+                //
+                // Vulkan separates BC1 with and without alpha; DXGI_FORMAT_BC1_UNORM covers both.
+                // The DataFormat enum makes the same distinction Vulkan does, so this is one
+                // place where the mapping is more exact than the Direct3D 12 one.
+            case DataFormat::DXBC1_RGB_UNorm: return VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+            case DataFormat::DXBC1_RGB_sRGB: return VK_FORMAT_BC1_RGB_SRGB_BLOCK;
+            case DataFormat::DXBC1_RGBA_UNorm: return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+            case DataFormat::DXBC1_RGBA_sRGB: return VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+            case DataFormat::DXBC2_UNorm: return VK_FORMAT_BC2_UNORM_BLOCK;
+            case DataFormat::DXBC2_sRGB: return VK_FORMAT_BC2_SRGB_BLOCK;
+            case DataFormat::DXBC3_UNorm: return VK_FORMAT_BC3_UNORM_BLOCK;
+            case DataFormat::DXBC3_sRGB: return VK_FORMAT_BC3_SRGB_BLOCK;
+            case DataFormat::DXBC4_UNorm: return VK_FORMAT_BC4_UNORM_BLOCK;
+            case DataFormat::DXBC4_SNorm: return VK_FORMAT_BC4_SNORM_BLOCK;
+            case DataFormat::DXBC5_UNorm: return VK_FORMAT_BC5_UNORM_BLOCK;
+            case DataFormat::DXBC5_SNorm: return VK_FORMAT_BC5_SNORM_BLOCK;
+            case DataFormat::DXBC6H_UFloat: return VK_FORMAT_BC6H_UFLOAT_BLOCK;
+            case DataFormat::DXBC6H_SFloat: return VK_FORMAT_BC6H_SFLOAT_BLOCK;
+            case DataFormat::DXBC7_UNorm: return VK_FORMAT_BC7_UNORM_BLOCK;
+            case DataFormat::DXBC7_sRGB: return VK_FORMAT_BC7_SRGB_BLOCK;
+
+                // Compressed ASTC formats. Direct3D has none of these and returns
+                // DXGI_FORMAT_UNKNOWN; Vulkan has all of them, gated on textureCompressionASTC_LDR,
+                // which nothing enables. FillDeviceCapabilities reports each one honestly.
+            case DataFormat::ASTC_4x4_UNorm: return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+            case DataFormat::ASTC_4x4_sRGB: return VK_FORMAT_ASTC_4x4_SRGB_BLOCK;
+            case DataFormat::ASTC_5x4_UNorm: return VK_FORMAT_ASTC_5x4_UNORM_BLOCK;
+            case DataFormat::ASTC_5x4_sRGB: return VK_FORMAT_ASTC_5x4_SRGB_BLOCK;
+            case DataFormat::ASTC_5x5_UNorm: return VK_FORMAT_ASTC_5x5_UNORM_BLOCK;
+            case DataFormat::ASTC_5x5_sRGB: return VK_FORMAT_ASTC_5x5_SRGB_BLOCK;
+            case DataFormat::ASTC_6x5_UNorm: return VK_FORMAT_ASTC_6x5_UNORM_BLOCK;
+            case DataFormat::ASTC_6x5_sRGB: return VK_FORMAT_ASTC_6x5_SRGB_BLOCK;
+            case DataFormat::ASTC_6x6_UNorm: return VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+            case DataFormat::ASTC_6x6_sRGB: return VK_FORMAT_ASTC_6x6_SRGB_BLOCK;
+            case DataFormat::ASTC_8x5_UNorm: return VK_FORMAT_ASTC_8x5_UNORM_BLOCK;
+            case DataFormat::ASTC_8x5_sRGB: return VK_FORMAT_ASTC_8x5_SRGB_BLOCK;
+            case DataFormat::ASTC_8x6_UNorm: return VK_FORMAT_ASTC_8x6_UNORM_BLOCK;
+            case DataFormat::ASTC_8x6_sRGB: return VK_FORMAT_ASTC_8x6_SRGB_BLOCK;
+            case DataFormat::ASTC_8x8_UNorm: return VK_FORMAT_ASTC_8x8_UNORM_BLOCK;
+            case DataFormat::ASTC_8x8_sRGB: return VK_FORMAT_ASTC_8x8_SRGB_BLOCK;
+            case DataFormat::ASTC_10x5_UNorm: return VK_FORMAT_ASTC_10x5_UNORM_BLOCK;
+            case DataFormat::ASTC_10x5_sRGB: return VK_FORMAT_ASTC_10x5_SRGB_BLOCK;
+            case DataFormat::ASTC_10x6_UNorm: return VK_FORMAT_ASTC_10x6_UNORM_BLOCK;
+            case DataFormat::ASTC_10x6_sRGB: return VK_FORMAT_ASTC_10x6_SRGB_BLOCK;
+            case DataFormat::ASTC_10x8_UNorm: return VK_FORMAT_ASTC_10x8_UNORM_BLOCK;
+            case DataFormat::ASTC_10x8_sRGB: return VK_FORMAT_ASTC_10x8_SRGB_BLOCK;
+            case DataFormat::ASTC_10x10_UNorm: return VK_FORMAT_ASTC_10x10_UNORM_BLOCK;
+            case DataFormat::ASTC_10x10_sRGB: return VK_FORMAT_ASTC_10x10_SRGB_BLOCK;
+            case DataFormat::ASTC_12x10_UNorm: return VK_FORMAT_ASTC_12x10_UNORM_BLOCK;
+            case DataFormat::ASTC_12x10_sRGB: return VK_FORMAT_ASTC_12x10_SRGB_BLOCK;
+            case DataFormat::ASTC_12x12_UNorm: return VK_FORMAT_ASTC_12x12_UNORM_BLOCK;
+            case DataFormat::ASTC_12x12_sRGB: return VK_FORMAT_ASTC_12x12_SRGB_BLOCK;
+
+            // Special case - completely invalid format on all platforms
+            default:
+            {
+                EE_ASSERT( false );
+                return VK_FORMAT_UNDEFINED;
+            }
+        };
+    }
+
+    // Every aspect the image has. A view picks a subset of it: an attachment view takes all of
+    // them, and a sampled view of a depth-stencil image has to take exactly one.
+    static VkImageAspectFlags VulkanImageAspect( VkFormat format )
+    {
+        switch ( format )
+        {
+            case VK_FORMAT_D32_SFLOAT:
+            case VK_FORMAT_D16_UNORM:
+            case VK_FORMAT_X8_D24_UNORM_PACK32:
+                return VK_IMAGE_ASPECT_DEPTH_BIT;
+
+            case VK_FORMAT_S8_UINT:
+                return VK_IMAGE_ASPECT_STENCIL_BIT;
+
+            case VK_FORMAT_D16_UNORM_S8_UINT:
+            case VK_FORMAT_D24_UNORM_S8_UINT:
+            case VK_FORMAT_D32_SFLOAT_S8_UINT:
+                return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+
+            default:
+                return VK_IMAGE_ASPECT_COLOR_BIT;
+        }
+    }
+
+    // The view type a shader reads the whole texture through. Mirrors
+    // D3D12ShaderResourceViewDimension at RHI_Direct3D12.cpp:400, and reuses the same
+    // TextureViewDimension decision so both backends classify a texture identically.
+    static VkImageViewType VulkanImageViewType( ViewDimension viewDimension )
+    {
+        switch ( viewDimension )
+        {
+            case ViewDimension::Texture1D: return VK_IMAGE_VIEW_TYPE_1D;
+            case ViewDimension::Texture1DArray: return VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+            case ViewDimension::Texture2D: return VK_IMAGE_VIEW_TYPE_2D;
+            case ViewDimension::Texture2DArray: return VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            // Vulkan has no separate multisample view type; the image's sample count carries it.
+            case ViewDimension::Texture2DMultisample: return VK_IMAGE_VIEW_TYPE_2D;
+            case ViewDimension::Texture2DMultisampleArray: return VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            case ViewDimension::Texture3D: return VK_IMAGE_VIEW_TYPE_3D;
+            case ViewDimension::TextureCube: return VK_IMAGE_VIEW_TYPE_CUBE;
+            // VK_IMAGE_VIEW_TYPE_CUBE_ARRAY needs the imageCubeArray feature, which is not
+            // enabled because no texture in the engine has more than six cube faces.
+            case ViewDimension::TextureCubeArray: return VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
 
             default:
             {
-                // P5.6 fills in the remaining ~109 entries, in the same task as the texture
-                // work that needs them.
-                EE_UNIMPLEMENTED_FUNCTION();
-                return VK_FORMAT_UNDEFINED;
+                EE_ASSERT( false );
+                return VK_IMAGE_VIEW_TYPE_2D;
             }
         }
+    }
+
+    // Which ViewDimension a texture is, by the same rules the Direct3D 12 backend uses at
+    // RHI_Direct3D12.cpp:854. Kept as one function for the same reason the format mapping is:
+    // two backends that classify a texture differently disagree about what its views mean.
+    static ViewDimension VulkanTextureViewDimension( uint32_t width, uint32_t height, uint32_t depth, uint32_t arrayLayers, uint32_t numSamples, TBitFlags<DescriptorTypeFlags> const& descriptorTypes )
+    {
+        bool const isCubemap = descriptorTypes.AreAnyFlagsSet( DescriptorTypeFlags::TextureCube );
+
+        if ( numSamples > 1 )
+        {
+            EE_ASSERT( height > 1 && depth == 1 && !isCubemap );
+            return arrayLayers > 1 ? ViewDimension::Texture2DMultisampleArray : ViewDimension::Texture2DMultisample;
+        }
+
+        if ( isCubemap )
+        {
+            EE_ASSERT( ( arrayLayers % 6 ) == 0 );
+            return arrayLayers > 6 ? ViewDimension::TextureCubeArray : ViewDimension::TextureCube;
+        }
+
+        if ( arrayLayers > 1 )
+        {
+            EE_ASSERT( depth == 1 ); // Neither API has a 3D texture array
+            return height > 1 ? ViewDimension::Texture2DArray : ViewDimension::Texture1DArray;
+        }
+
+        if ( depth > 1 )
+        {
+            return ViewDimension::Texture3D;
+        }
+
+        return height > 1 ? ViewDimension::Texture2D : ViewDimension::Texture1D;
     }
 
     static void TrackResourceAllocation( VulkanContext* pVulkanContext, TBitFlags<DescriptorTypeFlags> descriptorTypes, bool isTexture, bool isAllocation, uint64_t numBytes )
@@ -2349,6 +2636,38 @@ namespace EE::Render::RHI
         write.descriptorType = descriptorType;
         write.pBufferInfo = pBufferInfo;
         write.pTexelBufferView = pTexelBufferView;
+
+        vkUpdateDescriptorSets( pVulkanContext->m_device, 1, &write, 0, nullptr );
+    }
+
+    // The image form of the same write.
+    static void WriteResourceHeapSlot( VulkanContext* pVulkanContext, uint32_t heapIndex, VkDescriptorType descriptorType, VkDescriptorImageInfo const* pImageInfo )
+    {
+        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = pVulkanContext->m_heapDescriptorSet;
+        write.dstBinding = g_resourceHeapBinding;
+        write.dstArrayElement = heapIndex;
+        write.descriptorCount = 1;
+        write.descriptorType = descriptorType;
+        write.pImageInfo = pImageInfo;
+
+        vkUpdateDescriptorSets( pVulkanContext->m_device, 1, &write, 0, nullptr );
+    }
+
+    // The sampler heap is the second binding of the same set, and a plain sampler array rather
+    // than a mutable one.
+    static void WriteSamplerHeapSlot( VulkanContext* pVulkanContext, uint32_t heapIndex, VkSampler sampler )
+    {
+        VkDescriptorImageInfo imageInfo = {};
+        imageInfo.sampler = sampler;
+
+        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = pVulkanContext->m_heapDescriptorSet;
+        write.dstBinding = g_samplerHeapBinding;
+        write.dstArrayElement = heapIndex;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        write.pImageInfo = &imageInfo;
 
         vkUpdateDescriptorSets( pVulkanContext->m_device, 1, &write, 0, nullptr );
     }
@@ -2767,44 +3086,492 @@ namespace EE::Render::RHI
     }
 
 
+    //-------------------------------------------------------------------------
+    // Textures and samplers
+    //-------------------------------------------------------------------------
+
+    static VkImageView CreateTextureView( VkDevice device, VkImage image, VkFormat format, VkImageViewType viewType, VkImageAspectFlags aspectMask, uint32_t baseMipLevel, uint32_t numMipLevels, uint32_t baseArrayLayer, uint32_t numArrayLayers )
+    {
+        VkImageViewCreateInfo viewCreateInfo = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        viewCreateInfo.image = image;
+        viewCreateInfo.viewType = viewType;
+        viewCreateInfo.format = format;
+        viewCreateInfo.subresourceRange.aspectMask = aspectMask;
+        viewCreateInfo.subresourceRange.baseMipLevel = baseMipLevel;
+        viewCreateInfo.subresourceRange.levelCount = numMipLevels;
+        viewCreateInfo.subresourceRange.baseArrayLayer = baseArrayLayer;
+        viewCreateInfo.subresourceRange.layerCount = numArrayLayers;
+
+        VkImageView imageView = VK_NULL_HANDLE;
+        VkResult const result = vkCreateImageView( device, &viewCreateInfo, nullptr, &imageView );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        return imageView;
+    }
+
     Texture* CreateTexture( Context* pContext, TextureParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        EE_ASSERT( pContext != nullptr );
+
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanTexture* pVulkanTexture = pVulkanContext->CreateObject<VulkanTexture>();
+
+        EE_ASSERT( parameters.m_width > 0 && parameters.m_height > 0 && parameters.m_depth > 0 );
+        EE_ASSERT( parameters.m_mipLevels > 0 && parameters.m_arrayLayers > 0 );
+
+        VkFormat const vulkanFormat = VulkanFormat( parameters.m_format );
+        EE_ASSERT( vulkanFormat != VK_FORMAT_UNDEFINED );
+
+        VkImageAspectFlags const aspectMask = VulkanImageAspect( vulkanFormat );
+        bool const isDepthStencil = ( aspectMask & ( VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT ) ) != 0;
+
+        TBitFlags<DescriptorTypeFlags> const descriptorTypes = parameters.m_descriptorTypes;
+        bool const isShaderResource = descriptorTypes.AreAnyFlagsSet( DescriptorTypeFlags::Texture, DescriptorTypeFlags::TextureCube );
+        bool const isStorage = descriptorTypes.IsFlagSet( DescriptorTypeFlags::RWTexture );
+        bool const isRenderTarget = descriptorTypes.IsFlagSet( DescriptorTypeFlags::RenderTarget );
+
+        // The flags below need external memory or a console, and no device extension here
+        // provides any of them. Nothing in the engine sets one; halting names the caller that
+        // starts to. TextureFlags::DisableCompression and AllowDisplayTarget have no Vulkan
+        // control at all and are ignored rather than refused, which is what Direct3D 12's own
+        // heap flags amount to.
+        EE_ASSERT( !parameters.m_textureFlags.AreAnyFlagsSet( TextureFlags::ExportHandle, TextureFlags::ExportAdapter, TextureFlags::ImportHandle, TextureFlags::ESRAM, TextureFlags::OnTile ) );
+
+        ViewDimension const viewDimension = VulkanTextureViewDimension( parameters.m_width, parameters.m_height, parameters.m_depth, parameters.m_arrayLayers, parameters.m_numSamples, descriptorTypes );
+
+        // Image
+        //-------------------------------------------------------------------------
+
+        VkImageCreateInfo imageCreateInfo = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+
+        if ( parameters.m_depth > 1 )
+        {
+            EE_ASSERT( parameters.m_arrayLayers == 1 ); // No 3D texture array in either API
+            imageCreateInfo.imageType = VK_IMAGE_TYPE_3D;
+            imageCreateInfo.extent = { parameters.m_width, parameters.m_height, parameters.m_depth };
+            imageCreateInfo.arrayLayers = 1;
+        }
+        else
+        {
+            imageCreateInfo.imageType = parameters.m_height > 1 ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_1D;
+            imageCreateInfo.extent = { parameters.m_width, parameters.m_height, 1 };
+            imageCreateInfo.arrayLayers = parameters.m_arrayLayers;
+        }
+
+        // Vulkan wants the usage up front where Direct3D 12 derives it from the views that get
+        // created, exactly as with buffers. Both transfer bits, because the engine uploads every
+        // texture it loads and P5.10's copies and clears can name any of them.
+        imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        if ( isShaderResource ) { imageCreateInfo.usage |= VK_IMAGE_USAGE_SAMPLED_BIT; }
+        if ( isStorage )        { imageCreateInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT; }
+        if ( isRenderTarget )   { imageCreateInfo.usage |= isDepthStencil ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; }
+
+        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::TextureCube ) )
+        {
+            imageCreateInfo.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        }
+
+        imageCreateInfo.format = vulkanFormat;
+        imageCreateInfo.mipLevels = parameters.m_mipLevels;
+        imageCreateInfo.samples = VkSampleCountFlagBits( parameters.m_numSamples );
+        imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        // Same reasoning as CreateBuffer: Direct3D 12 resources have no queue ownership, and
+        // CONCURRENT would reproduce that at a cost. P5.9 owns the ownership transfers.
+        imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        // vkCreateImage accepts UNDEFINED or PREINITIALIZED and nothing else, and the second is
+        // for linear tiling. See VulkanTexture::m_currentLayout for what that costs P5.9.
+        imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if ( parameters.m_pNativeHandle != nullptr )
+        {
+            // A VkImage somebody else owns and allocated. P5.3's swapchain images arrive this
+            // way, which is why the views below are still built for it.
+            pVulkanTexture->m_image = static_cast<VkImage>( parameters.m_pNativeHandle );
+            pVulkanTexture->m_ownsImage = false;
+        }
+        else if ( parameters.m_pTextureToAlias != nullptr )
+        {
+            // Direct3D 12 aliases by sharing the ID3D12Resource pointer. Sharing the VkImage is
+            // the same thing, and the aliased texture keeps ownership of the memory.
+            pVulkanTexture->m_image = static_cast<VulkanTexture*>( parameters.m_pTextureToAlias )->m_image;
+            pVulkanTexture->m_ownsImage = false;
+        }
+        else
+        {
+            VmaAllocationCreateInfo allocationCreateInfo = {};
+            allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+            if ( parameters.m_memoryType != ResourceMemoryType::DeviceLocal )
+            {
+                // Direct3D 12 puts every texture on D3D12_HEAP_TYPE_DEFAULT and uploads through
+                // a staging buffer; the RHI still lets a caller ask for host memory.
+                allocationCreateInfo.flags |= parameters.m_memoryType == ResourceMemoryType::HostToDevice
+                                            ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                                            : VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+            }
+
+            if ( parameters.m_textureFlags.IsFlagSet( TextureFlags::OwnMemory ) )
+            {
+                // D3D12MA::ALLOCATION_FLAG_COMMITTED.
+                allocationCreateInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+            }
+
+            VmaAllocationInfo allocationInfo = {};
+            VkResult const result = vmaCreateImage( pVulkanContext->m_resourceAllocator, &imageCreateInfo, &allocationCreateInfo, &pVulkanTexture->m_image, &pVulkanTexture->m_allocation, &allocationInfo );
+            EE_ASSERT( result == VK_SUCCESS );
+
+            pVulkanTexture->m_allocationSize = allocationInfo.size;
+            TrackResourceAllocation( pVulkanContext, descriptorTypes, true, true, allocationInfo.size );
+        }
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_IMAGE, uint64_t( pVulkanTexture->m_image ), parameters.m_debugName );
+
+        pVulkanTexture->m_width = parameters.m_width;
+        pVulkanTexture->m_height = parameters.m_height;
+        pVulkanTexture->m_depth = parameters.m_depth;
+        pVulkanTexture->m_arrayLayers = parameters.m_arrayLayers;
+        pVulkanTexture->m_mipLevels = parameters.m_mipLevels;
+        pVulkanTexture->m_format = parameters.m_format;
+        pVulkanTexture->m_numSamples = parameters.m_numSamples;
+        pVulkanTexture->m_sampleQuality = parameters.m_sampleQuality;
+        pVulkanTexture->m_nodeIndex = parameters.m_nodeIndex;
+        pVulkanTexture->m_clearValue = parameters.m_clearValue;
+        pVulkanTexture->m_descriptorTypes = descriptorTypes;
+        pVulkanTexture->m_initialState = parameters.m_initialState;
+
+        pVulkanTexture->m_vulkanFormat = vulkanFormat;
+        pVulkanTexture->m_extent = imageCreateInfo.extent;
+        pVulkanTexture->m_aspectMask = aspectMask;
+        pVulkanTexture->m_copyRowAlignment = pVulkanContext->m_deviceCapabilities.m_uploadBufferTextureRowAlignment;
+
+        // A texture that is also an RWTexture has to sit in VK_IMAGE_LAYOUT_GENERAL, because a
+        // storage image descriptor may name no other layout and one image cannot be in two
+        // layouts at once. Recorded on the texture so P5.9 transitions to the layout the
+        // descriptor was actually written with rather than guessing from TextureState.
+        pVulkanTexture->m_shaderReadLayout = isStorage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        // Views
+        //-------------------------------------------------------------------------
+        // Direct3D 12 puts the subresource selection in the descriptor. Vulkan puts it in the
+        // view, so every subresource the engine can name needs one built up front.
+
+        if ( isShaderResource )
+        {
+            // A sampled view of a depth-stencil image must name exactly one aspect. Depth is the
+            // one the engine reads, which is the same choice RHI_Direct3D12.cpp:4597 makes.
+            VkImageAspectFlags const sampledAspect = ( aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT ) != 0 ? VK_IMAGE_ASPECT_DEPTH_BIT : aspectMask;
+
+            pVulkanTexture->m_shaderResourceView = CreateTextureView( pVulkanContext->m_device, pVulkanTexture->m_image, vulkanFormat,
+                                                                      VulkanImageViewType( viewDimension ), sampledAspect,
+                                                                      0, parameters.m_mipLevels, 0, parameters.m_arrayLayers );
+        }
+
+        if ( isStorage )
+        {
+            // One view per mip level, because an RWTexture handle names a mip. A storage image
+            // has no cube view type, so a cube-compatible image is read as a 2D array.
+            VkImageViewType storageViewType = VulkanImageViewType( viewDimension );
+            if ( storageViewType == VK_IMAGE_VIEW_TYPE_CUBE || storageViewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY )
+            {
+                storageViewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            }
+
+            pVulkanTexture->m_storageViews.reserve( parameters.m_mipLevels );
+            for ( uint32_t mipLevel = 0; mipLevel < parameters.m_mipLevels; ++mipLevel )
+            {
+                pVulkanTexture->m_storageViews.emplace_back( CreateTextureView( pVulkanContext->m_device, pVulkanTexture->m_image, vulkanFormat,
+                                                                                storageViewType, aspectMask,
+                                                                                mipLevel, 1, 0, imageCreateInfo.arrayLayers ) );
+            }
+        }
+
+        if ( isRenderTarget )
+        {
+            // One view per subresource, in the order Direct3D 12 allocates its render target
+            // descriptors: array layer outer, mip level inner. VulkanTexture::RenderTargetView
+            // indexes them the same way.
+            VkImageViewType const attachmentViewType = imageCreateInfo.imageType == VK_IMAGE_TYPE_3D ? VK_IMAGE_VIEW_TYPE_3D
+                                                     : imageCreateInfo.imageType == VK_IMAGE_TYPE_2D ? VK_IMAGE_VIEW_TYPE_2D
+                                                     : VK_IMAGE_VIEW_TYPE_1D;
+
+            pVulkanTexture->m_renderTargetViews.reserve( parameters.m_mipLevels * parameters.m_arrayLayers );
+            for ( uint32_t arrayLayer = 0; arrayLayer < parameters.m_arrayLayers; ++arrayLayer )
+            {
+                for ( uint32_t mipLevel = 0; mipLevel < parameters.m_mipLevels; ++mipLevel )
+                {
+                    // An attachment view takes every aspect the image has, unlike the sampled
+                    // view above: dynamic rendering binds the depth and the stencil from it.
+                    pVulkanTexture->m_renderTargetViews.emplace_back( CreateTextureView( pVulkanContext->m_device, pVulkanTexture->m_image, vulkanFormat,
+                                                                                          attachmentViewType, aspectMask,
+                                                                                          mipLevel, 1, arrayLayer, 1 ) );
+                }
+            }
+        }
+
+        // Descriptors
+        //-------------------------------------------------------------------------
+        // One contiguous run in the resource heap, laid out exactly as Direct3D 12 lays it out
+        // at RHI_Direct3D12.cpp:4562: the read view first if present, then one read-write view
+        // per mip level. GetTextureHandle does the same arithmetic on both backends.
+
+        if ( isShaderResource || isStorage )
+        {
+            uint16_t numDescriptors = 0;
+            if ( isShaderResource ) { numDescriptors++; }
+            if ( isStorage ) { numDescriptors += uint16_t( parameters.m_mipLevels ); }
+
+            pVulkanTexture->m_descriptorHandles = pVulkanContext->m_resourceHeapAllocator.Allocate( numDescriptors );
+            EE_ASSERT( pVulkanTexture->m_descriptorHandles.IsValid() );
+
+            if ( isShaderResource )
+            {
+                pVulkanTexture->m_uavDescriptorOffset = 1;
+
+                VkDescriptorImageInfo imageInfo = {};
+                imageInfo.imageView = pVulkanTexture->m_shaderResourceView;
+                imageInfo.imageLayout = pVulkanTexture->m_shaderReadLayout;
+
+                WriteResourceHeapSlot( pVulkanContext, pVulkanTexture->m_descriptorHandles.m_offset, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &imageInfo );
+            }
+            else
+            {
+                pVulkanTexture->m_uavDescriptorOffset = 0;
+            }
+
+            if ( isStorage )
+            {
+                for ( uint32_t mipLevel = 0; mipLevel < parameters.m_mipLevels; ++mipLevel )
+                {
+                    VkDescriptorImageInfo imageInfo = {};
+                    imageInfo.imageView = pVulkanTexture->m_storageViews[mipLevel];
+                    imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+                    uint32_t const heapIndex = uint32_t( pVulkanTexture->m_descriptorHandles.m_offset ) + uint32_t( pVulkanTexture->m_uavDescriptorOffset ) + mipLevel;
+                    WriteResourceHeapSlot( pVulkanContext, heapIndex, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &imageInfo );
+                }
+            }
+        }
+
+        return pVulkanTexture;
     }
 
     void DestroyTexture( Context* pContext, Texture*&& pTexture )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pTexture != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( pTexture );
+
+            if ( pVulkanTexture->m_shaderResourceView != VK_NULL_HANDLE )
+            {
+                vkDestroyImageView( pVulkanContext->m_device, pVulkanTexture->m_shaderResourceView, nullptr );
+            }
+
+            for ( VkImageView imageView : pVulkanTexture->m_storageViews )
+            {
+                vkDestroyImageView( pVulkanContext->m_device, imageView, nullptr );
+            }
+
+            for ( VkImageView imageView : pVulkanTexture->m_renderTargetViews )
+            {
+                vkDestroyImageView( pVulkanContext->m_device, imageView, nullptr );
+            }
+
+            if ( pVulkanTexture->m_descriptorHandles.IsValid() )
+            {
+                // Not cleared, for the reason DestroyBuffer gives: PARTIALLY_BOUND makes a stale
+                // slot harmless unless a shader reads a freed handle, which is a bug either way.
+                pVulkanContext->m_resourceHeapAllocator.Deallocate( eastl::move( pVulkanTexture->m_descriptorHandles ) );
+            }
+
+            TrackResourceAllocation( pVulkanContext, pVulkanTexture->m_descriptorTypes, true, false, pVulkanTexture->m_allocationSize );
+
+            if ( pVulkanTexture->m_ownsImage && pVulkanTexture->m_image != VK_NULL_HANDLE )
+            {
+                vmaDestroyImage( pVulkanContext->m_resourceAllocator, pVulkanTexture->m_image, pVulkanTexture->m_allocation );
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanTexture ) );
+            pTexture = nullptr;
+        }
     }
 
     uint32_t GetTextureCopyRowStride( Texture const* pTexture, uint32_t mipLevel, uint32_t arrayLayer )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return 0;
+        VulkanTexture const* pVulkanTexture = static_cast<VulkanTexture const*>( pTexture );
+
+        EE_ASSERT( mipLevel < pVulkanTexture->m_mipLevels );
+        EE_ASSERT( arrayLayer < pVulkanTexture->m_arrayLayers );
+
+        // Direct3D 12 reads this out of GetCopyableFootprints, which aligns the row pitch to
+        // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT. Vulkan has no such call, because the layout of the
+        // staging buffer is the caller's to choose; the equivalent alignment is the device's
+        // optimalBufferCopyRowPitchAlignment.
+        //
+        // **P5.10 must derive vkCmdCopyBufferToImage's bufferRowLength from this same number.**
+        // The engine writes its rows at this stride and the copy has to read them at it.
+        uint32_t const mipWidth = Math::Max( pVulkanTexture->m_width >> mipLevel, 1U );
+        uint32_t const rowStride = ComputeFormatRowStride( pVulkanTexture->m_format, mipWidth );
+
+        return Math::RoundUpToNearestMultiple32( rowStride, pVulkanTexture->m_copyRowAlignment );
     }
 
     TextureHandle GetTextureHandle( Texture const* pTexture, DescriptorTypeFlags descriptorType, uint32_t rwTextureMipLevel )
     {
+        VulkanTexture const* pVulkanTexture = static_cast<VulkanTexture const*>( pTexture );
+
+        EE_ASSERT( pVulkanTexture->m_descriptorTypes.IsFlagSet( descriptorType ) );
+        EE_ASSERT( pVulkanTexture->m_descriptorHandles.IsValid() );
+
+        switch ( descriptorType )
+        {
+            case DescriptorTypeFlags::Texture:
+            case DescriptorTypeFlags::TextureCube:
+            {
+                return TextureHandle( pVulkanTexture->m_descriptorHandles.m_offset );
+            }
+
+            case DescriptorTypeFlags::RWTexture:
+            {
+                EE_ASSERT( rwTextureMipLevel < pVulkanTexture->m_mipLevels );
+                EE_ASSERT( pVulkanTexture->m_uavDescriptorOffset != -1 );
+
+                return TextureHandle( pVulkanTexture->m_descriptorHandles.m_offset + uint8_t( pVulkanTexture->m_uavDescriptorOffset ) + rwTextureMipLevel );
+            }
+
+            default:
+            {
+                EE_ASSERT( false );
+                return InvalidResourceHandle;
+            }
+        }
+    }
+
+    //-------------------------------------------------------------------------
+
+    static VkFilter VulkanFilter( FilterType filterType )
+    {
+        return filterType == FilterType::Linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    }
+
+    static VkSamplerAddressMode VulkanAddressMode( AddressMode addressMode )
+    {
+        switch ( addressMode )
+        {
+            case AddressMode::Wrap: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            case AddressMode::ClampToEdge: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            case AddressMode::ClampToBorder: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+            case AddressMode::Mirror: return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    }
+
+    // Direct3D 12 takes any border colour; Vulkan takes one of six fixed ones unless
+    // VK_EXT_custom_border_color is enabled, which it is not. Every sampler the engine creates
+    // leaves the default of transparent black, and only a ClampToBorder address mode reads it.
+    static VkBorderColor VulkanBorderColor( float const borderColor[4] )
+    {
+        bool const isBlack = borderColor[0] == 0.0F && borderColor[1] == 0.0F && borderColor[2] == 0.0F;
+        bool const isWhite = borderColor[0] == 1.0F && borderColor[1] == 1.0F && borderColor[2] == 1.0F;
+
+        if ( isBlack && borderColor[3] == 0.0F ) { return VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK; }
+        if ( isBlack && borderColor[3] == 1.0F ) { return VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK; }
+        if ( isWhite && borderColor[3] == 1.0F ) { return VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE; }
+
+        // A colour Vulkan cannot express without VK_EXT_custom_border_color. Halting here names
+        // the sampler that started needing the extension.
         EE_UNIMPLEMENTED_FUNCTION();
-        return TextureHandle();
+        return VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     }
 
     Sampler* CreateSampler( Context* pContext, SamplerParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        EE_ASSERT( pContext != nullptr );
+
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanSampler* pVulkanSampler = pVulkanContext->CreateObject<VulkanSampler>();
+
+        // The same pairing RHI_Direct3D12.cpp:497 asserts on, where a comparison filter and a
+        // comparison function are two halves of one D3D12_FILTER value.
+        if ( parameters.m_compareMode != CompareMode::Never )
+        {
+            EE_ASSERT( parameters.m_filterMode == FilterMode::Compare );
+        }
+
+        VkSamplerCreateInfo samplerCreateInfo = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+        samplerCreateInfo.minFilter = VulkanFilter( parameters.m_minFilter );
+        samplerCreateInfo.magFilter = VulkanFilter( parameters.m_magFilter );
+        samplerCreateInfo.mipmapMode = parameters.m_mipMapMode == MipMapMode::Linear ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samplerCreateInfo.addressModeU = VulkanAddressMode( parameters.m_addressModeU );
+        samplerCreateInfo.addressModeV = VulkanAddressMode( parameters.m_addressModeV );
+        samplerCreateInfo.addressModeW = VulkanAddressMode( parameters.m_addressModeW );
+        samplerCreateInfo.mipLodBias = parameters.m_mipLODBias;
+        samplerCreateInfo.anisotropyEnable = parameters.m_maxAnisotropy > 1 ? VK_TRUE : VK_FALSE;
+        samplerCreateInfo.maxAnisotropy = float( parameters.m_maxAnisotropy );
+        samplerCreateInfo.compareEnable = parameters.m_compareMode != CompareMode::Never ? VK_TRUE : VK_FALSE;
+        samplerCreateInfo.compareOp = VulkanCompareOp( parameters.m_compareMode );
+        samplerCreateInfo.minLod = parameters.m_minLOD;
+        samplerCreateInfo.maxLod = parameters.m_maxLOD;
+        samplerCreateInfo.borderColor = VulkanBorderColor( parameters.m_borderColor );
+
+        // FilterMode::Min and FilterMode::Max are one D3D12_FILTER value there and a separate
+        // reduction mode here. samplerFilterMinmax is core in 1.2 and CreateContext requires it,
+        // because RenderSystem::Initialize creates COMMON_SAMPLER_LINEAR_CLAMP_MAX.
+        VkSamplerReductionModeCreateInfo reductionModeCreateInfo = { VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO };
+        if ( parameters.m_filterMode == FilterMode::Min || parameters.m_filterMode == FilterMode::Max )
+        {
+            reductionModeCreateInfo.reductionMode = parameters.m_filterMode == FilterMode::Min ? VK_SAMPLER_REDUCTION_MODE_MIN : VK_SAMPLER_REDUCTION_MODE_MAX;
+            samplerCreateInfo.pNext = &reductionModeCreateInfo;
+        }
+
+        // SamplerParameters::m_setLODRange has no Direct3D 12 use either; CreateSampler there
+        // ignores it too.
+
+        VkResult const result = vkCreateSampler( pVulkanContext->m_device, &samplerCreateInfo, nullptr, &pVulkanSampler->m_sampler );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanSampler->m_nodeIndex = parameters.m_nodeIndex;
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_SAMPLER, uint64_t( pVulkanSampler->m_sampler ), "SamplerState" );
+
+        pVulkanSampler->m_descriptorHandle = pVulkanContext->m_samplerHeapAllocator.Allocate( 1 );
+        EE_ASSERT( pVulkanSampler->m_descriptorHandle.IsValid() );
+
+        WriteSamplerHeapSlot( pVulkanContext, pVulkanSampler->m_descriptorHandle.m_offset, pVulkanSampler->m_sampler );
+
+        return pVulkanSampler;
     }
 
     void DestroySampler( Context* pContext, Sampler*&& pSampler )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pSampler != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanSampler* pVulkanSampler = static_cast<VulkanSampler*>( pSampler );
+
+            if ( pVulkanSampler->m_descriptorHandle.IsValid() )
+            {
+                pVulkanContext->m_samplerHeapAllocator.Deallocate( eastl::move( pVulkanSampler->m_descriptorHandle ) );
+            }
+
+            if ( pVulkanSampler->m_sampler != VK_NULL_HANDLE )
+            {
+                vkDestroySampler( pVulkanContext->m_device, pVulkanSampler->m_sampler, nullptr );
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanSampler ) );
+            pSampler = nullptr;
+        }
     }
 
     SamplerStateHandle GetSamplerStateHandle( Sampler const* pSampler )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return SamplerStateHandle();
+        VulkanSampler const* pVulkanSampler = static_cast<VulkanSampler const*>( pSampler );
+
+        EE_ASSERT( pVulkanSampler->m_descriptorHandle.IsValid() );
+        return SamplerStateHandle( pVulkanSampler->m_descriptorHandle.m_offset );
     }
 
     //-------------------------------------------------------------------------
