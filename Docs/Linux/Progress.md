@@ -14,15 +14,24 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 answered: the plain loader, not `volk`. **P5.1 to P5.10 are all written and have never been
 run.**
 
-**Which of the 16 groups are real: P5.1 to P5.12, P5.14 and P5.15, all unverified.** That is
-fourteen of the sixteen. P5.7 covers graphics and compute pipelines, with raytracing left to P5.16.
-**The two that are not are P5.13, which cannot be until open question 7 is answered, and P5.16.**
-Phase 5's own note says this count is the single most important piece of state, so it leads this
-section.
+**All 16 groups are written. 15 of them are real; P5.13 is the exception and cannot be finished
+here.** Every one is unverified: nothing on Linux has executed a single RHI call. Phase 5's own
+note says this count is the single most important piece of state, so it leads this section.
 
-**9 `EE_UNIMPLEMENTED_FUNCTION` remain, and every one is accounted for**: six are P5.16
-raytracing, one is the indirect refusal from open question 7, and two are markers rather than
-functions - the custom sampler border colour and the static-sampler path.
+**3 `EE_UNIMPLEMENTED_FUNCTION` remain, none of them a whole function.** One is the indirect
+refusal from open question 7. The other two are markers that name a caller if it ever appears: a
+sampler border colour Vulkan cannot express without `VK_EXT_custom_border_color`, and the
+static-sampler path the binding model does not use.
+
+**"Written" is not "works".** Four of the sixteen groups cannot be exercised on any hardware in
+this machine, and one cannot be finished at all:
+
+| Group | Why it is unverifiable here |
+|---|---|
+| P5.13 indirect draws | Open question 7. Half written by decision, and the frame is built on it. |
+| P5.14 mesh shaders | Neither real GPU here has `VK_EXT_mesh_shader`. |
+| P5.15 variable rate shading | Switched off to match the Direct3D 12 backend, which reports `NotSupported`. |
+| P5.16 raytracing | No caller anywhere, no way to build a shader table on either backend, and only `llvmpipe` has the extensions. |
 
 **Neither GPU in this development machine supports mesh shaders**, so the engine's debug draw
 cannot run here. `VK_EXT_mesh_shader` is present only on `llvmpipe`, the software rasteriser. The
@@ -115,7 +124,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.12, P5.14 and P5.15 written, never run**, and P5.13 is half written. 9 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and all 9 belong to P5.16 or open question 7. **14 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
+| 5 - Vulkan RHI | **all 16 groups written, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception and cannot be finished until open question 7 is answered. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -128,17 +137,22 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.15-variable-rate-shading`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.16-raytracing`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
 `p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
 `p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34),
 `p5.3-swapchain` (#35), `p5.13-indirect-draws` (#36), `p5.12-debug-utilities` (#37),
-`p5.11-query-pools` (#38), `p5.14-mesh-shaders` (#39), then this. None merged yet. Nothing has run
-any of it.
+`p5.11-query-pools` (#38), `p5.14-mesh-shaders` (#39), `p5.15-variable-rate-shading` (#40), then
+this. **Seventeen branches, none merged, and nothing has run any of it.**
 
-**Next and last: P5.16, raytracing.** Nothing anywhere creates an acceleration structure, so it is
-parity work rather than something the frame needs. It is the largest of the optional groups and it
-holds the last six `EE_UNIMPLEMENTED_FUNCTION`.
+**There is no next group. Every one of the sixteen is written.** What is left in Phase 5 is not
+more code:
+
+1. **Open question 7**, the indirect draws, which needs a shader-side decision and blocks the
+   frame. Nothing else moves past it.
+2. **Merging the stack.** Seventeen stacked PRs is a lot of unreviewed work to carry.
+3. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
+   before it lands.
 
 **Open question 7 blocks the frame and is not scheduled.** It is the indirect-draw decision
 described above and in the P5.13 entry. **No amount of further Phase 5 work moves past it**, so it
@@ -185,6 +199,99 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.16 Raytracing. The last group, and the least reachable
+
+**`CreateAccelerationStructure`, `GetAccelerationStructureHandle`, `CmdBuildAccelerationStructure`,
+`CmdDispatchRays`, the raytracing `CreatePipeline` overload and the indirect ray path are
+implemented.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 9, and none of them is a whole
+function. Nothing has run.
+
+**All sixteen groups are now written.**
+
+#### Unreachable three times over, and that is worth stating plainly
+
+- **No caller.** Nothing in `Code/Engine` or `Code/Applications` creates an acceleration
+  structure. `RHI.esh` defines `GetRaytracingAccelerationStructure` and no shader uses it.
+- **No shader table, on either backend.** `RHI.h` declares no factory for a
+  `RaytracingShaderTable`, and `RHI_Direct3D12.cpp` never constructs its own version either, so
+  `CmdDispatchRays` is unreachable by construction on both sides.
+- **No hardware here.** Only `llvmpipe` reports `VK_KHR_ray_tracing_pipeline` in this machine, the
+  same story as mesh shaders.
+
+It is written because the phase document asks for full parity and criterion 1 counts the markers.
+It should be treated as unproven code until something calls it.
+
+#### The heap question the binding model left open, answered without changing anything
+
+P5.7 left a note asking whether `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` has to join the
+heap's mutable type list, since `RHI.esh` reads an acceleration structure straight out of the heap.
+
+**It does not, because no shader does.** `GetAccelerationStructureHandle` returns a buffer handle
+on the top level structure buffer, which is exactly what `RHI_Direct3D12.cpp:4002` returns. The day
+a shader actually writes `GetRaytracingAccelerationStructure`, the heap needs the descriptor type
+and that is a Phase 4 binding model decision, not this file's.
+
+#### Three places the reference is broken and this is not
+
+| Reference | What happens |
+|---|---|
+| `RHI_Direct3D12.cpp:3981` | The line that fills in `m_instanceBuffer` is commented out, and `:3390` then dereferences it. The top level build would crash. `CreateAccelerationStructure` here records the buffer. |
+| `RHI_Direct3D12.cpp:3978` | The top level structure buffer is created with `BufferFlags::NoDescriptors` and descriptor types `RWBuffer\|Raw`, and `GetAccelerationStructureHandle` then asks it for a `DescriptorTypeFlags::Buffer` handle it cannot have. Two asserts. This one gets the descriptor it is about to be asked for. |
+| `RHI_Direct3D12.cpp:3969` | The scratch buffer is sized from the bottom level prebuild alone and then reused for the top level build at `:3392`, which overruns whenever the top level needs more. Here it is sized to the larger of the two. |
+
+All three are recorded under "Upstream issues observed".
+
+#### Four pipeline parameters have no Vulkan equivalent
+
+`m_pEmptyRootSignature`, `m_pRayGenRootSignature`, `m_rayMissRootSignatures` and each hit group's
+`m_pRootSignature` are Direct3D 12 **local** root signatures, which let each shader binding table
+record carry its own bindings. **Vulkan has one pipeline layout for the whole raytracing pipeline
+and nothing else.** Moving the per-record data into the table and reading it in the shader is a
+shader change, so the local signatures are dropped and the empty case is asserted.
+
+`m_payloadSize` and `m_attributeSize` are Direct3D's shader config; Vulkan reads both out of the
+SPIR-V. `m_maxNumRays` has no counterpart at all.
+
+#### The role of a raytracing shader comes from where it sits, not from the shader
+
+`RHI.h` has one `ShaderStage::RayTracing` for all five roles, so `VulkanShaderStage` cannot tell a
+miss shader from a closest hit one. The Vulkan stage is decided by which parameter field the
+`Shader` arrived in.
+
+The entry point names need a null terminator that `StringView` does not carry, so they are copied
+into a vector **reserved to its exact maximum before the first one is added**. Every
+`VkPipelineShaderStageCreateInfo::pName` points into it, and one reallocation part way through
+would dangle every pointer taken so far.
+
+#### The third and last file static
+
+`CreateBuffer` has no `Context`, and a raytracing build reads its inputs and stores its result in
+ordinary buffers, which need usage bits that only exist once `VK_KHR_acceleration_structure` is
+enabled. So every buffer carries them when `g_raytracingEnabled` is true, rather than the RHI
+growing a flag it does not have. Same shape as `g_meshShaderEnabled` and
+`g_fragmentShadingRateEnabled`.
+
+All three extensions go on together or not at all: `VK_KHR_acceleration_structure`,
+`VK_KHR_ray_tracing_pipeline`, and `VK_KHR_deferred_host_operations`, which the first depends on
+and which carries no feature bit of its own.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 111 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. Unchanged on purpose: all
+  nine raytracing entry points are extension functions looked up through `vkGetDeviceProcAddr`.
+- The new code adds no compiler warning.
+- The three remaining markers were read and attributed.
+
+#### Not verified
+
+None of it. No structure built, no ray traced, no raytracing pipeline compiled, and no hardware
+here to try. **The first machine with the extensions should not assume any of this works.**
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.15 Variable rate shading. Written, and deliberately switched off
 
@@ -3390,6 +3497,23 @@ The Vulkan backend maps both `DontCare` values to preserve, and leaves `Clear`, 
 `StoreActionType::None` exact. A caller that really wants an attachment left alone still has
 `StoreActionType::None`. Worth raising upstream: the fix there is either a non-discarding default
 or explicit actions at each call site.
+
+### `RHI_Direct3D12.cpp:3981`, `:3978` and `:3969` - three faults in the raytracing path
+
+None has ever run: nothing in the engine creates an acceleration structure.
+
+- **`:3981`** has the line that fills in `Direct3D12AccelerationStructure::m_instanceBuffer`
+  commented out, and `:3390` dereferences it during the top level build. That is a null pointer.
+- **`:3978`** creates the top level structure buffer with `BufferFlags::NoDescriptors` and
+  descriptor types `RWBuffer|Raw`, and `GetAccelerationStructureHandle` at `:4002` then asks it for
+  a `DescriptorTypeFlags::Buffer` handle. Two asserts fire: one for the missing descriptor type and
+  one for the missing handle.
+- **`:3969`** sizes the scratch buffer from the bottom level prebuild alone and then reuses it for
+  the top level build at `:3392`. It overruns whenever the top level needs more scratch, which is
+  common.
+
+The Vulkan backend does not reproduce any of the three. Each is written up at the line in
+`RHI_Vulkan.cpp`.
 
 ### `RHI_Direct3D12.cpp:3490` - `CmdBeginQuery` calls `BeginQuery` on a timestamp query
 
