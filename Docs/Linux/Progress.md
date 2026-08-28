@@ -11,16 +11,28 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9 and
-P5.10 are written and have never been run.**
+answered: the plain loader, not `volk`. **P5.1 to P5.10 are all written and have never been
+run.**
 
-**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9 and P5.10, all
-unverified.** P5.2 is complete except `QueuePresent`, which needs P5.3's swapchain; P5.7 covers
-graphics and compute pipelines, with mesh and raytracing left to P5.14 and P5.16. Phase 5's own
-note says this count is the single most important piece of state, so it leads this section.
+**Which of the 16 groups are real: P5.1, P5.2, P5.3, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9 and
+P5.10, all unverified.** P5.7 covers graphics and compute pipelines, with mesh and raytracing
+left to P5.14 and P5.16. Phase 5's own note says this count is the single most important piece
+of state, so it leads this section.
 
-**Every group the engine needs to record a frame is now written except the swapchain.** P5.3 is
-the last one before Phase 6 can try to run anything.
+**Correction to the P5.10 entry, which said the frame only needed the swapchain after it.** That
+is wrong. `CmdExecuteIndirect` is P5.13 and the frame is built on it - `RenderPass_ForwardShading`
+uses it six times, `RenderPass_CascadedShadow` twice and `RenderPass_DebugDraw` six times - and
+debug draw calls `CmdDispatchMesh`, which is P5.14. **P5.13 is the next thing a frame needs**,
+then P5.11 and P5.12 for the profile scopes a development build records every frame.
+
+**`m_pNativeWindowHandle` is a `VkSurfaceKHR` on Linux, and the application owns it.** That is
+the surface-creation requirement Phase 5 owes Phase 6, and `SDL_Vulkan_CreateSurface` returns
+exactly it. **The application drives swapchain recreation, not the RHI**, which is the second
+answer Phase 6 was promised. Both are in the P5.3 entry.
+
+**A Vulkan queue does not execute its submits in order and a Direct3D 12 queue does**, so every
+submit now waits on the value the previous submit on that queue signalled. The engine depends on
+the Direct3D guarantee and `RHI.h` gives it no way to ask for it. See the P5.3 entry.
 
 **The render pass is opened by the first draw, not by `CmdSetRenderTargets`.** The engine records
 image layout barriers between the two and a barrier may not run inside dynamic rendering, so the
@@ -90,7 +102,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9 and P5.10 written, never run**; 37 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 37 are markers rather than RHI functions: the custom sampler border colour, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **9 of the 16 groups are real, all unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.10 written, never run**; 32 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 32 are markers rather than RHI functions: the custom sampler border colour, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **10 of the 16 groups are real, all unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -103,14 +115,16 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.10-copies-clears`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.3-swapchain`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
 `p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
-`p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), then this. None merged yet. Nothing has
-run any of it.
+`p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34), then this.
+None merged yet. Nothing has run any of it.
 
-**Next: P5.3, the swapchain.** It is the last group Phase 6 needs before the engine can try to
-record and present a frame.
+**Next: P5.13, indirect draws and command signatures.** Every render pass in the frame is built
+on `CmdExecuteIndirect`, so nothing draws without it. After that P5.12 for debug names and
+markers, which the phase document says to do early and which makes everything else easier to
+debug, then P5.11 for the query pools the development build's profile scopes use.
 
 **Still owed to other groups**, each asserted or commented at the line rather than silently
 skipped:
@@ -123,8 +137,7 @@ skipped:
 
 | Group | What it owes |
 |---|---|
-| P5.3 | `QueuePresent`, which is still a stub. `VkPresentInfoKHR` takes binary semaphores only, so the swapchain has to carry one per image, the submit before the present must signal it next to the timeline value, and the present waits on it. Acquire needs the mirror of the same thing. |
-| P5.9, P5.12 | Two `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT` sites in `QueueDeviceWait` and `QueueSubmit`, listed below. P5.12 builds its nine `SetDebugName` overloads on `SetVulkanObjectName`, which P5.2 wrote. |
+| P5.12 | Its nine `SetDebugName` overloads build on `SetVulkanObjectName`, which P5.2 wrote and which every group since has used. |
 
 ## `ALL_COMMANDS` sites
 
@@ -137,6 +150,7 @@ to be found later. All four sites are in `RHI_Vulkan.cpp`:
 | `QueueSubmit`, signal `stageMask` (P5.2) | The signalled timeline value has to mean "everything in this submit finished". | Nothing. `ALL_COMMANDS` is arguably correct here rather than lazy, since that is the semantic. |
 | `VulkanPipelineStage`, `PipelineStage::All` (P5.9) | `D3D12_BARRIER_SYNC_ALL` means every stage, and so does this. The reference returns it the same way, as an early return rather than one bit among many. | Nothing. It is the meaning of the flag. |
 | `VulkanAccess`, `ResourceAccess::Common` (P5.9) | `D3D12_BARRIER_ACCESS_COMMON` is "any access", which Vulkan spells `MEMORY_READ` plus `MEMORY_WRITE`. `DeviceTextureState` starts every texture at `Common`, so this is the source mask of the first barrier on any texture. | The engine would have to say what it actually did, which the tracker does not record. Narrowing it is a change on the engine side, not here. |
+| `RecordQueueOrderingWait`, both masks (P5.3) | A Direct3D 12 queue runs its command lists in submission order and a Vulkan queue does not, so every submit waits on the previous submit's timeline value. "The previous submit finished" is the whole meaning of the wait. | Nothing. It is the semantic, the way `QueueSubmit`'s signal mask is. |
 | `RecordClearVisibilityBarrier`, destination masks (P5.10) | A clear has to be visible to whatever reads it next, and the engine's own barrier after a clear names a shader write as the source, which does not cover a Vulkan transfer write. Nothing at the call site says who the reader is. | The reader. In practice it is a compute dispatch, an indirect argument fetch or a copy to a host buffer, and naming those three would narrow it. Confirm against a captured frame first. |
 
 ---
@@ -153,6 +167,123 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.3 Swapchain. A Vulkan queue does not run its submits in order
+
+**`CreateSwapchain`, `DestroySwapchain`, `AcquireNextImage`, `SetVSync` and `QueuePresent` are
+implemented.** 32 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 37. Nothing has run.
+
+#### The correction this group forced on P5.2, which matters more than the swapchain
+
+**A Direct3D 12 queue executes its command lists in the order they were submitted. A Vulkan queue
+does not.** Two `vkQueueSubmit2` calls on one `VkQueue` may overlap unless something orders them.
+
+The engine relies on the Direct3D guarantee. `ForwardShadingRenderer::SubmitGraphicsCommandBuffer`
+submits several graphics command buffers a frame with the barriers recorded across them, and
+**`RHI.h` gives it no way to ask for the ordering**: `QueueDeviceWait` asserts that the two queues
+differ, so a queue cannot be made to wait on itself.
+
+`RecordQueueOrderingWait` now makes every submit wait on the value the previous submit on that
+queue signalled. That is the Direct3D semantics exactly. It costs the overlap a Vulkan driver
+might otherwise have found, and the alternative is a race that no validation layer reports.
+
+It is also what makes the swapchain sound, which is how it was found. See below.
+
+#### `m_pNativeWindowHandle` is a `VkSurfaceKHR`, and the application owns it
+
+This is the first of the two answers Phase 5 owes Phase 6.
+
+Direct3D 12 takes an `HWND` and asks DXGI for a swapchain. Vulkan needs a `VkSurfaceKHR`, and
+creating one needs a window system library. **`Base/Render` depends on no such library and must
+not start to**, so the application creates the surface from the instance and hands it over.
+`SDL_Vulkan_CreateSurface` returns exactly that.
+
+Two consequences:
+
+- **`CreateContext` now enables the surface instance extensions**, even though no window exists
+  yet. A surface may only be created from an instance that enabled its platform extension, and
+  the instance is created once. `VK_KHR_surface` plus xlib, xcb and wayland, whichever the loader
+  reports. They are named by string rather than by macro, because the macros only exist once
+  `VK_USE_PLATFORM_*` is defined and that drags X11 headers into a file with no other use for
+  them.
+- **`DestroySwapchain` never destroys the surface.** `Window::ResizeSwapchain` destroys and
+  recreates around an unchanged `m_pNativeWindowHandle`.
+
+#### The application drives swapchain recreation, not the RHI
+
+The second answer. `Engine.cpp:754` and `ImguiRenderer.cpp:91` both compare the window size
+against `GetSwapchainSize()` and call `Window::ResizeSwapchain`, and each waits the graphics queue
+idle first. So `AcquireNextImage` and `QueuePresent` accept `VK_SUBOPTIMAL_KHR` and
+`VK_ERROR_OUT_OF_DATE_KHR` instead of recreating behind the engine's back.
+
+`VK_ERROR_OUT_OF_DATE_KHR` from the acquire is the one case with teeth: **no image is acquired and
+the semaphore is not signalled**, so recording a wait on it would hang the queue. That path returns
+the image index it already held.
+
+#### A null handle means headless, which is all of Phase 5
+
+There is no window until Phase 6, so a null `m_pNativeWindowHandle` builds a swapchain with no
+`VkSurfaceKHR` and no `VkSwapchainKHR`: a ring of ordinary offscreen render targets,
+`AcquireNextImage` cycles the index, and `QueuePresent` signals its timeline value and presents
+nothing. That is the phase document's own bring-up order, and it is what lets ladder steps 6 and
+7 run as soon as there is an entry point to run them from.
+
+#### Binary semaphores, which P5.2 left to this group
+
+`VkPresentInfoKHR` has no timeline path, so:
+
+| Semaphore | Count | Why |
+|---|---|---|
+| Acquire | One per image, used as a ring | `vkAcquireNextImageKHR` is told which semaphore to signal *before* it says which image it gave, so it cannot be indexed by image. The engine host-waits on the previous frame's timeline value before reusing a slot, so a ring of `MaxPendingFrames` is safe. |
+| Present | One per image | An image is not presented again until it has been acquired again. |
+
+The acquire wait goes onto the present queue's `m_pendingWaits`, which the next submit drains.
+That is only sound because of the queue ordering above: the submit that writes the swapchain image
+is not the first one after the acquire.
+
+`QueuePresent` submits and then presents, where Direct3D 12 presents and then signals. It has to:
+`vkQueuePresentKHR` waits on a semaphore only a submit can signal. The returned value still means
+"the frame is done", which is all the engine reads it for.
+
+#### Two smaller mappings
+
+- **The swapchain image is created sRGB.** Direct3D 12 creates it `UNorm` and puts an sRGB render
+  target view on it, which in Vulkan would need `VK_KHR_swapchain_mutable_format`. Creating the
+  image in `m_renderTargetFormat` gives the same conversion on write and the same picture, with no
+  extension. `m_colorFormat` is the fallback if the surface refuses it.
+- **`SetVSync` picks a present mode and a later call needs a recreation to take effect**, because
+  Vulkan fixes the mode when the swapchain is created. FIFO with vsync; MAILBOX or else IMMEDIATE
+  without it. Nothing in the engine calls it outside `CreateSwapchain`, so the two backends behave
+  identically today.
+
+#### The one thing that can stop Phase 6 dead
+
+**`minImageCount` is a minimum, so a driver may return more swapchain images than were asked for.**
+`Swapchain::m_renderTargets` is a fixed `TArray` of `MaxPendingFrames`, which is 2, and several
+Linux drivers want three or four. `CreateSwapchain` logs the two numbers and halts. The fix is
+`MaxPendingFrames` in `RHI.h`, which is an upstream file and a human decision.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 99 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved.
+- Every engine call site of `AcquireNextImage`, `QueuePresent`, `CreateSwapchain` and
+  `QueueSubmit` was read, along with the frame order in `Engine.cpp`. That is what found the
+  queue ordering problem.
+
+#### Not verified
+
+Nothing has been acquired or presented. The order to check things in:
+
+1. **The image count.** It halts on a driver that wants more than two, and it is the first thing
+   that will happen on real hardware.
+2. **The queue ordering wait.** If it is wrong, passes read each other's half-written targets.
+   Sync validation is what names it.
+3. **The acquire wait reaching the right submit.** A validation error names it.
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.10 Copies and clears. A clear needs a barrier the engine does not record
 

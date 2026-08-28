@@ -657,6 +657,11 @@ namespace EE::Render::RHI
             }
         }
 
+        uint32_t numInstanceExtensions = 0;
+        vkEnumerateInstanceExtensionProperties( nullptr, &numInstanceExtensions, nullptr );
+        TVector<VkExtensionProperties> availableInstanceExtensions( numInstanceExtensions );
+        vkEnumerateInstanceExtensionProperties( nullptr, &numInstanceExtensions, availableInstanceExtensions.data() );
+
         if ( enableValidation )
         {
             if ( validationLayerAvailable )
@@ -675,14 +680,37 @@ namespace EE::Render::RHI
         {
             // Object names and command buffer markers are worth having whenever the extension
             // is present, with or without the validation layer. P5.12 uses them.
-            uint32_t numInstanceExtensions = 0;
-            vkEnumerateInstanceExtensionProperties( nullptr, &numInstanceExtensions, nullptr );
-            TVector<VkExtensionProperties> availableInstanceExtensions( numInstanceExtensions );
-            vkEnumerateInstanceExtensionProperties( nullptr, &numInstanceExtensions, availableInstanceExtensions.data() );
-
             if ( HasExtension( availableInstanceExtensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) )
             {
                 instanceExtensions.emplace_back( VK_EXT_DEBUG_UTILS_EXTENSION_NAME );
+            }
+        }
+
+        // Surface extensions, for P5.3
+        //-------------------------------------------------------------------------
+        // **The instance has to carry these even though no window exists yet.** A VkSurfaceKHR
+        // may only be created from an instance that enabled its platform extension, the instance
+        // is created once, and the window arrives in Phase 6. So they go on now.
+        //
+        // Named by string rather than by macro on purpose. VK_KHR_XLIB_SURFACE_EXTENSION_NAME
+        // only exists once VK_USE_PLATFORM_XLIB_KHR is defined, which drags X11 headers into a
+        // file that has no other reason to see them. The strings are frozen by the specification.
+        //
+        // Every platform the loader reports is enabled, because which one the window system
+        // turns out to be is Phase 6's answer, not this file's.
+        static char const* const surfaceExtensions[] =
+        {
+            "VK_KHR_surface",
+            "VK_KHR_xlib_surface",
+            "VK_KHR_xcb_surface",
+            "VK_KHR_wayland_surface",
+        };
+
+        for ( char const* pSurfaceExtension : surfaceExtensions )
+        {
+            if ( HasExtension( availableInstanceExtensions, pSurfaceExtension ) )
+            {
+                instanceExtensions.emplace_back( pSurfaceExtension );
             }
         }
 
@@ -1641,10 +1669,45 @@ namespace EE::Render::RHI
         pVulkanQueueThatWaits->m_pendingWaits.emplace_back( waitInfo );
     }
 
-    uint64_t QueueSubmit( Queue* pQueue, TArrayView<CommandBuffer*> commandBuffers )
+    // **A Direct3D 12 queue executes its command lists in submission order, and a Vulkan queue
+    // does not.** Two `vkQueueSubmit2` calls on one `VkQueue` may overlap unless something
+    // orders them, and nothing in `RHI.h` can say so: `QueueDeviceWait` asserts that the two
+    // queues differ, so the engine has no way to make a queue wait on itself. It does not need
+    // one on Direct3D, and it relies on that - `ForwardShadingRenderer::SubmitGraphicsCommandBuffer`
+    // submits several graphics command buffers a frame with the barriers recorded across them.
+    //
+    // So every submit waits on the value the previous submit on that queue signalled. That is
+    // the Direct3D semantics exactly, and it is what makes the swapchain sound as well: the
+    // acquire wait that the first submit after `AcquireNextImage` carries then holds back every
+    // later submit too, including the one that writes the swapchain image.
+    //
+    // ALL_COMMANDS on both ends, because "the previous submit finished" is the whole meaning.
+    // Recorded as an ALL_COMMANDS site in Docs/Linux/Progress.md.
+    static void RecordQueueOrderingWait( VulkanQueue* pVulkanQueue )
     {
-        VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+        uint64_t const previousValue = pVulkanQueue->m_nextSemaphoreValue - 1;
 
+        // Zero is the timeline's initial value and is always satisfied, so the first submit on a
+        // queue has nothing to wait for.
+        if ( previousValue == 0 )
+        {
+            return;
+        }
+
+        VkSemaphoreSubmitInfo waitInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+        waitInfo.semaphore = pVulkanQueue->m_timelineSemaphore;
+        waitInfo.value = previousValue;
+        waitInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+        pVulkanQueue->m_pendingWaits.emplace_back( waitInfo );
+    }
+
+    // The body of QueueSubmit, and of the submit QueuePresent has to make before it can present.
+    // The only difference is the binary semaphore: VkPresentInfoKHR cannot wait on a timeline, so
+    // a present needs one signalled next to the timeline value. VK_NULL_HANDLE for an ordinary
+    // submit.
+    static uint64_t SubmitToQueue( VulkanQueue* pVulkanQueue, TArrayView<CommandBuffer*> commandBuffers, VkSemaphore binarySignalSemaphore )
+    {
         pVulkanQueue->m_submitCommandBuffers.clear();
         pVulkanQueue->m_submitCommandBuffers.reserve( commandBuffers.size() );
 
@@ -1657,20 +1720,34 @@ namespace EE::Render::RHI
             pVulkanQueue->m_submitCommandBuffers.emplace_back( commandBufferSubmitInfo );
         }
 
+        RecordQueueOrderingWait( pVulkanQueue );
+
         uint64_t const signalSemaphore = pVulkanQueue->m_nextSemaphoreValue++;
 
-        VkSemaphoreSubmitInfo signalInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
-        signalInfo.semaphore = pVulkanQueue->m_timelineSemaphore;
-        signalInfo.value = signalSemaphore;
-        signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        TInlineVector<VkSemaphoreSubmitInfo, 2> signalInfos;
+
+        VkSemaphoreSubmitInfo timelineSignalInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+        timelineSignalInfo.semaphore = pVulkanQueue->m_timelineSemaphore;
+        timelineSignalInfo.value = signalSemaphore;
+        timelineSignalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        signalInfos.emplace_back( timelineSignalInfo );
+
+        if ( binarySignalSemaphore != VK_NULL_HANDLE )
+        {
+            VkSemaphoreSubmitInfo binarySignalInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+            binarySignalInfo.semaphore = binarySignalSemaphore;
+            // A binary semaphore carries no value.
+            binarySignalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            signalInfos.emplace_back( binarySignalInfo );
+        }
 
         VkSubmitInfo2 submitInfo = { VK_STRUCTURE_TYPE_SUBMIT_INFO_2 };
         submitInfo.waitSemaphoreInfoCount = uint32_t( pVulkanQueue->m_pendingWaits.size() );
         submitInfo.pWaitSemaphoreInfos = pVulkanQueue->m_pendingWaits.data();
         submitInfo.commandBufferInfoCount = uint32_t( pVulkanQueue->m_submitCommandBuffers.size() );
         submitInfo.pCommandBufferInfos = pVulkanQueue->m_submitCommandBuffers.data();
-        submitInfo.signalSemaphoreInfoCount = 1;
-        submitInfo.pSignalSemaphoreInfos = &signalInfo;
+        submitInfo.signalSemaphoreInfoCount = uint32_t( signalInfos.size() );
+        submitInfo.pSignalSemaphoreInfos = signalInfos.data();
 
         // Direct3D 12 skips ExecuteCommandLists on an empty list but still signals. Signalling
         // with no work is exactly what an empty submit does here, so the shape is the same.
@@ -1682,19 +1759,106 @@ namespace EE::Render::RHI
         return signalSemaphore;
     }
 
+    uint64_t QueueSubmit( Queue* pQueue, TArrayView<CommandBuffer*> commandBuffers )
+    {
+        return SubmitToQueue( static_cast<VulkanQueue*>( pQueue ), commandBuffers, VK_NULL_HANDLE );
+    }
+
+    //-------------------------------------------------------------------------
+    // Swapchain and presentation
+    //-------------------------------------------------------------------------
+    // **SwapchainParameters::m_pNativeWindowHandle is a VkSurfaceKHR on Linux, and the
+    // application owns it.** Direct3D 12 receives an HWND and asks DXGI for a swapchain. Vulkan
+    // needs a VkSurfaceKHR, and creating one needs a window system library. Base/Render depends
+    // on no such library and must not start to, so the application creates the surface from the
+    // instance and hands it over. SDL3's SDL_Vulkan_CreateSurface returns exactly this, which is
+    // the answer Phase 5 owes Phase 6. CreateContext enables the surface instance extensions so
+    // that call can succeed; DestroySwapchain never destroys the surface.
+    //
+    // **A null handle means headless**, which is the state of the whole of Phase 5: there is no
+    // window until Phase 6. The swapchain is then a ring of ordinary offscreen render targets
+    // with no VkSwapchainKHR, AcquireNextImage cycles the index, and QueuePresent signals its
+    // timeline value and presents nothing. That is the phase document's bring-up order - render
+    // offscreen first, wire the real surface later - and it is what lets steps 6 and 7 of the
+    // ladder run the moment there is any entry point to run them from.
+    //
+    // **The application drives swapchain recreation, not the RHI.** Engine.cpp:754 and
+    // ImguiRenderer.cpp:91 both compare the window size against GetSwapchainSize() and call
+    // Window::ResizeSwapchain, and each one waits the graphics queue idle first. So this file
+    // tolerates VK_SUBOPTIMAL_KHR and VK_ERROR_OUT_OF_DATE_KHR rather than recreating behind the
+    // engine's back. That is the second answer Phase 5 owes Phase 6.
+
+    // Declared here rather than with the swapchain functions below, because QueuePresent reads
+    // it and is defined first.
+    struct VulkanSwapchain final : Swapchain
+    {
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+
+        // Borrowed, never destroyed. The application created it and Window::ResizeSwapchain
+        // hands the same one back after a DestroySwapchain.
+        VkSurfaceKHR                                        m_surface = VK_NULL_HANDLE;
+        VkSwapchainKHR                                      m_swapchain = VK_NULL_HANDLE;
+
+        // SwapchainParameters::m_presentQueues[0]. AcquireNextImage takes no Queue and has to
+        // put its wait somewhere, so the swapchain remembers which queue presents it.
+        VulkanQueue*                                        m_pPresentQueue = nullptr;
+
+        uint32_t                                            m_numImages = 0;
+        uint32_t                                            m_currentImageIndex = 0;
+
+        // Every present mode the surface supports, kept because SetVSync takes no Context and
+        // has to choose from them.
+        TInlineVector<VkPresentModeKHR, 8>                  m_supportedPresentModes;
+        VkPresentModeKHR                                    m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+        // **Binary semaphores, because VkPresentInfoKHR has no timeline path.** This is what
+        // P5.2 left to this group. The acquire semaphores are a ring rather than one per image,
+        // because vkAcquireNextImageKHR is told which semaphore to signal before it says which
+        // image it gave. The present semaphores are one per image, which is safe because an
+        // image is not presented again until it has been acquired again.
+        TInlineVector<VkSemaphore, MaxPendingFrames>        m_acquireSemaphores;
+        TInlineVector<VkSemaphore, MaxPendingFrames>        m_presentSemaphores;
+        uint32_t                                            m_nextAcquireSemaphore = 0;
+
+        bool                                                m_isHeadless = false;
+    };
+
     uint64_t QueuePresent( Queue* pQueue, Swapchain* pSwapchain, uint32_t imageIndex )
     {
-        // P5.3 finishes this, and it cannot be written before the swapchain exists.
-        //
-        // VkPresentInfoKHR takes binary semaphores only; it has no timeline path. So the
-        // swapchain has to carry a binary semaphore per image, the submit before the present
-        // has to signal it alongside the timeline value, and the present waits on that binary
-        // semaphore. Acquire needs the mirror image of the same thing.
-        //
-        // Everything else here is ready: the timeline value this returns is the one the queue
-        // signals, exactly as QueueSubmit does.
-        EE_UNIMPLEMENTED_FUNCTION();
-        return 0;
+        VulkanQueue*      pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+        VulkanSwapchain*  pVulkanSwapchain = static_cast<VulkanSwapchain*>( pSwapchain );
+
+        EE_ASSERT( imageIndex == pVulkanSwapchain->m_currentImageIndex );
+
+        if ( pVulkanSwapchain->m_isHeadless )
+        {
+            // Nothing to present to. Direct3D 12 signals its fence after the present and returns
+            // that value, and so does this; the frame pacing the engine builds on the returned
+            // value is unchanged.
+            return SubmitToQueue( pVulkanQueue, {}, VK_NULL_HANDLE );
+        }
+
+        VkSemaphore const presentSemaphore = pVulkanSwapchain->m_presentSemaphores[imageIndex];
+
+        // The submit comes first here where Direct3D 12 presents first and signals after, and it
+        // has to: vkQueuePresentKHR waits on a semaphore that only a submit can signal. The
+        // returned value still means "the frame is done", which is all the engine reads it for.
+        uint64_t const signalSemaphore = SubmitToQueue( pVulkanQueue, {}, presentSemaphore );
+
+        VkPresentInfoKHR presentInfo = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = &presentSemaphore;
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = &pVulkanSwapchain->m_swapchain;
+        presentInfo.pImageIndices = &imageIndex;
+
+        VkResult const result = vkQueuePresentKHR( pVulkanQueue->m_queue, &presentInfo );
+
+        // Neither of these is an error here. The engine resizes the swapchain itself, from the
+        // window size, so a stale swapchain is already on its way to being replaced.
+        EE_ASSERT( result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR );
+
+        return signalSemaphore;
     }
 
     void WaitQueueIdle( Queue* pQueue )
@@ -1707,26 +1871,324 @@ namespace EE::Render::RHI
         EE_ASSERT( result == VK_SUCCESS );
     }
 
+    // The render targets, which are the same textures on both paths. On the real path they wrap
+    // images the presentation engine owns, which is what TextureParameters::m_pNativeHandle is
+    // for; headless they are ordinary textures this call allocates. Mirrors the parameters
+    // RHI_Direct3D12.cpp:2736 fills in.
+    static void CreateSwapchainRenderTargets( Context* pContext, VulkanSwapchain* pVulkanSwapchain, SwapchainParameters const& parameters, DataFormat renderTargetFormat, VkExtent2D extent, TArrayView<VkImage const> images )
+    {
+        TextureParameters textureParameters = {};
+        // The surface's extent, not the one that was asked for. A window system that has already
+        // decided the size - which is the usual case on Wayland - gives back its own, and the
+        // texture has to describe the image the presentation engine actually made.
+        textureParameters.m_width = extent.width;
+        textureParameters.m_height = extent.height;
+        textureParameters.m_depth = 1;
+        textureParameters.m_arrayLayers = 1;
+        textureParameters.m_format = renderTargetFormat;
+        textureParameters.m_clearValue = parameters.m_clearValue;
+        textureParameters.m_numSamples = 1;
+        textureParameters.m_sampleQuality = 0;
+        textureParameters.m_textureFlags = TextureFlags::AllowDisplayTarget;
+        textureParameters.m_descriptorTypes = DescriptorTypeFlags::RenderTarget;
+        textureParameters.m_initialState = TextureState::Present;
+
+        for ( uint32_t imageIndex = 0; imageIndex < pVulkanSwapchain->m_numImages; ++imageIndex )
+        {
+            textureParameters.m_pNativeHandle = images.empty() ? nullptr : images[imageIndex];
+            textureParameters.m_debugName.sprintf( "Swapchain Render Target %i", imageIndex );
+
+            pVulkanSwapchain->m_renderTargets[imageIndex] = CreateTexture( pContext, textureParameters );
+        }
+    }
+
     Swapchain* CreateSwapchain( Context* pContext, SwapchainParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext*   pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanSwapchain* pVulkanSwapchain = pVulkanContext->CreateObject<VulkanSwapchain>();
+
+        // Direct3D 12 takes several present queues in Linked device mode and calls
+        // ResizeBuffers1 with a node mask per queue. Vulkan presents from one queue, and the
+        // engine only ever passes one.
+        EE_ASSERT( parameters.m_presentQueues.size() == 1 );
+
+        pVulkanSwapchain->m_device = pVulkanContext->m_device;
+        pVulkanSwapchain->m_pPresentQueue = static_cast<VulkanQueue*>( parameters.m_presentQueues[0] );
+        pVulkanSwapchain->m_surface = static_cast<VkSurfaceKHR>( parameters.m_pNativeWindowHandle );
+        pVulkanSwapchain->m_isHeadless = pVulkanSwapchain->m_surface == VK_NULL_HANDLE;
+        pVulkanSwapchain->m_numImages = parameters.m_numImages;
+
+        // The engine holds the render targets in a fixed array of MaxPendingFrames, so this is
+        // not a soft limit.
+        EE_ASSERT( pVulkanSwapchain->m_numImages <= MaxPendingFrames );
+
+        if ( pVulkanSwapchain->m_isHeadless )
+        {
+            CreateSwapchainRenderTargets( pContext, pVulkanSwapchain, parameters, parameters.m_renderTargetFormat, { parameters.m_width, parameters.m_height }, {} );
+
+            // The first acquire returns image 0, the way the real path's first acquire does.
+            pVulkanSwapchain->m_currentImageIndex = pVulkanSwapchain->m_numImages - 1;
+
+            SetVSync( pVulkanSwapchain, parameters.m_enableVSync );
+            return pVulkanSwapchain;
+        }
+
+        // Surface format
+        //-------------------------------------------------------------------------
+        // **Direct3D 12 creates the swapchain UNorm and puts an sRGB render target view on it.
+        // Vulkan creates the image sRGB and the view matches.** The two produce the same
+        // conversion on write and the same picture on screen, and the Vulkan spelling needs no
+        // VK_KHR_swapchain_mutable_format. So m_renderTargetFormat, which is the sRGB one, drives
+        // both the image and the views; m_colorFormat is the fallback when the surface refuses it.
+        uint32_t numSurfaceFormats = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR( pVulkanContext->m_physicalDevice, pVulkanSwapchain->m_surface, &numSurfaceFormats, nullptr );
+        TVector<VkSurfaceFormatKHR> surfaceFormats( numSurfaceFormats );
+        vkGetPhysicalDeviceSurfaceFormatsKHR( pVulkanContext->m_physicalDevice, pVulkanSwapchain->m_surface, &numSurfaceFormats, surfaceFormats.data() );
+
+        DataFormat         renderTargetFormat = parameters.m_renderTargetFormat;
+        VkSurfaceFormatKHR chosenSurfaceFormat = {};
+
+        for ( DataFormat const candidate : { parameters.m_renderTargetFormat, parameters.m_colorFormat } )
+        {
+            VkFormat const candidateVulkanFormat = VulkanFormat( candidate );
+
+            for ( VkSurfaceFormatKHR const& surfaceFormat : surfaceFormats )
+            {
+                if ( surfaceFormat.format == candidateVulkanFormat )
+                {
+                    renderTargetFormat = candidate;
+                    chosenSurfaceFormat = surfaceFormat;
+                    break;
+                }
+            }
+
+            if ( chosenSurfaceFormat.format != VK_FORMAT_UNDEFINED )
+            {
+                break;
+            }
+        }
+
+        // The image and its views have to agree on one format, so a surface that offers neither
+        // is a real incompatibility rather than something to paper over.
+        EE_ASSERT( chosenSurfaceFormat.format != VK_FORMAT_UNDEFINED );
+
+        // Extent, image count and present mode
+        //-------------------------------------------------------------------------
+        VkSurfaceCapabilitiesKHR surfaceCapabilities = {};
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR( pVulkanContext->m_physicalDevice, pVulkanSwapchain->m_surface, &surfaceCapabilities );
+
+        VkExtent2D extent = { parameters.m_width, parameters.m_height };
+        if ( surfaceCapabilities.currentExtent.width != UINT32_MAX )
+        {
+            // The window system has already decided, which is the usual case on Wayland.
+            extent = surfaceCapabilities.currentExtent;
+        }
+        extent.width = Math::Clamp( extent.width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width );
+        extent.height = Math::Clamp( extent.height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height );
+
+        uint32_t numRequestedImages = Math::Max( parameters.m_numImages, surfaceCapabilities.minImageCount );
+        if ( surfaceCapabilities.maxImageCount != 0 )
+        {
+            numRequestedImages = Math::Min( numRequestedImages, surfaceCapabilities.maxImageCount );
+        }
+
+        uint32_t numPresentModes = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR( pVulkanContext->m_physicalDevice, pVulkanSwapchain->m_surface, &numPresentModes, nullptr );
+        TVector<VkPresentModeKHR> presentModes( numPresentModes );
+        vkGetPhysicalDeviceSurfacePresentModesKHR( pVulkanContext->m_physicalDevice, pVulkanSwapchain->m_surface, &numPresentModes, presentModes.data() );
+
+        for ( VkPresentModeKHR const presentMode : presentModes )
+        {
+            pVulkanSwapchain->m_supportedPresentModes.emplace_back( presentMode );
+        }
+
+        SetVSync( pVulkanSwapchain, parameters.m_enableVSync );
+
+        // Swapchain
+        //-------------------------------------------------------------------------
+        VkSwapchainCreateInfoKHR swapchainCreateInfo = { VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
+        swapchainCreateInfo.surface = pVulkanSwapchain->m_surface;
+        swapchainCreateInfo.minImageCount = numRequestedImages;
+        swapchainCreateInfo.imageFormat = chosenSurfaceFormat.format;
+        swapchainCreateInfo.imageColorSpace = chosenSurfaceFormat.colorSpace;
+        swapchainCreateInfo.imageExtent = extent;
+        swapchainCreateInfo.imageArrayLayers = 1;
+        // The transfer bits only when the surface allows them, because P5.10's copies and clears
+        // can name any texture and a swapchain image is one.
+        swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                         ( surfaceCapabilities.supportedUsageFlags & ( VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT ) );
+        // One queue presents and one queue renders, and they are the same queue. See
+        // SetSharingMode for why every other resource is CONCURRENT instead.
+        swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        swapchainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
+        swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        swapchainCreateInfo.presentMode = pVulkanSwapchain->m_presentMode;
+        swapchainCreateInfo.clipped = VK_TRUE;
+
+        VkResult result = vkCreateSwapchainKHR( pVulkanContext->m_device, &swapchainCreateInfo, nullptr, &pVulkanSwapchain->m_swapchain );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_SWAPCHAIN_KHR, uint64_t( pVulkanSwapchain->m_swapchain ), "Swapchain" );
+
+        // Images
+        //-------------------------------------------------------------------------
+        // **minImageCount is a minimum, so the driver may hand back more images than were
+        // asked for.** Swapchain::m_renderTargets is a fixed TArray of MaxPendingFrames, which
+        // is 2, and several Linux drivers want three or four. If this halts, the fix is
+        // MaxPendingFrames in RHI.h, which is an upstream change and a human decision.
+        uint32_t numImages = 0;
+        vkGetSwapchainImagesKHR( pVulkanContext->m_device, pVulkanSwapchain->m_swapchain, &numImages, nullptr );
+
+        if ( numImages > MaxPendingFrames )
+        {
+            EE_LOG_ERROR( LogCategory::Render, "RHI/CreateSwapchain", "The surface needs %u swapchain images and RHI::MaxPendingFrames is %u.", numImages, uint32_t( MaxPendingFrames ) );
+        }
+        EE_ASSERT( numImages <= MaxPendingFrames );
+
+        TInlineVector<VkImage, MaxPendingFrames> images;
+        images.resize( numImages );
+        vkGetSwapchainImagesKHR( pVulkanContext->m_device, pVulkanSwapchain->m_swapchain, &numImages, images.data() );
+
+        pVulkanSwapchain->m_numImages = numImages;
+
+        CreateSwapchainRenderTargets( pContext, pVulkanSwapchain, parameters, renderTargetFormat, extent, { images.data(), images.size() } );
+
+        // Semaphores
+        //-------------------------------------------------------------------------
+        VkSemaphoreCreateInfo semaphoreCreateInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+
+        for ( uint32_t imageIndex = 0; imageIndex < numImages; ++imageIndex )
+        {
+            VkSemaphore acquireSemaphore = VK_NULL_HANDLE;
+            result = vkCreateSemaphore( pVulkanContext->m_device, &semaphoreCreateInfo, nullptr, &acquireSemaphore );
+            EE_ASSERT( result == VK_SUCCESS );
+            pVulkanSwapchain->m_acquireSemaphores.emplace_back( acquireSemaphore );
+
+            VkSemaphore presentSemaphore = VK_NULL_HANDLE;
+            result = vkCreateSemaphore( pVulkanContext->m_device, &semaphoreCreateInfo, nullptr, &presentSemaphore );
+            EE_ASSERT( result == VK_SUCCESS );
+            pVulkanSwapchain->m_presentSemaphores.emplace_back( presentSemaphore );
+        }
+
+        return pVulkanSwapchain;
     }
 
     void DestroySwapchain( Context* pContext, Swapchain*&& pSwapchain )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pSwapchain == nullptr )
+        {
+            return;
+        }
+
+        VulkanContext*   pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanSwapchain* pVulkanSwapchain = static_cast<VulkanSwapchain*>( pSwapchain );
+
+        // Every caller waits the present queue idle first - Engine.cpp:756,
+        // ImguiRenderer.cpp:64 and :93 - which is what Vulkan needs before the images go away.
+        for ( uint32_t imageIndex = 0; imageIndex < pVulkanSwapchain->m_numImages; ++imageIndex )
+        {
+            // The texture owns its views and not the image, so this destroys the views only.
+            DestroyTexture( pContext, eastl::move( pVulkanSwapchain->m_renderTargets[imageIndex] ) );
+        }
+
+        for ( VkSemaphore semaphore : pVulkanSwapchain->m_acquireSemaphores )
+        {
+            vkDestroySemaphore( pVulkanContext->m_device, semaphore, nullptr );
+        }
+
+        for ( VkSemaphore semaphore : pVulkanSwapchain->m_presentSemaphores )
+        {
+            vkDestroySemaphore( pVulkanContext->m_device, semaphore, nullptr );
+        }
+
+        if ( pVulkanSwapchain->m_swapchain != VK_NULL_HANDLE )
+        {
+            vkDestroySwapchainKHR( pVulkanContext->m_device, pVulkanSwapchain->m_swapchain, nullptr );
+        }
+
+        // **The surface is not destroyed here.** The application created it and hands the same
+        // one back to the next CreateSwapchain; Window::ResizeSwapchain destroys and recreates
+        // around an unchanged m_pNativeWindowHandle.
+
+        pVulkanContext->DestroyObject( eastl::move( pVulkanSwapchain ) );
+        pSwapchain = nullptr;
     }
 
     uint32_t AcquireNextImage( Context* pContext, Swapchain* pSwapchain )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return 0;
+        VulkanContext*   pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanSwapchain* pVulkanSwapchain = static_cast<VulkanSwapchain*>( pSwapchain );
+
+        if ( pVulkanSwapchain->m_isHeadless )
+        {
+            pVulkanSwapchain->m_currentImageIndex = ( pVulkanSwapchain->m_currentImageIndex + 1 ) % pVulkanSwapchain->m_numImages;
+            return pVulkanSwapchain->m_currentImageIndex;
+        }
+
+        VkSemaphore const acquireSemaphore = pVulkanSwapchain->m_acquireSemaphores[pVulkanSwapchain->m_nextAcquireSemaphore];
+        pVulkanSwapchain->m_nextAcquireSemaphore = ( pVulkanSwapchain->m_nextAcquireSemaphore + 1 ) % pVulkanSwapchain->m_numImages;
+
+        VkResult const result = vkAcquireNextImageKHR( pVulkanContext->m_device, pVulkanSwapchain->m_swapchain, UINT64_MAX,
+                                                       acquireSemaphore, VK_NULL_HANDLE, &pVulkanSwapchain->m_currentImageIndex );
+
+        if ( result == VK_ERROR_OUT_OF_DATE_KHR )
+        {
+            // **No image was acquired and the semaphore was not signalled**, so recording a wait
+            // on it would hang the queue. The engine compares the window size every frame and
+            // recreates the swapchain, so this is the last frame before that happens; it renders
+            // into the image it already held rather than stopping.
+            return pVulkanSwapchain->m_currentImageIndex;
+        }
+
+        EE_ASSERT( result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR );
+
+        // **Direct3D 12 needs nothing here at all**, because GetCurrentBackBufferIndex answers
+        // without waiting for anything. Vulkan hands back an image the presentation engine may
+        // still be reading, and the wait for it goes on the present queue, where the next submit
+        // drains it. RecordQueueOrderingWait then carries the order to every submit after that,
+        // which is what makes this sound when the submit that writes the image is not the first
+        // one after this call. ForwardShadingRenderer submits several before it.
+        VkSemaphoreSubmitInfo waitInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+        waitInfo.semaphore = acquireSemaphore;
+        waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+        pVulkanSwapchain->m_pPresentQueue->m_pendingWaits.emplace_back( waitInfo );
+
+        return pVulkanSwapchain->m_currentImageIndex;
     }
 
     void SetVSync( Swapchain* pSwapchain, bool vsync )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanSwapchain* pVulkanSwapchain = static_cast<VulkanSwapchain*>( pSwapchain );
+
+        pVulkanSwapchain->m_vsync = vsync;
+
+        // FIFO is the one mode every implementation has to support, and it is vsync. Without
+        // vsync, MAILBOX if the surface has it and IMMEDIATE otherwise: the first tears nothing
+        // and the second is what Direct3D's DXGI_PRESENT_ALLOW_TEARING asks for.
+        auto HasPresentMode = [pVulkanSwapchain] ( VkPresentModeKHR mode )
+        {
+            return eastl::find( pVulkanSwapchain->m_supportedPresentModes.begin(), pVulkanSwapchain->m_supportedPresentModes.end(), mode ) != pVulkanSwapchain->m_supportedPresentModes.end();
+        };
+
+        pVulkanSwapchain->m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+        if ( !vsync )
+        {
+            if ( HasPresentMode( VK_PRESENT_MODE_MAILBOX_KHR ) )
+            {
+                pVulkanSwapchain->m_presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+            }
+            else if ( HasPresentMode( VK_PRESENT_MODE_IMMEDIATE_KHR ) )
+            {
+                pVulkanSwapchain->m_presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+            }
+        }
+
+        // **A present mode is fixed when the swapchain is created, so a later call takes effect
+        // at the next recreation.** Direct3D 12 changes a sync interval per present and needs no
+        // such thing. Nothing in the engine calls this outside CreateSwapchain, so the two
+        // behave identically today; a caller that starts to has to resize the swapchain as well.
     }
 
     //-------------------------------------------------------------------------
