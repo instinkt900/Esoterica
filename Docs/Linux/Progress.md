@@ -14,10 +14,11 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 answered: the plain loader, not `volk`. **P5.1 to P5.10 are all written and have never been
 run.**
 
-**Which of the 16 groups are real: P5.1, P5.2, P5.3, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9 and
-P5.10, all unverified.** P5.7 covers graphics and compute pipelines, with mesh and raytracing
-left to P5.14 and P5.16. Phase 5's own note says this count is the single most important piece
-of state, so it leads this section.
+**Which of the 16 groups are real: P5.1, P5.2, P5.3, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9, P5.10
+and P5.12, all unverified.** P5.7 covers graphics and compute pipelines, with mesh and raytracing
+left to P5.14 and P5.16. P5.12 owes one `SetDebugName` overload to P5.11, which has to define the
+query pool type first. Phase 5's own note says this count is the single most important piece of
+state, so it leads this section.
 
 **The frame cannot draw, and closing that needs a decision nobody has made yet.** Every render
 pass is built on `CmdExecuteIndirect` - `RenderPass_ForwardShading` uses it six times,
@@ -105,7 +106,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.10 written, never run**, and P5.13 is half written. 32 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Six of the 32 are markers rather than whole RHI functions: the custom sampler border colour, the static-sampler path, the mesh and raytracing `CreatePipeline` overloads, and two inside `CmdExecuteIndirect`. **10 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.10 and P5.12 written, never run**, and P5.13 is half written. 21 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Six of the 21 are markers rather than whole RHI functions: the custom sampler border colour, the static-sampler path, the mesh and raytracing `CreatePipeline` overloads, and two inside `CmdExecuteIndirect`. **11 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -118,15 +119,16 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.13-indirect-draws`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.12-debug-utilities`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
 `p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
 `p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34),
-`p5.3-swapchain` (#35), then this. None merged yet. Nothing has run any of it.
+`p5.3-swapchain` (#35), `p5.13-indirect-draws` (#36), then this. None merged yet. Nothing has run
+any of it.
 
-**Next: P5.12, debug names and markers.** The phase document says to do it early, it is cheap, and
-named objects and markers make every remaining group easier to debug. Then P5.11 for the query
-pools a development build's profile scopes use every frame.
+**Next: P5.11, query pools.** A development build's profile scopes use them every frame, and
+P5.12 owes its `SetDebugName( QueryPool* )` overload to it. After that only the optional feature
+groups are left: P5.14 mesh shaders, P5.15 variable rate shading, P5.16 raytracing.
 
 **Open question 7 blocks the frame and is not scheduled.** It is the indirect-draw decision
 described above and in the P5.13 entry.
@@ -136,6 +138,7 @@ skipped:
 
 | Owed by | What |
 |---|---|
+| P5.11 | `SetDebugName( Context*, QueryPool*, StringView )` is `VK_OBJECT_TYPE_QUERY_POOL` through `SetVulkanObjectName`, and there is no `VulkanQueryPool` type to cast to yet. It is the only one of the nine that halts. |
 | P5.14 | `CmdExecuteIndirect` on a `DispatchMesh` signature is `vkCmdDrawMeshTasksIndirectEXT`, which cannot be named until `VK_EXT_mesh_shader` is enabled. It halts at the line today. |
 | P5.16 | The same for a `DispatchRays` signature, which is `vkCmdTraceRaysIndirect2KHR`. |
 
@@ -143,7 +146,6 @@ skipped:
 
 | Group | What it owes |
 |---|---|
-| P5.12 | Its nine `SetDebugName` overloads build on `SetVulkanObjectName`, which P5.2 wrote and which every group since has used. |
 
 ## `ALL_COMMANDS` sites
 
@@ -173,6 +175,70 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.12 Debug names and markers
+
+**Eight of the nine `SetDebugName` overloads, `CmdBeginDebugMarker`, `CmdEndDebugMarker` and
+`CmdWriteDebugMarker` are implemented.** 21 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 32.
+`BeginFrameCapture` and `EndFrameCapture` were already done in P5.1, so the group is complete
+apart from the one overload P5.11 has to unblock. Nothing has run.
+
+Most of this group was already paid for. `SetVulkanObjectName` has existed since P5.2 and every
+`Create*` call has been naming its objects through it, so the nine overloads are a handle and an
+object type each.
+
+#### The three that needed thought
+
+**`SetDebugName( QueryPool* )` halts**, because there is no `VulkanQueryPool` type to cast to
+until P5.11 defines one. It is the only one of the nine that does.
+
+**`SetDebugName( CommandSignature* )` does nothing, and that is the finished answer.** P5.13's
+command signature is a record of one command's byte layout and creates no Vulkan object, so there
+is no handle for a name to reach. Its parameters are unnamed to say so.
+
+**`CmdWriteDebugMarker` is `vkCmdFillBuffer`, and it loses the ordering.** Direct3D 12 uses
+`WriteBufferImmediate`, whose `MARKER_IN` and `MARKER_OUT` modes mean "before everything already
+submitted" and "after". Vulkan spells that `VK_AMD_buffer_marker`, which is not enabled here and
+would be a device requirement the Phase 4 list does not have.
+
+The concrete loss is in the `InOut` case: **Direct3D writes the In value at the top of the pipe
+and the Out value at the bottom, so a crash between the two leaves the In value in the buffer,
+which is the entire point of a breadcrumb.** Two fills run in order and the second overwrites the
+first. `DeviceCapabilities::m_breadcrumbs` is `false` on this backend and nothing in the engine
+calls the function, so nothing loses anything today. Turning breadcrumbs on means enabling the
+extension first.
+
+#### Markers
+
+`VK_EXT_debug_utils` labels, which RenderDoc and every Vulkan profiler read the way PIX reads a
+Direct3D event. The extension is enabled whenever the loader has it, with or without the
+validation layer, so markers are present in a Release build too.
+
+The golden-ratio HSV colour walk is copied from `RHI_Direct3D12.cpp:3628` verbatim, starting from
+the same `0.5F`, so a marker gets the same colour on both backends. `RHI.h` holds no such helper
+and this file may not add one to it.
+
+**`EndCommandBuffer` now asserts the marker scope counter is zero**, the same check
+`RHI_Direct3D12.cpp:2947` makes. Vulkan is stricter than Direct3D here: an unbalanced label is a
+validation error rather than a cosmetic problem. The counter is kept even when the extension is
+missing, so the assert still catches an unmatched scope on a machine without it.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 104 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. The count is unchanged on
+  purpose: the two label entry points are looked up through `vkGetInstanceProcAddr` like every
+  other `VK_EXT_debug_utils` function, and `vkCmdFillBuffer` was already linked by P5.10.
+- The new code adds no compiler warning.
+
+#### Not verified
+
+No object named, no marker recorded. The first thing to check is that names appear in a RenderDoc
+capture, which is also the cheapest thing to check, and it makes every remaining group easier.
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.13 Indirect draws. The engine's command signatures do not fit Vulkan
 
@@ -3091,6 +3157,18 @@ The Vulkan backend maps both `DontCare` values to preserve, and leaves `Clear`, 
 `StoreActionType::None` exact. A caller that really wants an attachment left alone still has
 `StoreActionType::None`. Worth raising upstream: the fix there is either a non-discarding default
 or explicit actions at each call site.
+
+### `RHI_Direct3D12.cpp:3714` - `CmdWriteDebugMarker` packs its auto flags two different ways
+
+The `InOut` branch builds its flag from the enum's ordinal, `UINT( MarkerTypeFlags::In ) << 30`,
+which is `1 << 30`. The single-marker branch builds it from the bit field, `markerType << 30`,
+and `TBitFlags` converts to `1 << flagIndex`, so the same `In` becomes `2 << 30`. One of the two
+is wrong and they cannot both be right.
+
+Nothing in the engine calls `CmdWriteDebugMarker` and `DeviceCapabilities::m_breadcrumbs` is
+`false` on both backends, so it costs nothing today. The Vulkan backend reproduces both branches
+exactly, so the two write identical bytes; fixing it belongs upstream, next to a decision about
+which one was meant.
 
 ### `RHI_Direct3D12.cpp:284` - `RGB565_UNorm` and `BGR565_UNorm` map to the same DXGI format
 

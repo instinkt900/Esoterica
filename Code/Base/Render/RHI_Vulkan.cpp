@@ -258,6 +258,10 @@ namespace EE::Render::RHI
         // Core in Vulkan 1.4 as vkCmdPushDescriptorSet, but the baseline here is 1.3, so it is
         // the KHR entry point and has to be looked up.
         PFN_vkCmdPushDescriptorSetKHR                                   m_vkCmdPushDescriptorSet = nullptr;
+        // The other half of VK_EXT_debug_utils. Null when the extension is not present, which
+        // is the same condition that leaves m_vkSetDebugUtilsObjectName null.
+        PFN_vkCmdBeginDebugUtilsLabelEXT                                m_vkCmdBeginDebugUtilsLabel = nullptr;
+        PFN_vkCmdEndDebugUtilsLabelEXT                                  m_vkCmdEndDebugUtilsLabel = nullptr;
 
         void*                                                           m_pRenderDocLibrary = nullptr;
         RENDERDOC_API_1_0_0*                                            m_pRenderDocAPI = nullptr;
@@ -929,6 +933,8 @@ namespace EE::Render::RHI
         // Resolved here rather than later, because everything created from this point on names
         // itself and SetVulkanObjectName reads it.
         pVulkanContext->m_vkSetDebugUtilsObjectName = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkSetDebugUtilsObjectNameEXT" ) );
+        pVulkanContext->m_vkCmdBeginDebugUtilsLabel = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdBeginDebugUtilsLabelEXT" ) );
+        pVulkanContext->m_vkCmdEndDebugUtilsLabel = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdEndDebugUtilsLabelEXT" ) );
         pVulkanContext->m_vkCmdPushDescriptorSet = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>( vkGetDeviceProcAddr( pVulkanContext->m_device, "vkCmdPushDescriptorSetKHR" ) );
         EE_ASSERT( pVulkanContext->m_vkCmdPushDescriptorSet != nullptr );
 
@@ -1369,6 +1375,16 @@ namespace EE::Render::RHI
         // CmdSetRootConstants and CmdSetRootParameter take no Context, so the entry point comes
         // along on the command buffer.
         PFN_vkCmdPushDescriptorSetKHR                       m_vkCmdPushDescriptorSet = nullptr;
+
+        // Debug markers, which take no Context either. Both are null when VK_EXT_debug_utils is
+        // absent, and every marker call then does nothing.
+        PFN_vkCmdBeginDebugUtilsLabelEXT                    m_vkCmdBeginDebugUtilsLabel = nullptr;
+        PFN_vkCmdEndDebugUtilsLabelEXT                      m_vkCmdEndDebugUtilsLabel = nullptr;
+
+        // The same two fields Direct3D12CommandBuffer carries at RHI_Direct3D12.cpp:1526, with
+        // the same starting value, so a marker gets the same colour on both backends.
+        float                                               m_currentDebugMarkerColorValue = 0.5F;
+        int32_t                                             m_debugMarkerScopeCounter = 0;
     };
 
     //-------------------------------------------------------------------------
@@ -2272,6 +2288,8 @@ namespace EE::Render::RHI
 
         pVulkanCommandBuffer->m_device = pVulkanContext->m_device;
         pVulkanCommandBuffer->m_vkCmdPushDescriptorSet = pVulkanContext->m_vkCmdPushDescriptorSet;
+        pVulkanCommandBuffer->m_vkCmdBeginDebugUtilsLabel = pVulkanContext->m_vkCmdBeginDebugUtilsLabel;
+        pVulkanCommandBuffer->m_vkCmdEndDebugUtilsLabel = pVulkanContext->m_vkCmdEndDebugUtilsLabel;
         pVulkanCommandBuffer->m_pQueue = parameters.m_pCommandPool->m_pQueue;
         pVulkanCommandBuffer->m_pCommandPool = parameters.m_pCommandPool;
         pVulkanCommandBuffer->m_nodeIndex = parameters.m_pCommandPool->m_pQueue->m_nodeIndex;
@@ -2357,6 +2375,11 @@ namespace EE::Render::RHI
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
         EE_ASSERT( pVulkanCommandBuffer->m_stage == VulkanCommandBuffer::Stage::Recording );
+
+        // Every debug marker opened on this command buffer has to be closed on it. The same
+        // check the Direct3D 12 backend makes at RHI_Direct3D12.cpp:2947, and Vulkan is stricter
+        // about it: an unbalanced label is a validation error rather than a cosmetic one.
+        EE_ASSERT( pVulkanCommandBuffer->m_debugMarkerScopeCounter == 0 );
 
         // Dynamic rendering has to be closed before the command buffer is. A configuration that
         // never reached a draw is begun and ended here, so the clear it carries still happens.
@@ -3566,20 +3589,148 @@ namespace EE::Render::RHI
                                 VK_IMAGE_LAYOUT_GENERAL, pVulkanDstBuffer->m_buffer, 1, &region );
     }
 
+    //-------------------------------------------------------------------------
+    // Debug markers
+    //-------------------------------------------------------------------------
+    // VK_EXT_debug_utils labels, which RenderDoc and every Vulkan profiler read the same way PIX
+    // reads a Direct3D event. The extension is enabled whenever the loader has it, with or
+    // without the validation layer, so markers are present in a Release build too.
+
     void CmdBeginDebugMarker( CommandBuffer* pCommandBuffer, char const* pName )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        // Counted even when the extension is missing, so the balance assert in EndCommandBuffer
+        // still catches an unmatched scope on a machine without it.
+        pVulkanCommandBuffer->m_debugMarkerScopeCounter++;
+
+        if ( pVulkanCommandBuffer->m_vkCmdBeginDebugUtilsLabel == nullptr )
+        {
+            return;
+        }
+
+        // Lifted from RHI_Direct3D12.cpp:3628, which lifted it from ImGui::ColorConvertHSVtoRGB.
+        // Copied rather than shared because RHI.h holds no such helper and this file may not add
+        // one to it.
+        auto HSVtoRGB = [] ( float h, float s, float v, float& out_r, float& out_g, float& out_b )
+        {
+            if ( s == 0.0f )
+            {
+                // gray
+                out_r = out_g = out_b = v;
+                return;
+            }
+
+            h = Math::FModF( h, 1.0f ) / ( 60.0f / 360.0f );
+            int   i = (int) h;
+            float f = h - (float) i;
+            float p = v * ( 1.0f - s );
+            float q = v * ( 1.0f - s * f );
+            float t = v * ( 1.0f - s * ( 1.0f - f ) );
+
+            switch ( i )
+            {
+                case 0: out_r = v; out_g = t; out_b = p; break;
+                case 1: out_r = q; out_g = v; out_b = p; break;
+                case 2: out_r = p; out_g = v; out_b = t; break;
+                case 3: out_r = p; out_g = q; out_b = v; break;
+                case 4: out_r = t; out_g = p; out_b = v; break;
+                case 5: default: out_r = v; out_g = p; out_b = q; break;
+            }
+        };
+
+        float h = pVulkanCommandBuffer->m_currentDebugMarkerColorValue;
+        float s = 0.5F;
+        float v = 0.95F;
+
+        float r = 0.0F;
+        float g = 0.0F;
+        float b = 0.0F;
+        HSVtoRGB( h, s, v, r, g, b );
+
+        // https://martin.ankerl.com/2009/12/09/how-to-create-random-colors-programmatically/
+        // Random colors that are consistent and distinct from each other
+        pVulkanCommandBuffer->m_currentDebugMarkerColorValue += 0.618033988749895F;
+        pVulkanCommandBuffer->m_currentDebugMarkerColorValue = Math::FModF( pVulkanCommandBuffer->m_currentDebugMarkerColorValue, 1.0F );
+
+        VkDebugUtilsLabelEXT label = { VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT };
+        label.pLabelName = pName;
+        // Floats where PIX_COLOR takes bytes. Same colour, no rounding through 0-255.
+        label.color[0] = r;
+        label.color[1] = g;
+        label.color[2] = b;
+        label.color[3] = 1.0F;
+
+        pVulkanCommandBuffer->m_vkCmdBeginDebugUtilsLabel( pVulkanCommandBuffer->m_commandBuffer, &label );
     }
 
     void CmdEndDebugMarker( CommandBuffer* pCommandBuffer )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        pVulkanCommandBuffer->m_debugMarkerScopeCounter--;
+        EE_ASSERT( pVulkanCommandBuffer->m_debugMarkerScopeCounter >= 0 );
+
+        if ( pVulkanCommandBuffer->m_vkCmdEndDebugUtilsLabel == nullptr )
+        {
+            return;
+        }
+
+        pVulkanCommandBuffer->m_vkCmdEndDebugUtilsLabel( pVulkanCommandBuffer->m_commandBuffer );
     }
 
+    // **This is the breadcrumb write, and nothing in the engine calls it.** Direct3D 12 uses
+    // ID3D12GraphicsCommandList2::WriteBufferImmediate, whose MARKER_IN and MARKER_OUT modes say
+    // "write this before everything already submitted" and "after". Vulkan spells that
+    // VK_AMD_buffer_marker, which is not enabled here and would be a device requirement the
+    // Phase 4 list does not have.
+    //
+    // vkCmdFillBuffer writes the same 32-bit value at the same point in the command stream and
+    // is ordered like any other command, so it matches WRITEBUFFERIMMEDIATE_MODE_DEFAULT exactly
+    // and approximates the other two. `DeviceCapabilities::m_breadcrumbs` is false on this
+    // backend, so nothing asks for the tighter ordering; narrowing it means enabling the
+    // extension, and that is worth doing only when breadcrumbs are turned on.
     uint32_t CmdWriteDebugMarker( CommandBuffer* pCommandBuffer, TBitFlags<MarkerTypeFlags> const& markerType, uint32_t markerValue, Buffer* pBuffer, size_t offset, bool useAutoFlags )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return 0;
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanBuffer*        pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
+
+        VkDeviceSize const bufferOffset = offset * sizeof( uint32_t );
+        EE_ASSERT( bufferOffset + sizeof( uint32_t ) <= pVulkanBuffer->m_size );
+
+        // A fill is a transfer command, so it leaves the render pass the way every copy and
+        // clear does. Direct3D 12 needs nothing here, which is why no caller expects it.
+        PrepareTransfer( pVulkanCommandBuffer );
+
+        if ( markerType == TBitFlags( MarkerTypeFlags::InOut ) )
+        {
+            // Two writes to one address, the way Direct3D 12 issues MARKER_IN and MARKER_OUT.
+            // **The In value does not survive here and it does there**: Direct3D writes it at the
+            // top of the pipe and the Out value at the bottom, so a crash between the two leaves
+            // the In value in the buffer, which is the whole point of a breadcrumb. Two fills run
+            // in order and the second simply overwrites the first. VK_AMD_buffer_marker is what
+            // closes that, and it is a device requirement nothing asks for yet.
+            //
+            // The flag values below are the enum's, not the bit field's, which is what the
+            // reference does at RHI_Direct3D12.cpp:3714. See "Upstream issues observed".
+            uint32_t const inValue = markerValue | ( useAutoFlags ? ( uint32_t( MarkerTypeFlags::In ) << 30 ) : 0 );
+            uint32_t const outValue = markerValue | ( useAutoFlags ? ( uint32_t( MarkerTypeFlags::Out ) << 30 ) : 0 );
+
+            vkCmdFillBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanBuffer->m_buffer, bufferOffset, sizeof( uint32_t ), inValue );
+            vkCmdFillBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanBuffer->m_buffer, bufferOffset, sizeof( uint32_t ), outValue );
+        }
+        else
+        {
+            // The bit field here, again matching the reference at RHI_Direct3D12.cpp:3722.
+            uint32_t const value = markerValue | ( useAutoFlags ? ( markerType.Get() << 30 ) : 0 );
+
+            vkCmdFillBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanBuffer->m_buffer, bufferOffset, sizeof( uint32_t ), value );
+        }
+
+        // No visibility barrier, unlike the clears. A breadcrumb is read by the host after the
+        // fact, and submission plus a host wait is what makes a transfer write visible there.
+
+        return markerValue;
     }
 
     CommandSignature* CreateCommandSignature( Context* pContext, CommandSignatureParameters const& parameters )
@@ -5863,49 +6014,73 @@ namespace EE::Render::RHI
         return 0.0;
     }
 
+    //-------------------------------------------------------------------------
+    // Debug names
+    //-------------------------------------------------------------------------
+    // All nine reach SetVulkanObjectName, which P5.2 wrote and which every Create* call has been
+    // using since. It already does nothing when the name is empty or the extension is missing,
+    // so these are the handle and the object type and nothing else.
+    //
+    // The Direct3D 12 backend asserts on an empty name and these do not. It converts to wide
+    // characters first and asserts on the conversion, which is where its assert lives; there is
+    // no conversion here, and Create* passes an empty debug name whenever the caller left one
+    // out, which is legal on both backends.
+
     void SetDebugName( Context* pContext, Queue* pQueue, StringView debugName )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+        SetVulkanObjectName( static_cast<VulkanContext*>( pContext ), VK_OBJECT_TYPE_QUEUE, uint64_t( pVulkanQueue->m_queue ), debugName );
     }
 
     void SetDebugName( Context* pContext, QueryPool* pQueryPool, StringView debugName )
     {
+        // VK_OBJECT_TYPE_QUERY_POOL, once P5.11 defines the VulkanQueryPool that holds the
+        // handle. There is no type to cast to yet.
         EE_UNIMPLEMENTED_FUNCTION();
     }
 
     void SetDebugName( Context* pContext, Buffer* pBuffer, StringView debugName )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanBuffer* pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
+        SetVulkanObjectName( static_cast<VulkanContext*>( pContext ), VK_OBJECT_TYPE_BUFFER, uint64_t( pVulkanBuffer->m_buffer ), debugName );
     }
 
     void SetDebugName( Context* pContext, Texture* pTexture, StringView debugName )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( pTexture );
+        SetVulkanObjectName( static_cast<VulkanContext*>( pContext ), VK_OBJECT_TYPE_IMAGE, uint64_t( pVulkanTexture->m_image ), debugName );
     }
 
     void SetDebugName( Context* pContext, RootSignature* pRootSignature, StringView debugName )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        // A root signature is a VkPipelineLayout here, which is what P5.7 built it as.
+        VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pRootSignature );
+        SetVulkanObjectName( static_cast<VulkanContext*>( pContext ), VK_OBJECT_TYPE_PIPELINE_LAYOUT, uint64_t( pVulkanRootSignature->m_pipelineLayout ), debugName );
     }
 
-    void SetDebugName( Context* pContext, CommandSignature* pCommandSignature, StringView debugName )
+    // **Nothing to name**, so the parameters have no names either. P5.13's command signature is
+    // a record of one command's byte layout and creates no Vulkan object, so there is no handle
+    // for a name to reach.
+    void SetDebugName( Context*, CommandSignature*, StringView )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
     }
 
     void SetDebugName( Context* pContext, Pipeline* pPipeline, StringView debugName )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanPipeline* pVulkanPipeline = static_cast<VulkanPipeline*>( pPipeline );
+        SetVulkanObjectName( static_cast<VulkanContext*>( pContext ), VK_OBJECT_TYPE_PIPELINE, uint64_t( pVulkanPipeline->m_pipeline ), debugName );
     }
 
     void SetDebugName( Context* pContext, CommandPool* pCommandPool, StringView debugName )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandPool* pVulkanCommandPool = static_cast<VulkanCommandPool*>( pCommandPool );
+        SetVulkanObjectName( static_cast<VulkanContext*>( pContext ), VK_OBJECT_TYPE_COMMAND_POOL, uint64_t( pVulkanCommandPool->m_commandPool ), debugName );
     }
 
     void SetDebugName( Context* pContext, CommandBuffer* pCommandBuffer, StringView debugName )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        SetVulkanObjectName( static_cast<VulkanContext*>( pContext ), VK_OBJECT_TYPE_COMMAND_BUFFER, uint64_t( pVulkanCommandBuffer->m_commandBuffer ), debugName );
     }
 
     void ReportDeviceMemoryLeaks()
