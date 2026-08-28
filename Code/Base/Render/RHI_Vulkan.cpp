@@ -2394,14 +2394,170 @@ namespace EE::Render::RHI
         EE_UNIMPLEMENTED_FUNCTION();
     }
 
+    // Copies and clears, and the four things they all have to do first. The commands themselves
+    // are further down, in the order RHI.h declares them; these helpers sit here because the two
+    // clears are the first callers.
+
+    // A copy and a clear are transfer commands, and Vulkan lets neither run inside dynamic
+    // rendering. Direct3D 12 has no such rule, so the engine closes nothing before either. This
+    // is the same pair CmdDispatchCompute makes, in the same order: a barrier the transfer
+    // depends on has to reach the device before the transfer does, and the flush is what leaves
+    // the render pass.
+    static void PrepareTransfer( VulkanCommandBuffer* pVulkanCommandBuffer )
+    {
+        FlushBarriers( pVulkanCommandBuffer );
+        SuspendRendering( pVulkanCommandBuffer );
+    }
+
+    // **The engine never barriers a texture into a copy layout, because Direct3D 12 has none.**
+    // A texture that is copied to is created in TextureState::Common - RenderSystem.cpp:650
+    // asserts exactly that - and D3D12_BARRIER_LAYOUT_COMMON is already a legal copy source,
+    // copy destination and unordered access view clear target. Vulkan needs GENERAL or one of
+    // the TRANSFER layouts, and the image is still in the VK_IMAGE_LAYOUT_UNDEFINED that
+    // vkCreateImage gave it, because nothing has barriered it yet. See
+    // VulkanTexture::m_currentLayout, which P5.6 wrote for this.
+    //
+    // GENERAL, not TRANSFER_DST_OPTIMAL, so that the engine's belief stays true. The next
+    // barrier the engine records on this texture names TextureState::Common as its source,
+    // Common is GENERAL, and CmdBarrier asserts that the two agree.
+    //
+    // The texture is const because RHI.h passes it that way to every copy. The layout it is in
+    // is not part of what the caller sees, so recording the change is not a change to it.
+    static void TransitionTextureForTransfer( VulkanCommandBuffer* pVulkanCommandBuffer, VulkanTexture const* pVulkanTexture )
+    {
+        if ( pVulkanTexture->m_currentLayout == VK_IMAGE_LAYOUT_GENERAL )
+        {
+            return;
+        }
+
+        // Any other layout means the engine moved this texture somewhere and then copied it with
+        // no barrier in between, which Direct3D 12 would not accept either.
+        EE_ASSERT( pVulkanTexture->m_currentLayout == VK_IMAGE_LAYOUT_UNDEFINED );
+
+        VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+        barrier.srcAccessMask = VK_ACCESS_2_NONE;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.oldLayout = pVulkanTexture->m_currentLayout;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = pVulkanTexture->m_image;
+        barrier.subresourceRange.aspectMask = pVulkanTexture->m_aspectMask;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = pVulkanTexture->m_mipLevels;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = pVulkanTexture->m_arrayLayers;
+
+        pVulkanCommandBuffer->m_imageBarriers.emplace_back( barrier );
+
+        const_cast<VulkanTexture*>( pVulkanTexture )->m_currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+
+    // **A Direct3D 12 clear is a shader write and a Vulkan clear is a transfer write, and the
+    // engine barriers for the first one.** Renderer_ForwardShading.cpp:753 follows its clears
+    // with ResourceAccess::UnorderedAccess as the source, which is a shader storage write and
+    // does not cover vkCmdFillBuffer at all, so the cleared counters would be read stale. The
+    // clear therefore records the transfer half of its own visibility barrier. It is batched
+    // like every other barrier and reaches the device with them at the next dispatch.
+    //
+    // ALL_COMMANDS on the destination, listed in Docs/Linux/Progress.md as a site to narrow:
+    // nothing here knows what reads the cleared resource next.
+    static void RecordClearVisibilityBarrier( VulkanCommandBuffer* pVulkanCommandBuffer )
+    {
+        VkMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+
+        pVulkanCommandBuffer->m_globalBarriers.emplace_back( barrier );
+    }
+
+    // One aspect per copy. TextureCopyRegion has no plane index, and Direct3D 12 builds its
+    // subresource index with plane 0 at RHI_Direct3D12.cpp:3547, which is the depth plane of a
+    // depth-stencil texture.
+    static VkImageAspectFlags TransferAspectMask( VulkanTexture const* pVulkanTexture )
+    {
+        if ( ( pVulkanTexture->m_aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT ) != 0 )
+        {
+            return VK_IMAGE_ASPECT_DEPTH_BIT;
+        }
+
+        return pVulkanTexture->m_aspectMask;
+    }
+
+    // A buffer image copy takes its row length in texels and the engine lays its rows out at the
+    // byte stride GetTextureCopyRowStride reports, so this converts the one into the other.
+    // That function's own comment names this conversion as P5.10's obligation.
+    static uint32_t CopyRowLengthInTexels( VulkanTexture const* pVulkanTexture, uint32_t mipLevel, uint32_t arrayLayer )
+    {
+        uint32_t const rowStride = GetTextureCopyRowStride( pVulkanTexture, mipLevel, arrayLayer );
+        uint32_t const blockByteSize = FormatBlockBitSize( pVulkanTexture->m_format ) / 8;
+
+        // A row length is a whole number of blocks or it cannot be expressed at all. The stride
+        // is one for every format the engine uploads: ComputeFormatRowStride multiplies by the
+        // block size, and the alignment GetTextureCopyRowStride then rounds up to is a power of
+        // two, as is every block size. A 96-bit format would break it, and nothing uses one.
+        EE_ASSERT( ( rowStride % blockByteSize ) == 0 );
+
+        return ( rowStride / blockByteSize ) * FormatBlockWidth( pVulkanTexture->m_format );
+    }
+
     void CmdClearTexture( CommandBuffer* pCommandBuffer, Texture const* pTexture, uint32_t clearValue )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer*    pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanTexture const*    pVulkanTexture = static_cast<VulkanTexture const*>( pTexture );
+
+        EE_ASSERT( pVulkanTexture->m_descriptorTypes.IsFlagSet( DescriptorTypeFlags::RWTexture ) );
+        EE_ASSERT( pVulkanTexture->m_aspectMask == VK_IMAGE_ASPECT_COLOR_BIT );
+
+        TransitionTextureForTransfer( pVulkanCommandBuffer, pVulkanTexture );
+        PrepareTransfer( pVulkanCommandBuffer );
+
+        // **The two backends read the clear value differently, and nothing calls this today.**
+        // ClearUnorderedAccessViewUint writes the raw bits through a typed view, and
+        // vkCmdClearColorImage converts the value to the image format, so the two agree on an
+        // integer format and disagree on a normalised one. Recorded in Docs/Linux/Progress.md.
+        VkClearColorValue vulkanClearValue = {};
+        vulkanClearValue.uint32[0] = clearValue;
+        vulkanClearValue.uint32[1] = clearValue;
+        vulkanClearValue.uint32[2] = clearValue;
+        vulkanClearValue.uint32[3] = clearValue;
+
+        // Direct3D 12 clears one view per mip level. One Vulkan subresource range covers them
+        // all, and the array layers with them.
+        VkImageSubresourceRange range = {};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.baseMipLevel = 0;
+        range.levelCount = pVulkanTexture->m_mipLevels;
+        range.baseArrayLayer = 0;
+        range.layerCount = pVulkanTexture->m_arrayLayers;
+
+        vkCmdClearColorImage( pVulkanCommandBuffer->m_commandBuffer, pVulkanTexture->m_image,
+                              VK_IMAGE_LAYOUT_GENERAL, &vulkanClearValue, 1, &range );
+
+        RecordClearVisibilityBarrier( pVulkanCommandBuffer );
     }
 
     void CmdClearBuffer( CommandBuffer* pCommandBuffer, Buffer const* pBuffer, uint32_t clearValue )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer*    pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanBuffer const*     pVulkanBuffer = static_cast<VulkanBuffer const*>( pBuffer );
+
+        EE_ASSERT( pVulkanBuffer->m_descriptorTypes.IsFlagSet( DescriptorTypeFlags::RWBuffer ) );
+
+        PrepareTransfer( pVulkanCommandBuffer );
+
+        // vkCmdFillBuffer repeats one 32-bit value over the whole buffer, and
+        // ClearUnorderedAccessViewUint with four identical components does the same thing to
+        // every 32-bit component of the view. The two agree for every buffer the engine clears,
+        // which are counters and 32-bit typed buffers. They would disagree on a 16-bit format.
+        // VK_WHOLE_SIZE rounds the size down to a multiple of 4, which is what a fill needs.
+        vkCmdFillBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanBuffer->m_buffer, 0, VK_WHOLE_SIZE, clearValue );
+
+        RecordClearVisibilityBarrier( pVulkanCommandBuffer );
     }
 
     void CmdBuildAccelerationStructure( CommandBuffer* pCommandBuffer, TArrayView<AccelerationStructure* const> accelerationStructures, TArrayView<uint32_t const> bottomLevelAccelerationStructureIndices )
@@ -2720,17 +2876,82 @@ namespace EE::Render::RHI
 
     void CmdCopyBuffer( CommandBuffer* pCommandBuffer, Buffer const* pDstBuffer, uint64_t dstOffset, Buffer const* pSrcBuffer, uint64_t srcOffset, uint64_t srcSize )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer*    pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanBuffer const*     pVulkanDstBuffer = static_cast<VulkanBuffer const*>( pDstBuffer );
+        VulkanBuffer const*     pVulkanSrcBuffer = static_cast<VulkanBuffer const*>( pSrcBuffer );
+
+        PrepareTransfer( pVulkanCommandBuffer );
+
+        VkBufferCopy region = {};
+        region.srcOffset = srcOffset;
+        region.dstOffset = dstOffset;
+        region.size = srcSize;
+
+        vkCmdCopyBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanSrcBuffer->m_buffer, pVulkanDstBuffer->m_buffer, 1, &region );
     }
 
     void CmdCopyTexture( CommandBuffer* pCommandBuffer, Texture const* pDstTexture, TextureCopyRegion const& dstRegion, Buffer const* pSrcBuffer, uint64_t srcOffset )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer*    pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanTexture const*    pVulkanDstTexture = static_cast<VulkanTexture const*>( pDstTexture );
+        VulkanBuffer const*     pVulkanSrcBuffer = static_cast<VulkanBuffer const*>( pSrcBuffer );
+
+        EE_ASSERT( dstRegion.m_mipLevel < pVulkanDstTexture->m_mipLevels );
+        EE_ASSERT( dstRegion.m_arrayLayer < pVulkanDstTexture->m_arrayLayers );
+
+        TransitionTextureForTransfer( pVulkanCommandBuffer, pVulkanDstTexture );
+        PrepareTransfer( pVulkanCommandBuffer );
+
+        VkBufferImageCopy region = {};
+        region.bufferOffset = srcOffset;
+        region.bufferRowLength = CopyRowLengthInTexels( pVulkanDstTexture, dstRegion.m_mipLevel, dstRegion.m_arrayLayer );
+        // Zero means the rows are packed to imageExtent.height, which is how the engine writes
+        // them: RenderSystem.h:545 advances the staging offset by exactly the rows of this one
+        // region. Direct3D 12 reads the same thing out of the subresource footprint.
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = TransferAspectMask( pVulkanDstTexture );
+        region.imageSubresource.mipLevel = dstRegion.m_mipLevel;
+        // One layer per copy, the way the subresource index Direct3D 12 builds names one. A 3D
+        // texture has one layer and puts its slices in m_z and m_depth instead.
+        region.imageSubresource.baseArrayLayer = dstRegion.m_arrayLayer;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = { int32_t( dstRegion.m_x ), int32_t( dstRegion.m_y ), int32_t( dstRegion.m_z ) };
+        region.imageExtent = { dstRegion.m_width, dstRegion.m_height, dstRegion.m_depth };
+
+        vkCmdCopyBufferToImage( pVulkanCommandBuffer->m_commandBuffer, pVulkanSrcBuffer->m_buffer,
+                                pVulkanDstTexture->m_image, VK_IMAGE_LAYOUT_GENERAL, 1, &region );
     }
 
     void CmdCopyTexture( CommandBuffer* pCommandBuffer, Buffer const* pDstBuffer, uint64_t dstOffset, Texture const* pSrcTexture, TextureCopyRegion const& srcRegion )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer*    pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanBuffer const*     pVulkanDstBuffer = static_cast<VulkanBuffer const*>( pDstBuffer );
+        VulkanTexture const*    pVulkanSrcTexture = static_cast<VulkanTexture const*>( pSrcTexture );
+
+        EE_ASSERT( srcRegion.m_mipLevel < pVulkanSrcTexture->m_mipLevels );
+        EE_ASSERT( srcRegion.m_arrayLayer < pVulkanSrcTexture->m_arrayLayers );
+
+        TransitionTextureForTransfer( pVulkanCommandBuffer, pVulkanSrcTexture );
+        PrepareTransfer( pVulkanCommandBuffer );
+
+        VkBufferImageCopy region = {};
+        region.bufferOffset = dstOffset;
+        // **The readback stride is GetTextureCopyRowStride too, and nothing calls this yet.**
+        // Direct3D 12 uses the destination buffer's own footprint here, which for a buffer
+        // resource is the whole buffer as a single row and says nothing about texture rows. One
+        // rule for both directions is the useful answer, so a caller sizes its readback buffer
+        // with the same function the upload path already uses.
+        region.bufferRowLength = CopyRowLengthInTexels( pVulkanSrcTexture, srcRegion.m_mipLevel, srcRegion.m_arrayLayer );
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = TransferAspectMask( pVulkanSrcTexture );
+        region.imageSubresource.mipLevel = srcRegion.m_mipLevel;
+        region.imageSubresource.baseArrayLayer = srcRegion.m_arrayLayer;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = { int32_t( srcRegion.m_x ), int32_t( srcRegion.m_y ), int32_t( srcRegion.m_z ) };
+        region.imageExtent = { srcRegion.m_width, srcRegion.m_height, srcRegion.m_depth };
+
+        vkCmdCopyImageToBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanSrcTexture->m_image,
+                                VK_IMAGE_LAYOUT_GENERAL, pVulkanDstBuffer->m_buffer, 1, &region );
     }
 
     void CmdBeginDebugMarker( CommandBuffer* pCommandBuffer, char const* pName )
