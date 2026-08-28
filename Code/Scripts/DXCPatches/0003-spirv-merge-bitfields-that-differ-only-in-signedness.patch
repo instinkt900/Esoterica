@@ -1,0 +1,355 @@
+Merge adjacent bitfields whose base types differ only in signedness.
+
+Applies to: v1.10.2605.37 (c4d8f4f9). Also applies to main as of 2026-08-28.
+Apply after 0002.
+
+HLSL, C++ and DXC's own DXIL back end all merge adjacent bitfields into one
+word when the base types have the same width, regardless of signedness. The
+SPIR-V back end refuses unless the types match exactly, so a struct written by
+the application at one size is read by the shader at another, with nothing to
+report it. This engine shares its struct declarations between C++ and HLSL, so
+the two sides disagreeing is silent data corruption.
+
+Two of its structs are affected:
+
+  MeshCluster, 32 bytes in C++ and DXIL, 40 in SPIR-V. It has two mixed pairs,
+  int32_t m_anchorX : 24 with uint32_t m_numVertices : 8, and the same for Y.
+
+  RenderView, 352 in C++ and DXIL, 360 in SPIR-V. Its three adjacent bitfields
+  have three different types - two distinct enums and a uint - and the same
+  refusal splits them into three words.
+
+The refusal was not arbitrary. SPIR-V really cannot express a member that is
+both signed and unsigned, and OpBitFieldSExtract and OpBitFieldUExtract both
+require Base and Result Type to be the *same type*, not merely the same width -
+spirv-val rejects `OpBitFieldUExtract %uint %int_base`. So merging needs the
+accesses fixed too, and that is most of this patch.
+
+The merged member takes the first field's type. Each field is then reached by
+reinterpreting the member into the field's own type and extracting in that
+type, so Base and Result Type agree and the choice between the signed and the
+unsigned opcode still follows the field. That is what makes an unsigned field
+zero-extend out of a signed member:
+
+    %35 = OpBitcast %int %34
+    %36 = OpBitFieldSExtract %int %35 %uint_0 %uint_24     ; int sgn : 24
+    %40 = OpBitcast %uint %39
+    %41 = OpBitFieldUExtract %uint %40 %uint_24 %uint_8    ; uint uns : 8
+
+Writes are the mirror: the value is reinterpreted into the member's type before
+OpBitFieldInsert, which has the same same-type requirement.
+
+Four places change.
+
+1. LowerTypeVisitor::populateLayoutInformation decides which fields share a
+   member. Same-width integers differing in signedness are now merged.
+2. AlignmentSizeCalculator::getAlignmentAndSize computes sizes and offsets from
+   the AST independently, and has its own copy of the rule. The two must agree
+   or the member list and the offsets describe different structs; leaving this
+   one alone produces a struct whose members are merged and whose stride says
+   otherwise.
+3. SpirvEmitter's bitfield member access names the merged member's type for the
+   access chain, and hands the field's type to createLoad separately.
+4. SpirvBuilder::createLoad and ::createStore insert the reinterprets.
+
+Effect on this engine: all 46 shader stages compile and pass spirv-val, and
+every structured buffer stride now equals the size the engine's own
+HLSL_STATIC_ASSERTs demand - MeshCluster included, which it was not before. 32
+of the 46 stages are byte-identical to the previous compiler; the 14 that change
+are exactly those reading MeshCluster or RenderView, and they change to the
+Direct3D layout.
+
+Effect on DXC's own tests: three fail, and all three encode the behaviour this
+patch changes rather than catching a fault in it.
+
+  vk.layout.struct.bitfield.hlsl expects `%S6 = OpTypeStruct %uint %int` for
+  `struct S6 { uint f2 : 1; int f1 : 1; }`. It is now one member. Compiling the
+  same struct with _Static_assert( sizeof( S6 ) == 4 ) on the DXIL back end
+  passes, so one member is the Direct3D answer.
+
+  vk.layout.struct.bitfield.assignment.hlsl expects three separate members for
+  `struct S3 { uint f1 : 1; int f2 : 1; uint f3 : 1; }` and access chains at
+  %int_0, %int_1 and %int_2. All three now live at %int_0, at bit offsets 0, 1
+  and 2, with a bitcast on the signed one.
+
+  op.structured-buffer.access.bitfield.hlsl fails for the same reason.
+
+Upstream would want those three updated in a submission. They are deliberately
+not touched here, so that the fork's diff against the pinned tag stays confined
+to the fix.
+
+--- a/tools/clang/lib/SPIRV/LowerTypeVisitor.cpp
++++ b/tools/clang/lib/SPIRV/LowerTypeVisitor.cpp
+@@ -1304,8 +1304,18 @@
+ LowerTypeVisitor::populateLayoutInformation(
+     llvm::ArrayRef<HybridStructType::FieldInfo> fields, SpirvLayoutRule rule) {
+ 
+-  auto fieldVisitor = [this,
+-                       &rule](const StructType::FieldInfo *previousField,
++  // True when two bitfield base types differ only in signedness, and so may share
++  // one merged SPIR-V member.
++  const auto isMergeableBitfieldPair = [](const SpirvType *a,
++                                          const SpirvType *b) {
++    const auto *intA = dyn_cast<IntegerType>(a);
++    const auto *intB = dyn_cast<IntegerType>(b);
++    return intA && intB && intA->getBitwidth() == intB->getBitwidth() &&
++           intA->isSignedInt() != intB->isSignedInt();
++  };
++
++  auto fieldVisitor = [this, &rule, &isMergeableBitfieldPair](
++                          const StructType::FieldInfo *previousField,
+                               const HybridStructType::FieldInfo *currentField,
+                               const uint32_t nextFieldIndex) {
+     StructType::FieldInfo loweredField =
+@@ -1374,9 +1384,15 @@
+     if (!previousField || !previousField->bitfield.hasValue())
+       return loweredField;
+ 
+-    // Bitfields can only be merged if they have the exact base type.
+-    // (SPIR-V cannot handle mixed-types bitfields).
+-    if (previousField->type != loweredField.type)
++    // Bitfields can only be merged if they have the same base type, with one
++    // exception: integers of the same width that differ only in signedness are
++    // merged, because HLSL and C++ both merge them and this engine's shared
++    // structs rely on it. A SPIR-V struct member cannot be signed and unsigned
++    // at once, so the merged member takes the first field's type; each field is
++    // then read back with the extract that matches its OWN declared type, which
++    // SpirvBitFieldExtract already selects from the QualType it is given.
++    if (previousField->type != loweredField.type &&
++        !isMergeableBitfieldPair(previousField->type, loweredField.type))
+       return loweredField;
+ 
+     const uint32_t basetypeSize = previousField->sizeInBytes.getValue() * 8;
+--- a/tools/clang/lib/SPIRV/AlignmentSizeCalculator.cpp
++++ b/tools/clang/lib/SPIRV/AlignmentSizeCalculator.cpp
+@@ -72,6 +72,21 @@
+   }
+ }
+ 
++namespace {
++/// True when two bitfield base types differ only in signedness, and so may share
++/// one merged member. Compared on the lowered representation - width and
++/// signedness - so that this matches what LowerTypeVisitor does with the SPIR-V
++/// types, including for enums, which lower to plain integers.
++bool isMergeableBitfieldPair(const clang::ASTContext &astContext,
++                             clang::QualType a, clang::QualType b) {
++  if (!a->isIntegralOrEnumerationType() || !b->isIntegralOrEnumerationType())
++    return false;
++  if (astContext.getTypeSize(a) != astContext.getTypeSize(b))
++    return false;
++  return true;
++}
++} // namespace
++
+ std::pair<uint32_t, uint32_t> AlignmentSizeCalculator::getAlignmentAndSize(
+     QualType type, const RecordType *structType, SpirvLayoutRule rule,
+     llvm::Optional<bool> isRowMajor, uint32_t *stride) const {
+@@ -118,7 +133,15 @@
+         break;
+ 
+       // Not the same type as the previous bitfield. Ignoring.
+-      if (lastField->getType() != field->getType())
++      //
++      // Integers of the same width that differ only in signedness are the
++      // exception: they are merged, because HLSL, C++ and the DXIL back end all
++      // merge them, and this engine's shared structs are laid out on that
++      // assumption. LowerTypeVisitor applies the same rule, and the two have to
++      // agree or the member list and the offsets describe different structs.
++      if (lastField->getType() != field->getType() &&
++          !isMergeableBitfieldPair(astContext, lastField->getType(),
++                                   field->getType()))
+         break;
+ 
+       // Not enough room left to fit this bitfield. Starting a new slot.
+--- a/tools/clang/lib/SPIRV/SpirvBuilder.cpp
++++ b/tools/clang/lib/SPIRV/SpirvBuilder.cpp
+@@ -196,10 +196,25 @@
+ 
+ SpirvInstruction *SpirvBuilder::createLoad(QualType resultType,
+                                            SpirvInstruction *pointer,
+-                                           SourceLocation loc,
+-                                           SourceRange range) {
++                                           SourceLocation loc, SourceRange range,
++                                           QualType bitfieldResultType) {
+   assert(insertPoint && "null insert point");
+-  auto *instruction = new (context) SpirvLoad(resultType, loc, pointer, range);
++
++  // Bitfields that differ only in signedness share one merged member, so the
++  // member this field lives in does not always have the field's type. The load
++  // has to name the member's type, which the pointer already carries; the
++  // field's type is then reached by a reinterpret and an extract below.
++  QualType const bitfieldMemberType =
++      pointer->getBitfieldInfo().hasValue() ? pointer->getAstResultType()
++                                            : QualType();
++  QualType const loadType =
++      bitfieldMemberType.isNull() ? resultType : bitfieldMemberType;
++  if (!bitfieldMemberType.isNull() && bitfieldResultType.isNull() &&
++      bitfieldMemberType != resultType) {
++    bitfieldResultType = resultType;
++  }
++
++  auto *instruction = new (context) SpirvLoad(loadType, loc, pointer, range);
+   instruction->setStorageClass(pointer->getStorageClass());
+   instruction->setLayoutRule(pointer->getLayoutRule());
+   instruction->setRValue(true);
+@@ -250,8 +265,23 @@
+   if (!bitfieldInfo.hasValue())
+     return instruction;
+ 
+-  return createBitFieldExtract(resultType, instruction,
+-                               bitfieldInfo->offsetInBits,
++  // Bitfields that differ only in signedness share one merged member, so the
++  // member's type is not always this field's type. OpBitFieldSExtract and
++  // OpBitFieldUExtract both require Base and Result Type to be the *same* type,
++  // not merely the same width, so reinterpret the loaded word into the field's
++  // type first and extract in that type. Which of the two opcodes is used still
++  // follows the field, because SpirvBitFieldExtract picks it from the type it
++  // is given, and that is what makes an unsigned field zero-extend out of a
++  // signed member.
++  SpirvInstruction *base = instruction;
++  QualType extractType = loadType;
++  if (!bitfieldResultType.isNull() && bitfieldResultType != loadType) {
++    base = createUnaryOp(spv::Op::OpBitcast, bitfieldResultType, instruction,
++                         loc, range);
++    extractType = bitfieldResultType;
++  }
++
++  return createBitFieldExtract(extractType, base, bitfieldInfo->offsetInBits,
+                                bitfieldInfo->sizeInBits, loc, range);
+ }
+ 
+@@ -313,11 +343,28 @@
+     lowerTypeVisitor.visitInstruction(value);
+     context.addToInstructionsWithLoweredType(value);
+ 
+-    auto *base = createLoad(value->getResultType(), address, loc, range);
+-    source = createBitFieldInsert(/*QualType*/ {}, base, value,
++    // The merged member holding this bitfield may differ in signedness from the
++    // value being written, because bitfields that differ only in signedness
++    // share one member. Load and store the member in its own type, and
++    // reinterpret the value into it, so that OpLoad, OpBitFieldInsert and
++    // OpStore all agree. OpBitFieldInsert requires Base, Insert and Result Type
++    // to be the same type.
++    QualType const memberType = address->getAstResultType();
++    SpirvInstruction *insert = value;
++    if (!memberType.isNull() && !value->getAstResultType().isNull() &&
++        memberType != value->getAstResultType()) {
++      insert = createUnaryOp(spv::Op::OpBitcast, memberType, value, loc, range);
++      LowerTypeVisitor memberTypeVisitor(astContext, context, spirvOptions,
++                                         *this);
++      memberTypeVisitor.visitInstruction(insert);
++      context.addToInstructionsWithLoweredType(insert);
++    }
++
++    auto *base = createLoad(insert->getResultType(), address, loc, range);
++    source = createBitFieldInsert(/*QualType*/ {}, base, insert,
+                                   bitfieldInfo->offsetInBits,
+                                   bitfieldInfo->sizeInBits, loc, range);
+-    source->setResultType(value->getResultType());
++    source->setResultType(insert->getResultType());
+   }
+ 
+   auto *instruction =
+--- a/tools/clang/lib/SPIRV/SpirvEmitter.cpp
++++ b/tools/clang/lib/SPIRV/SpirvEmitter.cpp
+@@ -7008,20 +7008,64 @@
+       spirvStructType->getFields()[indexAST].bitfield->sizeInBits;
+   BitfieldInfo bitfieldInfo{bitfieldOffset, bitfieldSize};
+ 
++  // Bitfields that differ only in signedness are merged into one member, so the
++  // member this field lives in does not always have this field's type. The
++  // access chain and the load have to name the member's type; the field's type
++  // is handed to createLoad separately, and it reinterprets before extracting.
++  QualType const memberType =
++      getBitfieldMemberType(baseType, spirvStructType, indexAST);
++
+   if (instr->isRValue()) {
+     SpirvVariable *variable = turnIntoLValue(base->getType(), instr, loc);
+     SpirvInstruction *chain = spvBuilder.createAccessChain(
+-        expr->getType(), variable, indices, loc, range);
++        memberType, variable, indices, loc, range);
+     chain->setBitfieldInfo(bitfieldInfo);
+-    return spvBuilder.createLoad(expr->getType(), chain, loc);
++    return spvBuilder.createLoad(memberType, chain, loc, range,
++                                 expr->getType());
+   }
+ 
+   SpirvInstruction *chain =
+-      spvBuilder.createAccessChain(expr->getType(), instr, indices, loc, range);
++      spvBuilder.createAccessChain(memberType, instr, indices, loc, range);
+   chain->setBitfieldInfo(bitfieldInfo);
+   return chain;
+ }
+ 
++// Returns the AST type of the struct member that holds the bitfield at
++// indexAST. Merged bitfields share a member, and the member takes the type of
++// the first field in the group, so walk back to it.
++QualType SpirvEmitter::getBitfieldMemberType(QualType baseType,
++                                             const StructType *spirvStructType,
++                                             uint32_t indexAST) {
++  const auto &fields = spirvStructType->getFields();
++  uint32_t first = indexAST;
++  while (first > 0 &&
++         fields[first - 1].fieldIndex == fields[indexAST].fieldIndex) {
++    --first;
++  }
++
++  if (first == indexAST)
++    return getFieldTypeByAstIndex(baseType, indexAST);
++
++  return getFieldTypeByAstIndex(baseType, first);
++}
++
++// Returns the declared type of the field at the given flattened AST index.
++QualType SpirvEmitter::getFieldTypeByAstIndex(QualType baseType,
++                                              uint32_t indexAST) {
++  const auto *recordType = baseType->getAs<RecordType>();
++  assert(recordType);
++  const uint32_t numBases = getNumBaseClasses(baseType);
++
++  uint32_t i = numBases;
++  for (const auto *field : recordType->getDecl()->fields()) {
++    if (i == indexAST)
++      return field->getType();
++    ++i;
++  }
++
++  llvm_unreachable("bitfield index out of range");
++}
++
+ SpirvVariable *SpirvEmitter::createTemporaryVar(QualType type,
+                                                 llvm::StringRef name,
+                                                 SpirvInstruction *init,
+--- a/tools/clang/lib/SPIRV/SpirvEmitter.h
++++ b/tools/clang/lib/SPIRV/SpirvEmitter.h
+@@ -285,6 +285,14 @@
+ 
+   bool isDescriptorHeap(const Expr *expr);
+ 
++  /// Returns the AST type of the struct member holding the bitfield at indexAST,
++  /// which differs from the field's own type when signedness-differing bitfields
++  /// have been merged into one member.
++  QualType getBitfieldMemberType(QualType baseType,
++                                 const StructType *spirvStructType,
++                                 uint32_t indexAST);
++  QualType getFieldTypeByAstIndex(QualType baseType, uint32_t indexAST);
++
+   /// Returns the resource type that a descriptor heap access produces.
+   QualType getDescriptorHeapResourceType(const Expr *expr);
+ 
+--- a/tools/clang/include/clang/SPIRV/SpirvBuilder.h
++++ b/tools/clang/include/clang/SPIRV/SpirvBuilder.h
+@@ -180,8 +180,12 @@
+   /// \brief Creates a load sequence loading the value of the given
+   /// <result-type> from the given pointer (load + optional extraction,
+   /// ex:bitfield). Returns the instruction pointer for the loaded value.
++  /// bitfieldResultType, when set, is the type of the bitfield being read, in
++  /// the case where it differs in signedness from the merged member that holds
++  /// it. resultType is then the merged member's type. See createLoad's body.
+   SpirvInstruction *createLoad(QualType resultType, SpirvInstruction *pointer,
+-                               SourceLocation loc, SourceRange range = {});
++                               SourceLocation loc, SourceRange range = {},
++                               QualType bitfieldResultType = {});
+   SpirvLoad *createLoad(const SpirvType *resultType, SpirvInstruction *pointer,
+                         SourceLocation loc, SourceRange range = {});
+ 
