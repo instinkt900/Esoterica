@@ -6,11 +6,16 @@
 #include "Base/Math/Math.h"
 #include "Base/Types/HashMap.h"
 #include "Base/Render/HandleAllocator.h"
+#include "Base/Encoding/Embed.h"
 
 #include "EASTL/algorithm.h"
 
 #include <vulkan/vulkan.h>
 #include <dlfcn.h>
+
+// SPIRV-Reflect replaces ID3D12ShaderReflection. See the P4.4 entry in Docs/Linux/Progress.md
+// for why the dependency belongs to Phase 5 rather than Phase 4.
+#include "spirv_reflect.h"
 
 #include "renderdoc_app.h"
 
@@ -1879,6 +1884,19 @@ namespace EE::Render::RHI
             case DataFormat::RG32_SInt:     return VK_FORMAT_R32G32_SINT;
             case DataFormat::RG32_SFloat:   return VK_FORMAT_R32G32_SFLOAT;
 
+            // Render target and depth formats, added by P5.7. Measured the same way: every
+            // DataFormat a texture or a pipeline is created with in Code/Engine.
+            case DataFormat::R8_UNorm:      return VK_FORMAT_R8_UNORM;
+            case DataFormat::R16_SFloat:    return VK_FORMAT_R16_SFLOAT;
+            case DataFormat::RG16_SFloat:   return VK_FORMAT_R16G16_SFLOAT;
+            case DataFormat::RGBA8_UNorm:   return VK_FORMAT_R8G8B8A8_UNORM;
+            case DataFormat::RGBA8_sRGB:    return VK_FORMAT_R8G8B8A8_SRGB;
+            case DataFormat::RGBA16_SFloat: return VK_FORMAT_R16G16B16A16_SFLOAT;
+            case DataFormat::RGBA32_SFloat: return VK_FORMAT_R32G32B32A32_SFLOAT;
+            case DataFormat::RG11_B10_UFloat: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+            case DataFormat::D32_SFloat:    return VK_FORMAT_D32_SFLOAT;
+            case DataFormat::S8_Uint:       return VK_FORMAT_S8_UINT;
+
             default:
             {
                 // P5.6 fills in the remaining ~109 entries, in the same task as the texture
@@ -2391,90 +2409,929 @@ namespace EE::Render::RHI
         return SamplerStateHandle();
     }
 
+    //-------------------------------------------------------------------------
+    // Shaders, root signatures and pipelines
+    //-------------------------------------------------------------------------
+
+    struct VulkanShader final : Shader
+    {
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+        TInlineVector<VkShaderModule, 2>                    m_shaderModules;
+    };
+
+    struct VulkanRootSignature final : RootSignature
+    {
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+        VkPipelineLayout                                    m_pipelineLayout = VK_NULL_HANDLE;
+
+        // Set 0 of the binding model: per-pipeline, derived from reflection, and created with
+        // PUSH_DESCRIPTOR_BIT so CmdSetRootParameter is a push rather than a set allocation.
+        VkDescriptorSetLayout                               m_rootParameterSetLayout = VK_NULL_HANDLE;
+    };
+
+    struct VulkanPipeline final : Pipeline
+    {
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+        VkPipeline                                          m_pipeline = VK_NULL_HANDLE;
+        VkPipelineBindPoint                                 m_bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        VkPrimitiveTopology                                 m_primitiveTopology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    };
+
+    struct VulkanPipelineCache final : PipelineCache
+    {
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+        VkPipelineCache                                     m_pipelineCache = VK_NULL_HANDLE;
+
+        // GetPipelineCacheData hands back a view, so the bytes have to outlive the call.
+        TVector<uint8_t>                                    m_cacheData{ Memory::Allocators::g_RHI };
+    };
+
+    //-------------------------------------------------------------------------
+    // State mapping
+    //-------------------------------------------------------------------------
+
+    static VkCompareOp VulkanCompareOp( CompareMode mode )
+    {
+        switch ( mode )
+        {
+            case CompareMode::Never:        return VK_COMPARE_OP_NEVER;
+            case CompareMode::Less:         return VK_COMPARE_OP_LESS;
+            case CompareMode::Equal:        return VK_COMPARE_OP_EQUAL;
+            case CompareMode::LessEqual:    return VK_COMPARE_OP_LESS_OR_EQUAL;
+            case CompareMode::Greater:      return VK_COMPARE_OP_GREATER;
+            case CompareMode::NotEqual:     return VK_COMPARE_OP_NOT_EQUAL;
+            case CompareMode::GreaterEqual: return VK_COMPARE_OP_GREATER_OR_EQUAL;
+            case CompareMode::Always:       return VK_COMPARE_OP_ALWAYS;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_COMPARE_OP_ALWAYS;
+    }
+
+    static VkStencilOp VulkanStencilOp( StencilOp op )
+    {
+        switch ( op )
+        {
+            case StencilOp::Keep:               return VK_STENCIL_OP_KEEP;
+            case StencilOp::SetZero:            return VK_STENCIL_OP_ZERO;
+            case StencilOp::Replace:            return VK_STENCIL_OP_REPLACE;
+            case StencilOp::Invert:             return VK_STENCIL_OP_INVERT;
+            case StencilOp::Increment:          return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+            case StencilOp::Decrement:          return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+            case StencilOp::IncrementSaturate:  return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+            case StencilOp::DecrementSaturate:  return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_STENCIL_OP_KEEP;
+    }
+
+    static VkBlendFactor VulkanBlendFactor( BlendConstant constant )
+    {
+        switch ( constant )
+        {
+            case BlendConstant::Zero:                   return VK_BLEND_FACTOR_ZERO;
+            case BlendConstant::One:                    return VK_BLEND_FACTOR_ONE;
+            case BlendConstant::SrcColor:               return VK_BLEND_FACTOR_SRC_COLOR;
+            case BlendConstant::OneMinusSrcColor:       return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+            case BlendConstant::DstColor:               return VK_BLEND_FACTOR_DST_COLOR;
+            case BlendConstant::OneMinusDstColor:       return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+            case BlendConstant::SrcAlpha:               return VK_BLEND_FACTOR_SRC_ALPHA;
+            case BlendConstant::OneMinusSrcAlpha:       return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            case BlendConstant::DstAlpha:               return VK_BLEND_FACTOR_DST_ALPHA;
+            case BlendConstant::OneMinusDstAlpha:       return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+            case BlendConstant::SrcAlphaSaturate:       return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+            case BlendConstant::BlendFactor:            return VK_BLEND_FACTOR_CONSTANT_COLOR;
+            case BlendConstant::OneMinusBlendFactor:    return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_BLEND_FACTOR_ONE;
+    }
+
+    static VkBlendOp VulkanBlendOp( BlendMode mode )
+    {
+        switch ( mode )
+        {
+            case BlendMode::Add:                return VK_BLEND_OP_ADD;
+            case BlendMode::Subtract:           return VK_BLEND_OP_SUBTRACT;
+            case BlendMode::ReverseSubtract:    return VK_BLEND_OP_REVERSE_SUBTRACT;
+            case BlendMode::Min:                return VK_BLEND_OP_MIN;
+            case BlendMode::Max:                return VK_BLEND_OP_MAX;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_BLEND_OP_ADD;
+    }
+
+    static VkShaderStageFlagBits VulkanShaderStage( ShaderStage stage )
+    {
+        switch ( stage )
+        {
+            case ShaderStage::Vertex:       return VK_SHADER_STAGE_VERTEX_BIT;
+            case ShaderStage::Pixel:        return VK_SHADER_STAGE_FRAGMENT_BIT;
+            case ShaderStage::Task:         return VK_SHADER_STAGE_TASK_BIT_EXT;
+            case ShaderStage::Mesh:         return VK_SHADER_STAGE_MESH_BIT_EXT;
+            case ShaderStage::Compute:      return VK_SHADER_STAGE_COMPUTE_BIT;
+            case ShaderStage::RayTracing:   return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+
+    static VkShaderStageFlags VulkanShaderStages( TBitFlags<ShaderStage> stages )
+    {
+        VkShaderStageFlags result = 0;
+        if ( stages.IsFlagSet( ShaderStage::Vertex ) )       { result |= VK_SHADER_STAGE_VERTEX_BIT; }
+        if ( stages.IsFlagSet( ShaderStage::Pixel ) )        { result |= VK_SHADER_STAGE_FRAGMENT_BIT; }
+        if ( stages.IsFlagSet( ShaderStage::Task ) )         { result |= VK_SHADER_STAGE_TASK_BIT_EXT; }
+        if ( stages.IsFlagSet( ShaderStage::Mesh ) )         { result |= VK_SHADER_STAGE_MESH_BIT_EXT; }
+        if ( stages.IsFlagSet( ShaderStage::Compute ) )      { result |= VK_SHADER_STAGE_COMPUTE_BIT; }
+        if ( stages.IsFlagSet( ShaderStage::RayTracing ) )   { result |= VK_SHADER_STAGE_ALL; }
+        return result;
+    }
+
+    //-------------------------------------------------------------------------
+    // Reflection
+    //-------------------------------------------------------------------------
+    // SPIRV-Reflect replaces ID3D12ShaderReflection, which RHI_Direct3D12.cpp uses in
+    // ExtractReflection at :1003. The output has to be the same ShaderReflection the engine
+    // already reads, so this mirrors that function rather than exposing anything new.
+
+    static bool IsRootConstant( char const* pName )
+    {
+        // Matches RHI_Direct3D12.cpp:990. RHI.esh declares the block as
+        // "ConstantBuffer<T> RootConstants : register( ... )", so the name is the marker.
+        if ( pName == nullptr )
+        {
+            return false;
+        }
+
+        char const* pRootConstantName = "rootconstants";
+        size_t const length = strlen( pRootConstantName );
+
+        if ( strlen( pName ) != length )
+        {
+            return false;
+        }
+
+        for ( size_t charIndex = 0; charIndex < length; ++charIndex )
+        {
+            if ( char( tolower( pName[charIndex] ) ) != pRootConstantName[charIndex] )
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    static TBitFlags<DescriptorTypeFlags> DescriptorTypeFromReflection( SpvReflectDescriptorBinding const& binding )
+    {
+        // resource_type carries the read against read-write distinction that Direct3D 12 gets
+        // from D3D_SIT_STRUCTURED versus D3D_SIT_UAV_RWSTRUCTURED, so it is the discriminator
+        // rather than the SPIR-V type alone.
+        bool const isReadWrite = ( binding.resource_type & SPV_REFLECT_RESOURCE_FLAG_UAV ) != 0;
+
+        switch ( binding.descriptor_type )
+        {
+            case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER:                   return DescriptorTypeFlags::Sampler;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE:             return DescriptorTypeFlags::Texture;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE:             return DescriptorTypeFlags::RWTexture;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:      return DescriptorTypeFlags::Buffer;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:      return DescriptorTypeFlags::RWBuffer;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER:            return DescriptorTypeFlags::ConstantBuffer;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER:            return isReadWrite ? DescriptorTypeFlags::RWBuffer : DescriptorTypeFlags::Buffer;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:    return DescriptorTypeFlags::Texture;
+            case SPV_REFLECT_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: return DescriptorTypeFlags::AccelerationStructure;
+
+            default:
+            {
+                EE_UNREACHABLE_CODE();
+                return DescriptorTypeFlags::Buffer;
+            }
+        }
+    }
+
+    static ViewDimension ViewDimensionFromReflection( SpvReflectDescriptorBinding const& binding )
+    {
+        if ( binding.descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+             binding.descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
+             binding.descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER )
+        {
+            return ViewDimension::Undefined;
+        }
+
+        bool const isArray = binding.image.arrayed != 0;
+
+        switch ( binding.image.dim )
+        {
+            case SpvDim1D:      return isArray ? ViewDimension::Texture1DArray : ViewDimension::Texture1D;
+            case SpvDim2D:      return isArray ? ViewDimension::Texture2DArray : ViewDimension::Texture2D;
+            case SpvDim3D:      return ViewDimension::Texture3D;
+            case SpvDimCube:    return isArray ? ViewDimension::TextureCubeArray : ViewDimension::TextureCube;
+            case SpvDimBuffer:  return ViewDimension::Buffer;
+            default:            return ViewDimension::Undefined;
+        }
+    }
+
+    static ShaderReflection ExtractReflection( TArrayView<uint8_t const> spirv, ShaderStage shaderStage )
+    {
+        ShaderReflection reflection = {};
+        reflection.m_shaderStages.AppendFlags( shaderStage );
+
+        SpvReflectShaderModule module = {};
+        SpvReflectResult const createResult = spvReflectCreateShaderModule( spirv.size(), spirv.data(), &module );
+        EE_ASSERT( createResult == SPV_REFLECT_RESULT_SUCCESS );
+
+        if ( shaderStage == ShaderStage::Compute || shaderStage == ShaderStage::Task || shaderStage == ShaderStage::Mesh )
+        {
+            EE_ASSERT( module.entry_point_count > 0 );
+            reflection.m_threadsPerGroup[0] = module.entry_points[0].local_size.x;
+            reflection.m_threadsPerGroup[1] = module.entry_points[0].local_size.y;
+            reflection.m_threadsPerGroup[2] = module.entry_points[0].local_size.z;
+        }
+
+        uint32_t numBindings = 0;
+        spvReflectEnumerateDescriptorBindings( &module, &numBindings, nullptr );
+
+        TInlineVector<SpvReflectDescriptorBinding*, 32> bindings( numBindings );
+        spvReflectEnumerateDescriptorBindings( &module, &numBindings, bindings.data() );
+
+        reflection.m_shaderResources.reserve( numBindings );
+
+        for ( SpvReflectDescriptorBinding const* pBinding : bindings )
+        {
+            // Set 1 is the bindless heap. Its layout is fixed by the Phase 4 binding model and
+            // shared by every pipeline, so it is not a root parameter and must not become one.
+            if ( pBinding->set == g_heapSet )
+            {
+                continue;
+            }
+
+            ShaderResource shaderResource = {};
+            shaderResource.m_setIndex = pBinding->set;
+            // The **Vulkan** binding, not the HLSL register it came from. The binding model
+            // shifts b/t/u/s registers to 0/8/16/24, and un-shifting here only to re-shift in
+            // CreateRootSignature would be two chances to get it wrong. Nothing outside this
+            // file reads m_registerIndex: EngineShader.cpp only reads m_descriptorTypeFlags and
+            // m_numConstants, and uses position in m_descriptorReflections as the parameter
+            // index.
+            shaderResource.m_registerIndex = pBinding->binding;
+            shaderResource.m_numConstants = pBinding->count;
+            shaderResource.m_usedStages = shaderStage;
+            shaderResource.m_name = ( pBinding->name != nullptr ) ? pBinding->name : "";
+            shaderResource.m_viewDimension = ViewDimensionFromReflection( *pBinding );
+
+            if ( IsRootConstant( pBinding->name ) )
+            {
+                shaderResource.m_descriptorTypeFlags = DescriptorTypeFlags::RootConstant;
+            }
+            else
+            {
+                shaderResource.m_descriptorTypeFlags = DescriptorTypeFromReflection( *pBinding );
+            }
+
+            size_t const resourceIndex = reflection.m_shaderResources.size();
+            reflection.m_shaderResources.push_back( shaderResource );
+
+            // Constant buffer members, which CreateRootSignature adds up to size the root
+            // constants. Direct3D 12 reads these through ID3D12ShaderReflectionConstantBuffer.
+            if ( pBinding->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER )
+            {
+                for ( uint32_t memberIndex = 0; memberIndex < pBinding->block.member_count; ++memberIndex )
+                {
+                    SpvReflectBlockVariable const& member = pBinding->block.members[memberIndex];
+
+                    ShaderVariable variable = {};
+                    variable.m_name = ( member.name != nullptr ) ? member.name : "";
+                    variable.m_parentResourceIndex = uint32_t( resourceIndex );
+                    variable.m_offset = member.offset;
+                    variable.m_size = member.size;
+
+                    reflection.m_shaderVariables.push_back( variable );
+                }
+            }
+        }
+
+        spvReflectDestroyShaderModule( &module );
+
+        return reflection;
+    }
+
+    //-------------------------------------------------------------------------
+
     Shader* CreateShader( Context* pContext, TInlineVector<ShaderByteCode, 2> const& shaderParameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanShader* pVulkanShader = pVulkanContext->CreateObject<VulkanShader>();
+
+        size_t const numStages = shaderParameters.size();
+        pVulkanShader->m_device = pVulkanContext->m_device;
+        pVulkanShader->m_shaderModules.resize( numStages, VK_NULL_HANDLE );
+        pVulkanShader->m_stageReflections.resize( numStages );
+        pVulkanShader->m_stageEntryNames.resize( numStages );
+
+        for ( size_t shaderIndex = 0; shaderIndex < numStages; ++shaderIndex )
+        {
+            ShaderStage const stage = shaderParameters[shaderIndex].m_stage;
+            pVulkanShader->m_stages.SetFlag( stage );
+
+            // ShaderByteCode carries base85-encoded, compressed SPIR-V, exactly as it carried
+            // DXIL on Windows. Embed does the decode; the Reflector wrote it.
+            Blob byteCode = Embed::DecompressEmbeddedFile( shaderParameters[shaderIndex].m_pCompressedData, shaderParameters[shaderIndex].m_decodedSize, shaderParameters[shaderIndex].m_decompressedSize );
+
+            EE_ASSERT( !byteCode.empty() );
+            EE_ASSERT( ( byteCode.size() % sizeof( uint32_t ) ) == 0 ); // SPIR-V is a stream of 32 bit words
+
+            VkShaderModuleCreateInfo moduleCreateInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+            moduleCreateInfo.codeSize = byteCode.size();
+            moduleCreateInfo.pCode = reinterpret_cast<uint32_t const*>( byteCode.data() );
+
+            VkResult const result = vkCreateShaderModule( pVulkanContext->m_device, &moduleCreateInfo, nullptr, &pVulkanShader->m_shaderModules[shaderIndex] );
+            EE_ASSERT( result == VK_SUCCESS );
+
+            pVulkanShader->m_stageReflections[shaderIndex] = ExtractReflection( TArrayView<uint8_t const>( byteCode.data(), byteCode.size() ), stage );
+
+            // DXC names every entry point "main" in SPIR-V unless told otherwise, and the
+            // Reflector does not tell it otherwise. Read it back rather than assume, because a
+            // wrong entry point name fails at pipeline creation with an unhelpful message.
+            SpvReflectShaderModule module = {};
+            if ( spvReflectCreateShaderModule( byteCode.size(), byteCode.data(), &module ) == SPV_REFLECT_RESULT_SUCCESS )
+            {
+                EE_ASSERT( module.entry_point_count > 0 );
+                pVulkanShader->m_stageEntryNames[shaderIndex] = module.entry_point_name;
+                spvReflectDestroyShaderModule( &module );
+            }
+
+            switch ( stage )
+            {
+                case ShaderStage::Vertex:   EE_ASSERT( pVulkanShader->m_vertexStageIndex == -1 );  pVulkanShader->m_vertexStageIndex = int32_t( shaderIndex ); break;
+                case ShaderStage::Pixel:    EE_ASSERT( pVulkanShader->m_pixelStageIndex == -1 );   pVulkanShader->m_pixelStageIndex = int32_t( shaderIndex ); break;
+                case ShaderStage::Task:     EE_ASSERT( pVulkanShader->m_taskStageIndex == -1 );    pVulkanShader->m_taskStageIndex = int32_t( shaderIndex ); break;
+                case ShaderStage::Mesh:     EE_ASSERT( pVulkanShader->m_meshStageIndex == -1 );    pVulkanShader->m_meshStageIndex = int32_t( shaderIndex ); break;
+                case ShaderStage::Compute:  EE_ASSERT( pVulkanShader->m_computeStageIndex == -1 ); pVulkanShader->m_computeStageIndex = int32_t( shaderIndex ); break;
+                case ShaderStage::RayTracing: break; // P5.16
+            }
+
+            SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_SHADER_MODULE, uint64_t( pVulkanShader->m_shaderModules[shaderIndex] ), shaderParameters[shaderIndex].m_ID.c_str() );
+        }
+
+        return pVulkanShader;
     }
 
     void DestroyShader( Context* pContext, Shader*&& pShader )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pShader != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanShader* pVulkanShader = static_cast<VulkanShader*>( pShader );
+
+            for ( VkShaderModule shaderModule : pVulkanShader->m_shaderModules )
+            {
+                if ( shaderModule != VK_NULL_HANDLE )
+                {
+                    vkDestroyShaderModule( pVulkanContext->m_device, shaderModule, nullptr );
+                }
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanShader ) );
+            pShader = nullptr;
+        }
     }
 
-    RootSignature* CreateRootSignature( Context* pContext, RootSignatureParameters const& parameter )
+    //-------------------------------------------------------------------------
+
+    RootSignature* CreateRootSignature( Context* pContext, RootSignatureParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanRootSignature* pVulkanRootSignature = pVulkanContext->CreateObject<VulkanRootSignature>();
+
+        pVulkanRootSignature->m_device = pVulkanContext->m_device;
+
+        // Merge the per-stage reflections into one resource list, first seen wins, exactly as
+        // RHI_Direct3D12.cpp:4946 does. The order decides m_parameterIndex, which
+        // CmdSetRootParameter and EngineShader.cpp both index by position.
+        THashMap<StringView, size_t> descriptorNameToIndex{ Memory::Allocators::g_RHI };
+        TVector<uint32_t> constantSizes{ Memory::Allocators::g_RHI };
+
+        for ( ShaderReflection const& shaderReflection : parameters.m_pShader->m_stageReflections )
+        {
+            for ( ShaderResource const& shaderResource : shaderReflection.m_shaderResources )
+            {
+                if ( auto foundDescriptorIndex = descriptorNameToIndex.find( shaderResource.m_name ); foundDescriptorIndex == descriptorNameToIndex.end() )
+                {
+                    size_t const shaderResourceIndex = pVulkanRootSignature->m_shaderResources.size();
+                    pVulkanRootSignature->m_shaderResources.push_back( shaderResource );
+
+                    uint32_t constantSize = 0;
+                    if ( shaderResource.m_descriptorTypeFlags.AreAnyFlagsSet( DescriptorTypeFlags::ConstantBuffer, DescriptorTypeFlags::RootConstant ) )
+                    {
+                        for ( ShaderVariable const& variable : shaderReflection.m_shaderVariables )
+                        {
+                            size_t const parentResourceIndex = size_t( &shaderResource - shaderReflection.m_shaderResources.data() );
+                            if ( variable.m_parentResourceIndex == parentResourceIndex )
+                            {
+                                constantSize += variable.m_size;
+                            }
+                        }
+                    }
+                    constantSizes.push_back( constantSize );
+
+                    descriptorNameToIndex.insert( { shaderResource.m_name, shaderResourceIndex } );
+                }
+                else
+                {
+                    ShaderResource& targetShaderResource = pVulkanRootSignature->m_shaderResources[foundDescriptorIndex->second];
+                    EE_ASSERT( shaderResource.m_descriptorTypeFlags == targetShaderResource.m_descriptorTypeFlags );
+                    EE_ASSERT( shaderResource.m_registerIndex == targetShaderResource.m_registerIndex );
+                    EE_ASSERT( shaderResource.m_setIndex == targetShaderResource.m_setIndex );
+
+                    targetShaderResource.m_usedStages.AppendFlags( shaderResource.m_usedStages );
+                }
+            }
+        }
+
+        pVulkanRootSignature->m_shaderResources.shrink_to_fit();
+        pVulkanRootSignature->m_descriptorReflections.reserve( pVulkanRootSignature->m_shaderResources.size() );
+
+        TInlineVector<VkDescriptorSetLayoutBinding, 32> rootParameterBindings;
+
+        for ( uint32_t shaderResourceIndex = 0; shaderResourceIndex < pVulkanRootSignature->m_shaderResources.size(); ++shaderResourceIndex )
+        {
+            ShaderResource const& shaderResource = pVulkanRootSignature->m_shaderResources[shaderResourceIndex];
+
+            DescriptorReflection descriptorReflection = {};
+            descriptorReflection.m_name = shaderResource.m_name;
+            descriptorReflection.m_descriptorTypeFlags = shaderResource.m_descriptorTypeFlags;
+            descriptorReflection.m_viewDimension = shaderResource.m_viewDimension;
+            descriptorReflection.m_numConstants = shaderResource.m_numConstants;
+            descriptorReflection.m_parameterIndex = int32_t( rootParameterBindings.size() );
+            descriptorReflection.m_setIndex = int32_t( shaderResource.m_setIndex );
+
+            VkDescriptorSetLayoutBinding binding = {};
+            binding.binding = shaderResource.m_registerIndex;
+            binding.descriptorCount = 1;
+            binding.stageFlags = VulkanShaderStages( shaderResource.m_usedStages );
+
+            if ( descriptorReflection.m_descriptorTypeFlags.IsFlagSet( DescriptorTypeFlags::RootConstant ) )
+            {
+                // Not Vulkan push constants. RHI.esh declares the block through
+                // EE_DECLARE_ROOT_CONSTANTS as a ConstantBuffer, so DXC emits a uniform buffer,
+                // and making it a push constant block needs [[vk::push_constant]] in RHI.esh,
+                // which Phase 4 rule 4 forbids. CmdSetRootConstants copies into a per-frame
+                // upload ring and pushes a descriptor at it. See the binding model entry.
+                descriptorReflection.m_numConstants = constantSizes[shaderResourceIndex] / sizeof( uint32_t );
+                binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            }
+            else if ( descriptorReflection.m_descriptorTypeFlags.IsFlagSet( DescriptorTypeFlags::ConstantBuffer ) )
+            {
+                binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            }
+            else if ( descriptorReflection.m_descriptorTypeFlags.AreAnyFlagsSet( DescriptorTypeFlags::RWBuffer, DescriptorTypeFlags::RWTexture ) )
+            {
+                binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            }
+            else if ( descriptorReflection.m_descriptorTypeFlags.AreAnyFlagsSet( DescriptorTypeFlags::Buffer, DescriptorTypeFlags::Texture ) )
+            {
+                binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            }
+            else if ( descriptorReflection.m_descriptorTypeFlags.IsFlagSet( DescriptorTypeFlags::Sampler ) )
+            {
+                binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+            }
+            else
+            {
+                EE_UNREACHABLE_CODE();
+            }
+
+            rootParameterBindings.push_back( binding );
+            pVulkanRootSignature->m_descriptorReflections.push_back( descriptorReflection );
+        }
+
+        // Static samplers find no matching shader resource in any current shader, which is what
+        // the binding model recorded, so there are no Vulkan immutable samplers here either.
+        // The warning matches the Direct3D 12 one, so a shader that starts using one is noticed.
+        for ( size_t staticSamplerIndex = 0; staticSamplerIndex < parameters.m_staticSamplerNames.size(); ++staticSamplerIndex )
+        {
+            auto pSamplerShaderResource = eastl::find_if( pVulkanRootSignature->m_shaderResources.begin(), pVulkanRootSignature->m_shaderResources.end(),
+                                                          [&] ( ShaderResource const& shaderResource )
+            {
+                return shaderResource.m_name == parameters.m_staticSamplerNames[staticSamplerIndex];
+            } );
+
+            if ( pSamplerShaderResource == pVulkanRootSignature->m_shaderResources.end() )
+            {
+                EE_LOG_WARNING( LogCategory::Render, "RHI/CreateRootSignature", "Static sampler \"%s\" not found in RootSignature \"%s\"",
+                                parameters.m_staticSamplerNames[staticSamplerIndex], parameters.m_debugName.data() );
+                continue;
+            }
+
+            EE_UNIMPLEMENTED_FUNCTION(); // A shader started using a static sampler. See the binding model entry.
+        }
+
+        // Set 0, the root parameters. PUSH_DESCRIPTOR_BIT, so CmdSetRootParameter is a
+        // vkCmdPushDescriptorSetKHR rather than a set allocated per draw.
+        VkDescriptorSetLayoutCreateInfo rootParameterLayoutCreateInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+        rootParameterLayoutCreateInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        rootParameterLayoutCreateInfo.bindingCount = uint32_t( rootParameterBindings.size() );
+        rootParameterLayoutCreateInfo.pBindings = rootParameterBindings.data();
+
+        VkResult result = vkCreateDescriptorSetLayout( pVulkanContext->m_device, &rootParameterLayoutCreateInfo, nullptr, &pVulkanRootSignature->m_rootParameterSetLayout );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        // Both sets, in order. Set 1 is the same layout for every pipeline in the engine.
+        VkDescriptorSetLayout const setLayouts[2] = { pVulkanRootSignature->m_rootParameterSetLayout, pVulkanContext->m_heapSetLayout };
+
+        VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+        pipelineLayoutCreateInfo.setLayoutCount = 2;
+        pipelineLayoutCreateInfo.pSetLayouts = setLayouts;
+
+        result = vkCreatePipelineLayout( pVulkanContext->m_device, &pipelineLayoutCreateInfo, nullptr, &pVulkanRootSignature->m_pipelineLayout );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_PIPELINE_LAYOUT, uint64_t( pVulkanRootSignature->m_pipelineLayout ), parameters.m_debugName );
+
+        return pVulkanRootSignature;
     }
 
     void DestroyRootSignature( Context* pContext, RootSignature*&& pRootSignature )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pRootSignature != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pRootSignature );
+
+            if ( pVulkanRootSignature->m_pipelineLayout != VK_NULL_HANDLE )
+            {
+                vkDestroyPipelineLayout( pVulkanContext->m_device, pVulkanRootSignature->m_pipelineLayout, nullptr );
+            }
+
+            if ( pVulkanRootSignature->m_rootParameterSetLayout != VK_NULL_HANDLE )
+            {
+                vkDestroyDescriptorSetLayout( pVulkanContext->m_device, pVulkanRootSignature->m_rootParameterSetLayout, nullptr );
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanRootSignature ) );
+            pRootSignature = nullptr;
+        }
     }
+
+    //-------------------------------------------------------------------------
 
     PipelineCache* CreatePipelineCache( Context* pContext, PipelineCacheParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanPipelineCache* pVulkanPipelineCache = pVulkanContext->CreateObject<VulkanPipelineCache>();
+
+        pVulkanPipelineCache->m_device = pVulkanContext->m_device;
+
+        VkPipelineCacheCreateInfo cacheCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
+        if ( parameters.m_flags.IsFlagSet( PipelineCacheFlags::ExternallySynchronized ) )
+        {
+            cacheCreateInfo.flags |= VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT;
+        }
+        cacheCreateInfo.initialDataSize = parameters.m_initialCacheData.size();
+        cacheCreateInfo.pInitialData = parameters.m_initialCacheData.data();
+
+        VkResult const result = vkCreatePipelineCache( pVulkanContext->m_device, &cacheCreateInfo, nullptr, &pVulkanPipelineCache->m_pipelineCache );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        return pVulkanPipelineCache;
     }
 
     void DestroyPipelineCache( Context* pContext, PipelineCache*&& pPipelineCache )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pPipelineCache != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanPipelineCache* pVulkanPipelineCache = static_cast<VulkanPipelineCache*>( pPipelineCache );
+
+            if ( pVulkanPipelineCache->m_pipelineCache != VK_NULL_HANDLE )
+            {
+                vkDestroyPipelineCache( pVulkanContext->m_device, pVulkanPipelineCache->m_pipelineCache, nullptr );
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanPipelineCache ) );
+            pPipelineCache = nullptr;
+        }
     }
 
     TArrayView<uint8_t> GetPipelineCacheData( Context* pContext, PipelineCache* pPipelineCache )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return TArrayView<uint8_t>();
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanPipelineCache* pVulkanPipelineCache = static_cast<VulkanPipelineCache*>( pPipelineCache );
+
+        size_t dataSize = 0;
+        VkResult result = vkGetPipelineCacheData( pVulkanContext->m_device, pVulkanPipelineCache->m_pipelineCache, &dataSize, nullptr );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        // The view has to outlive the call, so the bytes live on the cache object.
+        pVulkanPipelineCache->m_cacheData.resize( dataSize );
+
+        result = vkGetPipelineCacheData( pVulkanContext->m_device, pVulkanPipelineCache->m_pipelineCache, &dataSize, pVulkanPipelineCache->m_cacheData.data() );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        return TArrayView<uint8_t>( pVulkanPipelineCache->m_cacheData.data(), pVulkanPipelineCache->m_cacheData.size() );
     }
 
-    // FrontFace, and why it maps literally here while Direct3D 12 maps it inverted.
-    //
-    // RHI_Direct3D12.cpp:5287 sets FrontCounterClockwise = ( m_frontFace == FrontFace::ClockWise ),
-    // which reads backwards and is upstream's business, not ours. Taking it at face value:
-    // FrontFace::CounterClockWise, the default, means front faces are CLOCKWISE in screen space
-    // on Direct3D.
-    //
-    // Two inversions apply on the way to Vulkan and they cancel:
-    //
-    //   1. To match Direct3D with no Y flip, VkFrontFace would have to be the opposite of the
-    //      enum's name, exactly as the Direct3D mapping is.
-    //   2. CmdSetViewport flips Y with a negative viewport height, which mirrors winding in
-    //      framebuffer space and inverts it again.
-    //
-    // So the mapping here is the literal one, FrontFace::ClockWise -> VK_FRONT_FACE_CLOCKWISE,
-    // and it is only correct BECAUSE of the viewport flip. If anyone ever removes that flip,
-    // this has to be swapped in the same commit.
+    //-------------------------------------------------------------------------
+
+    static void BuildGraphicsPipelineStages( VulkanShader const* pVulkanShader, TInlineVector<VkPipelineShaderStageCreateInfo, 3>& outStages, TArrayView<ShaderStage const> stagesWanted )
+    {
+        for ( ShaderStage stage : stagesWanted )
+        {
+            int32_t stageIndex = -1;
+            switch ( stage )
+            {
+                case ShaderStage::Vertex:   stageIndex = pVulkanShader->m_vertexStageIndex; break;
+                case ShaderStage::Pixel:    stageIndex = pVulkanShader->m_pixelStageIndex; break;
+                case ShaderStage::Task:     stageIndex = pVulkanShader->m_taskStageIndex; break;
+                case ShaderStage::Mesh:     stageIndex = pVulkanShader->m_meshStageIndex; break;
+                case ShaderStage::Compute:  stageIndex = pVulkanShader->m_computeStageIndex; break;
+                default: break;
+            }
+
+            if ( stageIndex < 0 )
+            {
+                continue;
+            }
+
+            VkPipelineShaderStageCreateInfo stageCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+            stageCreateInfo.stage = VulkanShaderStage( stage );
+            stageCreateInfo.module = pVulkanShader->m_shaderModules[stageIndex];
+            stageCreateInfo.pName = pVulkanShader->m_stageEntryNames[stageIndex].c_str();
+
+            outStages.push_back( stageCreateInfo );
+        }
+    }
+
     Pipeline* CreatePipeline( Context* pContext, GraphicsPipelineParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanPipelineCache* pVulkanPipelineCache = static_cast<VulkanPipelineCache*>( parameters.m_pPipelineCache );
+        VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( parameters.m_pRootSignature );
+        VulkanShader* pVulkanShader = static_cast<VulkanShader*>( parameters.m_pShader );
+        VulkanPipeline* pVulkanPipeline = pVulkanContext->CreateObject<VulkanPipeline>();
+
+        pVulkanPipeline->m_device = pVulkanContext->m_device;
+        pVulkanPipeline->m_pRootSignature = pVulkanRootSignature;
+        pVulkanPipeline->m_pipelineType = PipelineType::Graphics;
+        pVulkanPipeline->m_bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        pVulkanPipeline->m_primitiveTopology = ( parameters.m_primitiveTopology == PrimitiveTopology::TriangleStrip )
+                                             ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
+                                             : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        ShaderStage const wantedStages[2] = { ShaderStage::Vertex, ShaderStage::Pixel };
+        TInlineVector<VkPipelineShaderStageCreateInfo, 3> stages;
+        BuildGraphicsPipelineStages( pVulkanShader, stages, TArrayView<ShaderStage const>( wantedStages, 2 ) );
+
+        // No vertex input state. GraphicsPipelineParameters carries no input layout, because the
+        // engine pulls vertices out of buffers in the shader rather than binding them. An empty
+        // VkPipelineVertexInputStateCreateInfo says exactly that.
+        VkPipelineVertexInputStateCreateInfo vertexInputState = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+        inputAssemblyState.topology = pVulkanPipeline->m_primitiveTopology;
+
+        // Viewport and scissor are dynamic, set by CmdSetViewport and CmdSetScissor, so the
+        // counts are all that matter here.
+        VkPipelineViewportStateCreateInfo viewportState = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rasterizationState = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+        rasterizationState.polygonMode = ( parameters.m_rasterizerState.m_fillMode == FillMode::Wireframe ) ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+        rasterizationState.lineWidth = 1.0f;
+
+        switch ( parameters.m_rasterizerState.m_cullMode )
+        {
+            case CullMode::None:    rasterizationState.cullMode = VK_CULL_MODE_NONE; break;
+            case CullMode::Back:    rasterizationState.cullMode = VK_CULL_MODE_BACK_BIT; break;
+            case CullMode::Front:   rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT; break;
+        }
+
+        // **Winding, and the Y flip.** This is the classic porting bug and it is reasoned, not
+        // verified.
+        //
+        // The Direct3D 12 backend sets FrontCounterClockwise = ( m_frontFace == ClockWise ),
+        // which is already an inversion of the name. The Vulkan viewport inverts Y with a
+        // negative height, which Phase 4 recorded and P5.8 applies, and that reverses triangle
+        // winding in framebuffer space. Inverting the inversion lands back on the name, so
+        // ClockWise means VK_FRONT_FACE_CLOCKWISE here.
+        //
+        // If back faces turn out inside out, this line and the sign of the viewport height in
+        // CmdSetViewport are the only two places that can be responsible.
+        rasterizationState.frontFace = ( parameters.m_rasterizerState.m_frontFace == FrontFace::ClockWise ) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+        // Direct3D 12's DepthClipEnable is the inverse of Vulkan's depthClampEnable, and the two
+        // are not identical: clipping discards the primitive, clamping keeps it at the near or
+        // far plane. VK_EXT_depth_clip_enable gives the exact control and is not enabled.
+        // Nothing in the engine sets m_depthClip today.
+        rasterizationState.depthClampEnable = parameters.m_rasterizerState.m_depthClip ? VK_FALSE : VK_TRUE;
+
+        rasterizationState.depthBiasEnable = ( parameters.m_rasterizerState.m_depthBias != 0 ) || ( parameters.m_rasterizerState.m_slopeScaledDepthBias != 0.0f );
+        rasterizationState.depthBiasConstantFactor = float( parameters.m_rasterizerState.m_depthBias );
+        rasterizationState.depthBiasClamp = parameters.m_rasterizerState.m_depthBiasClamp;
+        rasterizationState.depthBiasSlopeFactor = parameters.m_rasterizerState.m_slopeScaledDepthBias;
+
+        VkPipelineMultisampleStateCreateInfo multisampleState = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+        multisampleState.rasterizationSamples = VkSampleCountFlagBits( parameters.m_numSamples );
+        multisampleState.alphaToCoverageEnable = parameters.m_blendState.m_alphaToCoverage;
+        // m_sampleQuality has no Vulkan equivalent. It is a Direct3D quality level for a given
+        // sample count, and Vulkan exposes only the count.
+
+        VkPipelineDepthStencilStateCreateInfo depthStencilState = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+        depthStencilState.depthTestEnable = parameters.m_depthStencilState.m_depthTest;
+        depthStencilState.depthWriteEnable = parameters.m_depthStencilState.m_depthWrite;
+        depthStencilState.depthCompareOp = VulkanCompareOp( parameters.m_depthStencilState.m_depthCompareMode );
+        depthStencilState.stencilTestEnable = parameters.m_depthStencilState.m_stencilTest;
+
+        depthStencilState.front.failOp = VulkanStencilOp( parameters.m_depthStencilState.m_stencilFrontFail );
+        depthStencilState.front.passOp = VulkanStencilOp( parameters.m_depthStencilState.m_stencilFrontPass );
+        depthStencilState.front.depthFailOp = VulkanStencilOp( parameters.m_depthStencilState.m_depthFrontFail );
+        depthStencilState.front.compareOp = VulkanCompareOp( parameters.m_depthStencilState.m_stencilFrontCompareMode );
+        depthStencilState.front.compareMask = parameters.m_depthStencilState.m_stencilReadMask;
+        depthStencilState.front.writeMask = parameters.m_depthStencilState.m_stencilWriteMask;
+        // reference is dynamic, set by CmdSetStencilReference.
+
+        depthStencilState.back.failOp = VulkanStencilOp( parameters.m_depthStencilState.m_stencilBackFail );
+        depthStencilState.back.passOp = VulkanStencilOp( parameters.m_depthStencilState.m_stencilBackPass );
+        depthStencilState.back.depthFailOp = VulkanStencilOp( parameters.m_depthStencilState.m_depthBackFail );
+        depthStencilState.back.compareOp = VulkanCompareOp( parameters.m_depthStencilState.m_stencilBackCompareMode );
+        depthStencilState.back.compareMask = parameters.m_depthStencilState.m_stencilReadMask;
+        depthStencilState.back.writeMask = parameters.m_depthStencilState.m_stencilWriteMask;
+
+        TInlineVector<VkPipelineColorBlendAttachmentState, MaxRenderTargets> colorBlendAttachments;
+        for ( uint32_t renderTargetIndex = 0; renderTargetIndex < parameters.m_numRenderTargets; ++renderTargetIndex )
+        {
+            VkPipelineColorBlendAttachmentState attachment = {};
+
+            // Direct3D 12 leaves a target outside the mask entirely default, which is blending
+            // off and no colour written. The same shape is reproduced here rather than
+            // defaulting to a full write mask.
+            if ( parameters.m_blendState.m_renderTargetMask.IsFlagSet( BlendStateTargetFlags( renderTargetIndex ) ) )
+            {
+                attachment.blendEnable = parameters.m_blendState.m_blendEnabled;
+                attachment.srcColorBlendFactor = VulkanBlendFactor( parameters.m_blendState.m_srcFactors[renderTargetIndex] );
+                attachment.dstColorBlendFactor = VulkanBlendFactor( parameters.m_blendState.m_dstFactors[renderTargetIndex] );
+                attachment.colorBlendOp = VulkanBlendOp( parameters.m_blendState.m_blendModes[renderTargetIndex] );
+                attachment.srcAlphaBlendFactor = VulkanBlendFactor( parameters.m_blendState.m_srcAlphaFactors[renderTargetIndex] );
+                attachment.dstAlphaBlendFactor = VulkanBlendFactor( parameters.m_blendState.m_dstAlphaFactors[renderTargetIndex] );
+                attachment.alphaBlendOp = VulkanBlendOp( parameters.m_blendState.m_blendModesAlpha[renderTargetIndex] );
+                // The write mask bits are the same order and values as Direct3D 12's, so the
+                // engine's 0x0F default is RGBA on both.
+                attachment.colorWriteMask = VkColorComponentFlags( parameters.m_blendState.m_writeMasks[renderTargetIndex] );
+            }
+
+            colorBlendAttachments.push_back( attachment );
+        }
+
+        VkPipelineColorBlendStateCreateInfo colorBlendState = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+        colorBlendState.attachmentCount = uint32_t( colorBlendAttachments.size() );
+        colorBlendState.pAttachments = colorBlendAttachments.data();
+        // m_independentBlend has no Vulkan switch. Vulkan is always independent per attachment
+        // when independentBlend is supported, and writes the same state to every attachment
+        // otherwise. The engine fills every attachment either way, so the flag has no effect.
+
+        VkDynamicState const dynamicStates[3] =
+        {
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR,
+            VK_DYNAMIC_STATE_STENCIL_REFERENCE,
+        };
+
+        VkPipelineDynamicStateCreateInfo dynamicState = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+        dynamicState.dynamicStateCount = 3;
+        dynamicState.pDynamicStates = dynamicStates;
+
+        // Dynamic rendering, so there is no VkRenderPass and no framebuffer. The formats the
+        // pipeline will be used with are declared here instead.
+        TInlineVector<VkFormat, MaxRenderTargets> colorFormats;
+        for ( DataFormat colorFormat : parameters.m_colorFormats )
+        {
+            colorFormats.push_back( VulkanFormat( colorFormat ) );
+        }
+
+        VkPipelineRenderingCreateInfo renderingCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        renderingCreateInfo.colorAttachmentCount = uint32_t( colorFormats.size() );
+        renderingCreateInfo.pColorAttachmentFormats = colorFormats.data();
+
+        // Direct3D 12 has one DSVFormat covering both aspects; Vulkan splits them, so a
+        // depth-stencil format has to be named twice and a stencil-only format only once.
+        VkFormat const depthStencilFormat = VulkanFormat( parameters.m_depthStencilFormat );
+        if ( depthStencilFormat != VK_FORMAT_UNDEFINED )
+        {
+            bool const hasDepth = depthStencilFormat != VK_FORMAT_S8_UINT;
+            bool const hasStencil = ( depthStencilFormat == VK_FORMAT_S8_UINT ) ||
+                                    ( depthStencilFormat == VK_FORMAT_D16_UNORM_S8_UINT ) ||
+                                    ( depthStencilFormat == VK_FORMAT_D24_UNORM_S8_UINT ) ||
+                                    ( depthStencilFormat == VK_FORMAT_D32_SFLOAT_S8_UINT );
+
+            renderingCreateInfo.depthAttachmentFormat = hasDepth ? depthStencilFormat : VK_FORMAT_UNDEFINED;
+            renderingCreateInfo.stencilAttachmentFormat = hasStencil ? depthStencilFormat : VK_FORMAT_UNDEFINED;
+        }
+
+        VkGraphicsPipelineCreateInfo pipelineCreateInfo = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+        pipelineCreateInfo.pNext = &renderingCreateInfo;
+        pipelineCreateInfo.stageCount = uint32_t( stages.size() );
+        pipelineCreateInfo.pStages = stages.data();
+        pipelineCreateInfo.pVertexInputState = &vertexInputState;
+        pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
+        pipelineCreateInfo.pViewportState = &viewportState;
+        pipelineCreateInfo.pRasterizationState = &rasterizationState;
+        pipelineCreateInfo.pMultisampleState = &multisampleState;
+        pipelineCreateInfo.pDepthStencilState = &depthStencilState;
+        pipelineCreateInfo.pColorBlendState = &colorBlendState;
+        pipelineCreateInfo.pDynamicState = &dynamicState;
+        pipelineCreateInfo.layout = pVulkanRootSignature->m_pipelineLayout;
+
+        VkPipelineCache const cache = ( pVulkanPipelineCache != nullptr ) ? pVulkanPipelineCache->m_pipelineCache : VK_NULL_HANDLE;
+
+        VkResult const result = vkCreateGraphicsPipelines( pVulkanContext->m_device, cache, 1, &pipelineCreateInfo, nullptr, &pVulkanPipeline->m_pipeline );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_PIPELINE, uint64_t( pVulkanPipeline->m_pipeline ), parameters.m_debugName );
+
+        return pVulkanPipeline;
     }
 
     Pipeline* CreatePipeline( Context* pContext, MeshPipelineParameters const& parameters )
     {
+        // P5.14. It is a small delta on the graphics path above: the same state, with task and
+        // mesh stages instead of vertex, and no vertex input state at all.
+        //
+        // It needs two things this backend does not have yet, both at device creation time in
+        // CreateContext: the VK_EXT_mesh_shader extension, and
+        // VkPhysicalDeviceMeshShaderFeaturesEXT with meshShader and taskShader enabled. Adding
+        // them there is the first step of P5.14.
         EE_UNIMPLEMENTED_FUNCTION();
         return nullptr;
     }
 
     Pipeline* CreatePipeline( Context* pContext, ComputePipelineParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanPipelineCache* pVulkanPipelineCache = static_cast<VulkanPipelineCache*>( parameters.m_pPipelineCache );
+        VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( parameters.m_pRootSignature );
+        VulkanShader* pVulkanShader = static_cast<VulkanShader*>( parameters.m_pShader );
+        VulkanPipeline* pVulkanPipeline = pVulkanContext->CreateObject<VulkanPipeline>();
+
+        EE_ASSERT( pVulkanShader->m_computeStageIndex >= 0 );
+
+        pVulkanPipeline->m_device = pVulkanContext->m_device;
+        pVulkanPipeline->m_pRootSignature = pVulkanRootSignature;
+        pVulkanPipeline->m_pipelineType = PipelineType::Compute;
+        pVulkanPipeline->m_bindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
+
+        VkPipelineShaderStageCreateInfo stageCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+        stageCreateInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stageCreateInfo.module = pVulkanShader->m_shaderModules[pVulkanShader->m_computeStageIndex];
+        stageCreateInfo.pName = pVulkanShader->m_stageEntryNames[pVulkanShader->m_computeStageIndex].c_str();
+
+        VkComputePipelineCreateInfo pipelineCreateInfo = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+        pipelineCreateInfo.stage = stageCreateInfo;
+        pipelineCreateInfo.layout = pVulkanRootSignature->m_pipelineLayout;
+
+        VkPipelineCache const cache = ( pVulkanPipelineCache != nullptr ) ? pVulkanPipelineCache->m_pipelineCache : VK_NULL_HANDLE;
+
+        VkResult const result = vkCreateComputePipelines( pVulkanContext->m_device, cache, 1, &pipelineCreateInfo, nullptr, &pVulkanPipeline->m_pipeline );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_PIPELINE, uint64_t( pVulkanPipeline->m_pipeline ), parameters.m_debugName );
+
+        return pVulkanPipeline;
     }
 
     Pipeline* CreatePipeline( Context* pContext, RaytracingPipelineParameters const& parameters )
     {
+        // P5.16. It needs VK_KHR_ray_tracing_pipeline, VK_KHR_acceleration_structure and
+        // VK_KHR_deferred_host_operations at device creation, and it also has to settle the one
+        // question the binding model left open: whether
+        // VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR may appear in a mutable descriptor type
+        // list, since RHI.esh reads an acceleration structure straight out of the heap.
         EE_UNIMPLEMENTED_FUNCTION();
         return nullptr;
     }
 
     void DestroyPipeline( Context* pContext, Pipeline*&& pPipeline )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pPipeline != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanPipeline* pVulkanPipeline = static_cast<VulkanPipeline*>( pPipeline );
+
+            if ( pVulkanPipeline->m_pipeline != VK_NULL_HANDLE )
+            {
+                vkDestroyPipeline( pVulkanContext->m_device, pVulkanPipeline->m_pipeline, nullptr );
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanPipeline ) );
+            pPipeline = nullptr;
+        }
     }
+
 
     QueryPool* CreateQueryPool( Context* pContext, QueryPoolParameters const& parameters )
     {

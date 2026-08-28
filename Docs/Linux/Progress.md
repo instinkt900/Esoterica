@@ -11,12 +11,16 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4 and P5.5 are written and have never
-been run.**
+answered: the plain loader, not `volk`. **P5.1, P5.2, P5.4, P5.5 and P5.7 are written and have
+never been run.**
 
-**Which of the 16 groups are real: P5.1, P5.2, P5.4 and P5.5, all unverified.** P5.2 is complete
-except `QueuePresent`, which needs P5.3's swapchain. Phase 5's own note says this count is the
-single most important piece of state, so it leads this section.
+**Which of the 16 groups are real: P5.1, P5.2, P5.4, P5.5 and P5.7, all unverified.** P5.2 is
+complete except `QueuePresent`, which needs P5.3's swapchain; P5.7 covers graphics and compute
+pipelines, with mesh and raytracing left to P5.14 and P5.16. Phase 5's own note says this count
+is the single most important piece of state, so it leads this section.
+
+**All five groups `RenderSystem::Initialize` needs are now written.** That call is straight-line
+with no early exit, so it was the five together or nothing. It has still never executed.
 
 **The bindless heap now exists in code.** `CreateContext` builds set 1 exactly as the Phase 4
 binding model specifies, and `GetBufferHandle` returns an index into it. **One correction to that
@@ -73,7 +77,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4 and P5.5 written, never run**; 74 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and one of the 74 is the `VulkanFormat` default that P5.6 fills in. **4 of the 16 groups are real, all unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2, P5.4, P5.5 and P5.7 written, never run**; 65 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Four of the 65 are markers rather than RHI functions: the `VulkanFormat` default, the static-sampler path, and the mesh and raytracing `CreatePipeline` overloads. **5 of the 16 groups are real, all unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -86,20 +90,20 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.5-buffers`.** Stacked: `p5.0-vulkan-deps` (PR #24),
-`p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27), then this.
-None merged yet. Nothing has run any of it.
+**Phase 5, on `linux/p5.7-pipelines`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+`p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
+`p5.5-buffers` (#28), then this. None merged yet. Nothing has run any of it.
 
-**Next: P5.7, shaders, root signatures and pipelines.** It is the last of the five groups
-`RenderSystem::Initialize` needs, and the largest remaining decision: `RootSignature` becomes a
-`VkPipelineLayout` plus the two set layouts, and set 0 is the push descriptor set the binding
-model describes. `CreateShader` is where SPIRV-Reflect finally has a caller. Implement graphics
-and compute pipelines only; mesh and raytracing are P5.14 and P5.16.
+**Next: P5.8, render pass and draw commands**, or P5.6, textures and samplers. P5.8 is where the
+two open Phase 4 decisions land in code: the clip-space Y inversion goes in `CmdSetViewport`, once
+and only once, and `CmdSetPipeline` is where `vkCmdBindDescriptorSets` binds heap set 1. P5.6 is
+larger and mostly mechanical, and it owes the rest of `VulkanFormat`.
 
-`RenderSystem::Initialize` is the order that matters. It is straight-line with no early exit:
-`CreateContext`, three `CreateQueue`, `CreateBuffer`, `InitializeShaders`, then
-`CreateCommandPool` and `CreateCommandBuffer` in loops. The first engine run needs **P5.1, P5.2,
-P5.4, P5.5 and P5.7** together. Four of the five are written.
+**The five groups `RenderSystem::Initialize` needs are all written.** That was the milestone worth
+naming, because the call is straight-line with no early exit: `CreateContext`, three
+`CreateQueue`, `CreateBuffer`, `InitializeShaders`, then `CreateCommandPool` and
+`CreateCommandBuffer` in loops. Whether they work is a separate question, and nothing can answer
+it before Phase 6.
 
 **Owed by later groups, recorded so they are not forgotten:**
 
@@ -134,6 +138,120 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-28 - P5.7 Shaders, root signatures and pipelines. Written, never run
+
+**Graphics and compute pipelines are implemented, and SPIRV-Reflect finally has a caller.** 65
+`EE_UNIMPLEMENTED_FUNCTION` remain, down from 74. Four of the 65 are markers rather than
+unimplemented RHI functions: the `VulkanFormat` default, the static-sampler path, and the mesh and
+raytracing `CreatePipeline` overloads. Nothing has run.
+
+**This closes the set of five groups `RenderSystem::Initialize` needs.** P5.1, P5.2, P5.4, P5.5
+and P5.7 are all written. Whether they work is a different question that nothing can answer before
+Phase 6.
+
+#### Reflection
+
+`ExtractReflection` mirrors `RHI_Direct3D12.cpp:1003` and produces the same `ShaderReflection` the
+engine already reads. The interesting mappings:
+
+| Direct3D 12 | Vulkan |
+|---|---|
+| `D3D12_SHADER_INPUT_BIND_DESC::Type` | `SpvReflectDescriptorBinding::descriptor_type` |
+| `D3D_SIT_STRUCTURED` against `D3D_SIT_UAV_RWSTRUCTURED` | `resource_type & SPV_REFLECT_RESOURCE_FLAG_UAV`. A SPIR-V storage buffer is both read and read-write, so the resource flag is the discriminator rather than the type. |
+| `GetThreadGroupSize` | `entry_points[0].local_size` |
+| `ID3D12ShaderReflectionConstantBuffer` members | `SpvReflectDescriptorBinding::block.members` |
+
+**`m_registerIndex` holds the Vulkan binding, not the HLSL register.** The binding model shifts
+`b`/`t`/`u`/`s` to 0/8/16/24, and un-shifting in reflection only to re-shift in
+`CreateRootSignature` is two chances to get it wrong instead of none. Nothing outside the backend
+reads it: `EngineShader.cpp` reads only `m_descriptorTypeFlags` and `m_numConstants` from a
+`DescriptorReflection`, and uses position in the vector as the parameter index. This is written
+down because the field means something different on the two backends, which is exactly the sort of
+thing a later reader assumes rather than checks.
+
+**Set 1 bindings are skipped during reflection.** They are the bindless heap, whose layout is
+fixed and shared, so they are not root parameters and must not become them.
+
+#### Root signatures
+
+`RootSignature` becomes a `VkPipelineLayout` over two set layouts: set 0, built from reflection
+with `VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR`, and set 1, the shared heap layout
+from `CreateContext`. The merge of per-stage resources, first seen wins, is copied from
+`RHI_Direct3D12.cpp:4946` including its cross-stage asserts, because the order decides
+`m_parameterIndex` and both `CmdSetRootParameter` and `EngineShader.cpp` index by position.
+
+**Root constants are a uniform buffer, not Vulkan push constants.** `RHI.esh` declares the block
+through `EE_DECLARE_ROOT_CONSTANTS` as a `ConstantBuffer`, so DXC emits a uniform buffer, and
+making it a push constant block needs `[[vk::push_constant]]` in `RHI.esh`, which Phase 4 rule 4
+forbids. The binding model already recorded the answer: `CmdSetRootConstants` copies into a
+per-frame upload ring and pushes a descriptor at it. P5.8 writes that.
+
+**The static sampler path halts rather than warns.** The binding model found no shader using one,
+and `CreateRootSignature` keeps the Direct3D 12 warning for a name that matches nothing. If a name
+*does* match, that is a new shader using a static sampler and the halt says so at the point it
+happens.
+
+#### Pipelines
+
+Graphics uses dynamic rendering, so there is no `VkRenderPass` and no framebuffer:
+`VkPipelineRenderingCreateInfo` carries the formats instead. Direct3D 12's single `DSVFormat`
+splits into `depthAttachmentFormat` and `stencilAttachmentFormat`.
+
+Viewport, scissor and stencil reference are dynamic state, because `CmdSetViewport`,
+`CmdSetScissor` and `CmdSetStencilReference` exist.
+
+**No vertex input state, and that is correct.** `GraphicsPipelineParameters` carries no input
+layout at all: the engine pulls vertices out of buffers in the shader. An empty
+`VkPipelineVertexInputStateCreateInfo` says exactly that.
+
+**The winding line is the one most likely to be wrong.** The Direct3D 12 backend sets
+`FrontCounterClockwise = ( m_frontFace == ClockWise )`, already an inversion of the name. The
+Vulkan viewport inverts Y with a negative height, which P5.8 applies, and that reverses winding in
+framebuffer space. Inverting the inversion lands back on the name, so `ClockWise` maps to
+`VK_FRONT_FACE_CLOCKWISE`. **This is reasoning, not a measurement.** If faces come out inside
+out, this line and the sign of the viewport height in `CmdSetViewport` are the only two places
+that can be responsible, and getting both wrong looks correct.
+
+Three smaller mismatches, all recorded at the line rather than silently absorbed:
+
+| `RHI.h` | Vulkan |
+|---|---|
+| `m_depthClip` | `depthClampEnable = !m_depthClip`. Clipping discards the primitive and clamping keeps it at the plane, so the two are not identical. `VK_EXT_depth_clip_enable` is the exact control and is not enabled. Nothing sets `m_depthClip` today. |
+| `m_sampleQuality` | No equivalent. It is a Direct3D quality level for a sample count and Vulkan exposes only the count. |
+| `m_independentBlend` | No switch. Vulkan is per attachment when the feature is supported and uniform otherwise, and the engine fills every attachment either way. |
+
+A render target outside `m_renderTargetMask` gets a fully default attachment: blending off, no
+colour written. That is what Direct3D 12 leaves behind for an unmasked target, and defaulting to a
+full write mask instead would silently change what is drawn.
+
+**The pipeline cache is implemented, which the reference is not.** `RHI_Direct3D12.cpp:5232`
+asserts `pPipelineCache == nullptr` with "Not implemented yet". `VkPipelineCache` is a handful of
+lines, so it is real here; `GetPipelineCacheData` keeps the bytes on the cache object because it
+hands back a view.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets compile and link. `ninja` exits 0, `Checks.py` passes.
+- **SPIRV-Reflect is genuinely linked**: 45 `spvReflect*` symbols are pulled out of
+  `libspirv-reflect.a` and into `libEsoterica.Base.so`. Until this group it was an archive nothing
+  referenced.
+- 70 `vk*` symbols resolve against `libvulkan.so.1`, up from 60.
+- `VulkanFormat` gained the ten render target and depth formats the engine uses, measured from
+  every `DataFormat` a texture or pipeline is created with in `Code/Engine`.
+
+#### Not verified
+
+No shader module has been created, no SPIR-V reflected, no pipeline compiled. The specific things
+to check first, in order:
+
+1. That `ExtractReflection` produces the same resource list Direct3D 12 does for the same shader.
+   A difference here silently changes the root parameter order.
+2. The winding, above.
+3. That a push descriptor set layout with the reflected bindings is accepted alongside the
+   update-after-bind heap set in one pipeline layout.
+
+**Upstream files edited: none.**
 
 ### 2026-08-28 - P5.5 Buffers, and the bindless heap becomes code. Written, never run
 
