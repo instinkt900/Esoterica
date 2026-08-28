@@ -29,7 +29,23 @@ namespace EE::Reflection
     #if _WIN32
     #define DXC_ARG_TARGET_BACKEND
     #else
-    #define DXC_ARG_TARGET_BACKEND L"-spirv", L"-fspv-target-env=vulkan1.3", DXC_ARG_BINDING_MODEL
+    #define DXC_ARG_TARGET_BACKEND L"-spirv", L"-fspv-target-env=vulkan1.3", DXC_ARG_MEMORY_LAYOUT DXC_ARG_BINDING_MODEL
+    #endif
+
+    // Constant and structured buffer memory layout. The engine shares these struct declarations
+    // with C++ - the .esh files compile both ways - so the shader has to read the bytes at the
+    // offsets the C++ side wrote them at. DXC's default is Vulkan's standard buffer layout, which
+    // rounds a struct's size up to its largest member's alignment and so disagrees: ImguiVertex
+    // is 20 bytes in C++ and 24 under the default rules, MeshInstance 64 against 80. Nothing
+    // diagnoses that; the shader just reads the wrong bytes.
+    //
+    // -fvk-use-dx-layout packs the way Direct3D does, which is what the C++ side already assumes.
+    // It requires the scalarBlockLayout feature, core in Vulkan 1.2, so the Vulkan backend must
+    // enable it. See the P4.3 memory layout entry in Docs/Linux/Progress.md.
+    #if _WIN32
+    #define DXC_ARG_MEMORY_LAYOUT
+    #else
+    #define DXC_ARG_MEMORY_LAYOUT L"-fvk-use-dx-layout",
     #endif
 
     // The bindless binding model. Direct3D 12 has one shader-visible CBV/SRV/UAV heap and one
