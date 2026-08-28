@@ -148,10 +148,12 @@ namespace EE::Render::RHI
     struct VulkanContext;
     static void SetVulkanObjectName( VulkanContext* pVulkanContext, VkObjectType objectType, uint64_t objectHandle, StringView debugName );
 
-    // Defined in the draw commands section. EndCommandBuffer has to close any open dynamic
-    // rendering, and it is defined before that section.
+    // Defined in the draw commands section, which sits after EndCommandBuffer. Dynamic
+    // rendering has a begin and an end, and several things have to close it.
     struct VulkanCommandBuffer;
-    static void EndRenderingIfActive( VulkanCommandBuffer* pVulkanCommandBuffer );
+    static void FlushRendering( VulkanCommandBuffer* pVulkanCommandBuffer );
+    static void SuspendRendering( VulkanCommandBuffer* pVulkanCommandBuffer );
+    static void FlushBarriers( VulkanCommandBuffer* pVulkanCommandBuffer );
 
     // The one DataFormat to VkFormat mapping, defined in the resources section below next to
     // its first caller. FillDeviceCapabilities is far above it and asks the device about every
@@ -223,6 +225,10 @@ namespace EE::Render::RHI
         };
 
         TInlineVector<QueueFamilyAllocation, 3>                         m_queueFamilyAllocations;
+
+        // The distinct queue families in use, which is what a CONCURRENT resource has to list.
+        // See SetSharingMode, next to the buffers and textures that read it.
+        TInlineVector<uint32_t, 3>                                      m_sharingQueueFamilies;
 
         // Queue::m_unifiedMemory, which Direct3D 12 reads from D3D12MA's IsUMA(). True when
         // every device-local memory type is also host-visible, which is what a shared-memory
@@ -428,6 +434,17 @@ namespace EE::Render::RHI
         if ( pVulkanContext->m_transferQueueFamily == ~0U )
         {
             pVulkanContext->m_transferQueueFamily = pVulkanContext->m_graphicsQueueFamily;
+        }
+
+        // The distinct families, for SetSharingMode. One entry means the device has a single
+        // family and nothing is ever shared across one.
+        uint32_t const families[] = { pVulkanContext->m_graphicsQueueFamily, pVulkanContext->m_computeQueueFamily, pVulkanContext->m_transferQueueFamily };
+        for ( uint32_t familyIndex : families )
+        {
+            if ( eastl::find( pVulkanContext->m_sharingQueueFamilies.begin(), pVulkanContext->m_sharingQueueFamilies.end(), familyIndex ) == pVulkanContext->m_sharingQueueFamilies.end() )
+            {
+                pVulkanContext->m_sharingQueueFamilies.emplace_back( familyIndex );
+            }
         }
     }
 
@@ -1278,11 +1295,35 @@ namespace EE::Render::RHI
         VkCommandBuffer                                     m_commandBuffer = VK_NULL_HANDLE;
         Stage                                               m_stage = Stage::Invalid;
 
-        // Direct3D 12 has no begin and end around a set of render targets; Vulkan's dynamic
-        // rendering does. CmdSetRenderTargets ends the previous one before beginning the next,
-        // and EndCommandBuffer ends the last. Anything that may not run inside a render pass -
-        // a dispatch, a copy, a barrier - has to end it too.
+        // Dynamic rendering, deferred.
+        //
+        // **CmdSetRenderTargets does not begin the pass; the first draw does.** The engine
+        // records image layout barriers *between* the two - RenderPass_SMAA.cpp:154 and
+        // RenderPass_GTAO.cpp:435 both do, and both assert that no barrier is pending at the
+        // CmdSetRenderTargets itself - and a barrier may not run inside dynamic rendering.
+        // Direct3D 12 has the same shape for its own reason: OMSetRenderTargets is state, and
+        // its batched barriers flush at the draw.
+        //
+        // m_isRendering means a pass is open now. m_needsRenderingBegin means one is configured
+        // and not yet open. The attachment configuration below outlives both, so a pass that has
+        // to be left for a barrier can be resumed by the next draw.
         bool                                                m_isRendering = false;
+        bool                                                m_needsRenderingBegin = false;
+
+        VkRenderingInfo                                     m_renderingInfo = {};
+        TInlineVector<VkRenderingAttachmentInfo, MaxRenderTargets> m_colorAttachments;
+        VkRenderingAttachmentInfo                           m_depthAttachment = {};
+        VkRenderingAttachmentInfo                           m_stencilAttachment = {};
+        bool                                                m_hasDepthAttachment = false;
+        bool                                                m_hasStencilAttachment = false;
+
+        // Barriers are batched exactly as Direct3D 12 batches them at
+        // RHI_Direct3D12.cpp:1516, and flushed at the same points. Vulkan gains a second reason
+        // to batch: one vkCmdPipelineBarrier2 for the whole set lets the driver see them
+        // together, and the flush is the single place that has to leave the render pass.
+        TVector<VkMemoryBarrier2>                           m_globalBarriers{ Memory::Allocators::g_RHI };
+        TVector<VkBufferMemoryBarrier2>                     m_bufferBarriers{ Memory::Allocators::g_RHI };
+        TVector<VkImageMemoryBarrier2>                      m_imageBarriers{ Memory::Allocators::g_RHI };
 
         // The pipeline layout of the currently bound pipeline. Push descriptors need it, and
         // CommandBuffer::m_pBoundPipeline only carries the platform-neutral pointer.
@@ -1839,7 +1880,14 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_pBoundPipeline = nullptr;
         pVulkanCommandBuffer->m_boundPipelineLayout = VK_NULL_HANDLE;
         pVulkanCommandBuffer->m_isRendering = false;
+        pVulkanCommandBuffer->m_needsRenderingBegin = false;
         pVulkanCommandBuffer->m_rootConstantRingOffset = 0;
+
+        // A barrier that outlived its command buffer would apply to the wrong work. Direct3D 12
+        // asserts the same three lists are empty at RHI_Direct3D12.cpp:2906.
+        EE_ASSERT( pVulkanCommandBuffer->m_globalBarriers.empty() );
+        EE_ASSERT( pVulkanCommandBuffer->m_bufferBarriers.empty() );
+        EE_ASSERT( pVulkanCommandBuffer->m_imageBarriers.empty() );
     }
 
     void EndCommandBuffer( CommandBuffer* pCommandBuffer )
@@ -1848,11 +1896,14 @@ namespace EE::Render::RHI
 
         EE_ASSERT( pVulkanCommandBuffer->m_stage == VulkanCommandBuffer::Stage::Recording );
 
-        // Dynamic rendering has to be closed before the command buffer is.
-        EndRenderingIfActive( pVulkanCommandBuffer );
+        // Dynamic rendering has to be closed before the command buffer is. A configuration that
+        // never reached a draw is begun and ended here, so the clear it carries still happens.
+        FlushRendering( pVulkanCommandBuffer );
 
-        // Direct3D 12 flushes pending barriers here. P5.9 decides whether the Vulkan side
-        // batches barriers the same way; if it does, the flush belongs at this line.
+        // The same flush Direct3D 12 does at RHI_Direct3D12.cpp:2941. A barrier recorded and
+        // never flushed would simply not happen.
+        FlushBarriers( pVulkanCommandBuffer );
+
         VkResult const result = vkEndCommandBuffer( pVulkanCommandBuffer->m_commandBuffer );
         EE_ASSERT( result == VK_SUCCESS );
 
@@ -1863,13 +1914,64 @@ namespace EE::Render::RHI
     // Render pass and draw commands
     //-------------------------------------------------------------------------
 
-    // P5.6 owns textures and will extend this. CmdSetRenderTargets needs the view, the extent
-    // and the format out of one, so the type has to exist now.
-
-    //-------------------------------------------------------------------------
-
-    static void EndRenderingIfActive( VulkanCommandBuffer* pVulkanCommandBuffer )
+    // Begins the pass CmdSetRenderTargets configured, if it has not begun already. Every draw
+    // calls this, after flushing barriers, because the begin is deferred to the draw.
+    static void BeginRenderingIfPending( VulkanCommandBuffer* pVulkanCommandBuffer )
     {
+        if ( !pVulkanCommandBuffer->m_needsRenderingBegin )
+        {
+            return;
+        }
+
+        VkRenderingInfo& renderingInfo = pVulkanCommandBuffer->m_renderingInfo;
+
+        // Re-pointed on every begin. The attachment vector may have been refilled since the
+        // configuration was recorded, so a pointer taken then could be stale.
+        renderingInfo.colorAttachmentCount = uint32_t( pVulkanCommandBuffer->m_colorAttachments.size() );
+        renderingInfo.pColorAttachments = pVulkanCommandBuffer->m_colorAttachments.data();
+        renderingInfo.pDepthAttachment = pVulkanCommandBuffer->m_hasDepthAttachment ? &pVulkanCommandBuffer->m_depthAttachment : nullptr;
+        renderingInfo.pStencilAttachment = pVulkanCommandBuffer->m_hasStencilAttachment ? &pVulkanCommandBuffer->m_stencilAttachment : nullptr;
+
+        vkCmdBeginRendering( pVulkanCommandBuffer->m_commandBuffer, &renderingInfo );
+
+        pVulkanCommandBuffer->m_needsRenderingBegin = false;
+        pVulkanCommandBuffer->m_isRendering = true;
+    }
+
+    // Leaves the render pass so something that may not run inside one can run: a barrier, a
+    // dispatch, a copy. The next draw begins it again, with every load op forced to LOAD so the
+    // restart keeps what the first half drew.
+    //
+    // The store ops were fixed when the pass began, so a caller that asked for
+    // StoreActionType::None would lose that half of the pass. No engine pass puts a barrier or a
+    // dispatch between two draws, so this is a safety net rather than a path anything takes.
+    static void SuspendRendering( VulkanCommandBuffer* pVulkanCommandBuffer )
+    {
+        if ( !pVulkanCommandBuffer->m_isRendering )
+        {
+            return;
+        }
+
+        vkCmdEndRendering( pVulkanCommandBuffer->m_commandBuffer );
+
+        pVulkanCommandBuffer->m_isRendering = false;
+        pVulkanCommandBuffer->m_needsRenderingBegin = true;
+
+        for ( VkRenderingAttachmentInfo& attachment : pVulkanCommandBuffer->m_colorAttachments )
+        {
+            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        }
+        pVulkanCommandBuffer->m_depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        pVulkanCommandBuffer->m_stencilAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    }
+
+    // Finishes the current pass for good. A configuration that never reached a draw is begun and
+    // ended, because its load and store ops are the clear the caller asked for: a Direct3D 12
+    // render target that is bound and cleared with no draw still gets cleared.
+    static void FlushRendering( VulkanCommandBuffer* pVulkanCommandBuffer )
+    {
+        BeginRenderingIfPending( pVulkanCommandBuffer );
+
         if ( pVulkanCommandBuffer->m_isRendering )
         {
             vkCmdEndRendering( pVulkanCommandBuffer->m_commandBuffer );
@@ -1877,25 +1979,45 @@ namespace EE::Render::RHI
         }
     }
 
+    //-------------------------------------------------------------------------
+
+    // **LoadActionType::DontCare means "the caller said nothing", not "discard".**
+    //
+    // Direct3D 12 has no load actions at all: binding a render target preserves it, and the
+    // backend reads m_loadActionsColor only to decide whether to call ClearRenderTargetView.
+    // LoadAction is zero initialised and DontCare is the zero, so every action the engine leaves
+    // alone arrives here as DontCare. RenderPass_DebugDraw.cpp:1316 builds a LoadAction that
+    // sets only the depth action to Clear and binds the frame's final colour target with it;
+    // mapping DontCare to VK_ATTACHMENT_LOAD_OP_DONT_CARE would discard the whole rendered frame
+    // at that line. So DontCare preserves, which is what the reference backend does.
+    //
+    // Clear and Load still map exactly, and nothing loses the ability to say what it means.
+    // Recorded under "Upstream issues observed" in Docs/Linux/Progress.md.
     static VkAttachmentLoadOp VulkanLoadOp( LoadActionType action )
     {
         switch ( action )
         {
             case LoadActionType::Load:      return VK_ATTACHMENT_LOAD_OP_LOAD;
             case LoadActionType::Clear:     return VK_ATTACHMENT_LOAD_OP_CLEAR;
-            case LoadActionType::DontCare:  return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            case LoadActionType::DontCare:  return VK_ATTACHMENT_LOAD_OP_LOAD;
         }
 
         EE_UNREACHABLE_CODE();
         return VK_ATTACHMENT_LOAD_OP_LOAD;
     }
 
+    // The same reasoning, and it matters more. **No engine pass sets a store action at all**, so
+    // every attachment arrives here as StoreActionType::DontCare, and discarding on that would
+    // throw away the output of every render pass in the frame.
+    //
+    // StoreActionType::None is untouched and still maps to VK_ATTACHMENT_STORE_OP_NONE, so a
+    // caller that really wants the attachment left alone has a value that says so.
     static VkAttachmentStoreOp VulkanStoreOp( StoreActionType action )
     {
         switch ( action )
         {
             case StoreActionType::Store:    return VK_ATTACHMENT_STORE_OP_STORE;
-            case StoreActionType::DontCare: return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            case StoreActionType::DontCare: return VK_ATTACHMENT_STORE_OP_STORE;
             // "None" means the attachment is untouched. VK_ATTACHMENT_STORE_OP_NONE says
             // exactly that and is core in 1.3.
             case StoreActionType::None:     return VK_ATTACHMENT_STORE_OP_NONE;
@@ -1910,8 +2032,17 @@ namespace EE::Render::RHI
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
         // Direct3D 12's OMSetRenderTargets simply replaces what is bound. Dynamic rendering has
-        // a begin and an end, so the previous one is closed here.
-        EndRenderingIfActive( pVulkanCommandBuffer );
+        // a begin and an end, so the previous one is finished here.
+        FlushRendering( pVulkanCommandBuffer );
+
+        // The same flush Direct3D 12 does at this point. The barriers that put these very
+        // textures into their attachment layouts are pending right now, and the layouts below
+        // are read from what they leave behind.
+        FlushBarriers( pVulkanCommandBuffer );
+
+        pVulkanCommandBuffer->m_colorAttachments.clear();
+        pVulkanCommandBuffer->m_hasDepthAttachment = false;
+        pVulkanCommandBuffer->m_hasStencilAttachment = false;
 
         if ( renderTargets.empty() && pDepthStencil == nullptr )
         {
@@ -1922,7 +2053,6 @@ namespace EE::Render::RHI
         // concept and clears with a separate ClearRenderTargetView call after binding; here the
         // clear is the load op, which is what the phase document's mapping asks for and what a
         // tiler needs.
-        TInlineVector<VkRenderingAttachmentInfo, MaxRenderTargets> colorAttachments;
         VkExtent2D renderArea = {};
 
         for ( size_t renderTargetIndex = 0; renderTargetIndex < renderTargets.size(); ++renderTargetIndex )
@@ -1936,7 +2066,11 @@ namespace EE::Render::RHI
 
             VkRenderingAttachmentInfo attachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
             attachment.imageView = pVulkanTexture->RenderTargetView( colorArraySlice, colorMipSlice );
-            attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            // The layout the texture is actually in, not the one an attachment is usually in.
+            // The engine transitions a render target before binding it, and a caller that did
+            // not is a bug worth naming here rather than a validation message later.
+            EE_ASSERT( pVulkanTexture->m_currentLayout != VK_IMAGE_LAYOUT_UNDEFINED );
+            attachment.imageLayout = pVulkanTexture->m_currentLayout;
             attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
@@ -1952,30 +2086,30 @@ namespace EE::Render::RHI
                 attachment.clearValue.color.float32[3] = clearValue.m_alpha;
             }
 
-            colorAttachments.push_back( attachment );
+            pVulkanCommandBuffer->m_colorAttachments.push_back( attachment );
 
             renderArea.width = Math::Max( renderArea.width, Math::Max( pVulkanTexture->m_extent.width >> colorMipSlice, 1U ) );
             renderArea.height = Math::Max( renderArea.height, Math::Max( pVulkanTexture->m_extent.height >> colorMipSlice, 1U ) );
         }
 
-        VkRenderingAttachmentInfo depthAttachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-        VkRenderingAttachmentInfo stencilAttachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-        bool hasDepth = false;
-        bool hasStencil = false;
-
         if ( pDepthStencil != nullptr )
         {
             VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( pDepthStencil );
 
-            hasDepth = ( pVulkanTexture->m_aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT ) != 0;
-            hasStencil = ( pVulkanTexture->m_aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT ) != 0;
+            pVulkanCommandBuffer->m_hasDepthAttachment = ( pVulkanTexture->m_aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT ) != 0;
+            pVulkanCommandBuffer->m_hasStencilAttachment = ( pVulkanTexture->m_aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT ) != 0;
 
+            VkRenderingAttachmentInfo depthAttachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
             depthAttachment.imageView = pVulkanTexture->RenderTargetView( depthArraySlice, depthMipSlice );
-            depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            // Read from the texture for the same reason as the colour targets, and it matters
+            // more here: RenderPass_DebugDraw.cpp:1342 binds a depth target it only reads, which
+            // is DEPTH_STENCIL_READ_ONLY_OPTIMAL rather than the attachment layout.
+            EE_ASSERT( pVulkanTexture->m_currentLayout != VK_IMAGE_LAYOUT_UNDEFINED );
+            depthAttachment.imageLayout = pVulkanTexture->m_currentLayout;
             depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
-            stencilAttachment = depthAttachment;
+            VkRenderingAttachmentInfo stencilAttachment = depthAttachment;
 
             if ( pLoadAction != nullptr )
             {
@@ -1988,22 +2122,21 @@ namespace EE::Render::RHI
                 stencilAttachment.clearValue.depthStencil.stencil = pLoadAction->m_depthClearValue.m_stencil;
             }
 
+            pVulkanCommandBuffer->m_depthAttachment = depthAttachment;
+            pVulkanCommandBuffer->m_stencilAttachment = stencilAttachment;
+
             renderArea.width = Math::Max( renderArea.width, Math::Max( pVulkanTexture->m_extent.width >> depthMipSlice, 1U ) );
             renderArea.height = Math::Max( renderArea.height, Math::Max( pVulkanTexture->m_extent.height >> depthMipSlice, 1U ) );
         }
 
-        VkRenderingInfo renderingInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
+        pVulkanCommandBuffer->m_renderingInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
         // Direct3D 12 has no render area; it draws wherever the viewport and scissor allow. The
         // full extent of the attachments is the same thing, and the viewport still restricts it.
-        renderingInfo.renderArea.extent = renderArea;
-        renderingInfo.layerCount = 1;
-        renderingInfo.colorAttachmentCount = uint32_t( colorAttachments.size() );
-        renderingInfo.pColorAttachments = colorAttachments.data();
-        renderingInfo.pDepthAttachment = hasDepth ? &depthAttachment : nullptr;
-        renderingInfo.pStencilAttachment = hasStencil ? &stencilAttachment : nullptr;
+        pVulkanCommandBuffer->m_renderingInfo.renderArea.extent = renderArea;
+        pVulkanCommandBuffer->m_renderingInfo.layerCount = 1;
 
-        vkCmdBeginRendering( pVulkanCommandBuffer->m_commandBuffer, &renderingInfo );
-        pVulkanCommandBuffer->m_isRendering = true;
+        // Configured, not begun. See VulkanCommandBuffer::m_needsRenderingBegin for why.
+        pVulkanCommandBuffer->m_needsRenderingBegin = true;
     }
 
     void CmdSetShadingRate( CommandBuffer* pCommandBuffer, ShadingRate shadingRate, Texture* pShadingRateTexture, ShadingRateCombiner postRasterizerCombiner, ShadingRateCombiner finalCombiner )
@@ -2192,27 +2325,41 @@ namespace EE::Render::RHI
         vkCmdBindIndexBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanBuffer->m_buffer, offset, vulkanIndexType );
     }
 
+    // Every draw does the same two things first, in this order, and both matter. The barriers
+    // have to reach the device before the pass opens, because a barrier may not run inside one
+    // and because they are what put the attachments into the layouts the pass names. Then the
+    // pass opens, which CmdSetRenderTargets deliberately did not do.
+    static void PrepareDraw( VulkanCommandBuffer* pVulkanCommandBuffer )
+    {
+        FlushBarriers( pVulkanCommandBuffer );
+        BeginRenderingIfPending( pVulkanCommandBuffer );
+    }
+
     void CmdDraw( CommandBuffer* pCommandBuffer, uint32_t numVertices, uint32_t firstVertex )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        PrepareDraw( pVulkanCommandBuffer );
         vkCmdDraw( pVulkanCommandBuffer->m_commandBuffer, numVertices, 1, firstVertex, 0 );
     }
 
     void CmdDrawInstanced( CommandBuffer* pCommandBuffer, uint32_t numVertices, uint32_t numInstances, uint32_t firstVertex, uint32_t firstInstance )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        PrepareDraw( pVulkanCommandBuffer );
         vkCmdDraw( pVulkanCommandBuffer->m_commandBuffer, numVertices, numInstances, firstVertex, firstInstance );
     }
 
     void CmdDrawIndexed( CommandBuffer* pCommandBuffer, uint32_t numIndices, uint32_t firstIndex )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        PrepareDraw( pVulkanCommandBuffer );
         vkCmdDrawIndexed( pVulkanCommandBuffer->m_commandBuffer, numIndices, 1, firstIndex, 0, 0 );
     }
 
     void CmdDrawIndexedInstanced( CommandBuffer* pCommandBuffer, uint32_t numIndices, uint32_t numInstances, uint32_t firstIndex, uint32_t firstInstance )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        PrepareDraw( pVulkanCommandBuffer );
         vkCmdDrawIndexed( pVulkanCommandBuffer->m_commandBuffer, numIndices, numInstances, firstIndex, 0, firstInstance );
     }
 
@@ -2221,9 +2368,10 @@ namespace EE::Render::RHI
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
         // A dispatch may not run inside a render pass. Direct3D 12 has no such rule, so the
-        // engine does not close anything before dispatching. P5.9 and P5.10 need this same call
-        // before a barrier or a copy.
-        EndRenderingIfActive( pVulkanCommandBuffer );
+        // engine does not close anything before dispatching. The pass is left rather than
+        // finished, so a draw that follows in the same pass resumes it.
+        FlushBarriers( pVulkanCommandBuffer );
+        SuspendRendering( pVulkanCommandBuffer );
 
         EE_ASSERT( numGroupsX <= MaxDispatchSize && numGroupsY <= MaxDispatchSize && numGroupsZ <= MaxDispatchSize );
 
@@ -2261,19 +2409,293 @@ namespace EE::Render::RHI
         EE_UNIMPLEMENTED_FUNCTION();
     }
 
+    //-------------------------------------------------------------------------
+    // Barriers
+    //-------------------------------------------------------------------------
+    // synchronization2, which is core in 1.3. The three CmdBarrier overloads mirror Direct3D
+    // 12's enhanced barriers one for one, including the batching: a barrier is recorded on the
+    // command buffer and the whole set goes to the device in one vkCmdPipelineBarrier2 at the
+    // next draw, dispatch or EndCommandBuffer, exactly as RHI_Direct3D12.cpp:1586 does it.
+    //
+    // The phase document says to avoid reaching for ALL_COMMANDS and MEMORY_READ|WRITE
+    // everywhere. Two entries below are that broad and both are recorded in Progress.md:
+    // PipelineStage::All, which means exactly ALL_COMMANDS, and ResourceAccess::Common, which is
+    // Direct3D's "any access" and has no narrower Vulkan spelling.
+
+    static VkPipelineStageFlags2 VulkanPipelineStage( TBitFlags<PipelineStage> pipelineStages )
+    {
+        // The early return mirrors RHI_Direct3D12.cpp:617. "All" is not one bit among many; it
+        // is the answer.
+        if ( pipelineStages.IsFlagSet( PipelineStage::All ) ) { return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; }
+
+        VkPipelineStageFlags2 stageMask = VK_PIPELINE_STAGE_2_NONE;
+
+        // D3D12_BARRIER_SYNC_DRAW is every stage a draw runs through, which is what
+        // ALL_GRAPHICS means here. It covers the depth test stages, and the engine relies on
+        // that: a depth target is transitioned with PipelineStage::Draw, never with a depth
+        // stage of its own.
+        if ( pipelineStages.IsFlagSet( PipelineStage::Draw ) ) { stageMask |= VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT; }
+        if ( pipelineStages.IsFlagSet( PipelineStage::PixelShader ) ) { stageMask |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT; }
+        // D3D12_BARRIER_SYNC_NON_PIXEL_SHADING includes compute, so this does too. The task and
+        // mesh stages belong in here as well and are left out on purpose: their stage bits are
+        // only legal once VK_EXT_mesh_shader is enabled, which is P5.14's job.
+        if ( pipelineStages.IsFlagSet( PipelineStage::NonPixelShader ) )
+        {
+            stageMask |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
+                         VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT | VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        }
+        if ( pipelineStages.IsFlagSet( PipelineStage::ComputeShader ) ) { stageMask |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT; }
+        if ( pipelineStages.IsFlagSet( PipelineStage::AllShader ) )
+        {
+            stageMask |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
+                         VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT | VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
+                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        }
+        // ALL_TRANSFER rather than COPY, because Direct3D's SYNC_COPY sits next to SYNC_CLEAR
+        // and SYNC_RESOLVE and the RHI has no separate flag for either, so a clear arrives here
+        // as Copy. P5.10 records its clears against this.
+        if ( pipelineStages.IsFlagSet( PipelineStage::Copy ) ) { stageMask |= VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT; }
+        if ( pipelineStages.IsFlagSet( PipelineStage::ExecuteIndirect ) ) { stageMask |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT; }
+
+        // The four below name stages that only exist once their extension is enabled, and none
+        // of the three extensions is. Nothing can reach them: P5.16 owns raytracing, and no
+        // video queue exists. They are mapped rather than left out so that the group that
+        // enables the extension finds the mapping already correct.
+        if ( pipelineStages.IsFlagSet( PipelineStage::Raytracing ) ) { stageMask |= VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR; }
+        if ( pipelineStages.IsFlagSet( PipelineStage::BuildAccelerationStructure ) ) { stageMask |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR; }
+        if ( pipelineStages.IsFlagSet( PipelineStage::CopyAccelerationStructure ) ) { stageMask |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR; }
+        if ( pipelineStages.IsFlagSet( PipelineStage::VideoDecode ) ) { stageMask |= VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR; }
+        if ( pipelineStages.IsFlagSet( PipelineStage::VideoEncode ) ) { stageMask |= VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR; }
+        // Vulkan has no video processing stage at all. Direct3D 12 has a whole video process
+        // queue type; there is nothing to map it to, and nothing asks for it.
+
+        return stageMask;
+    }
+
+    static VkAccessFlags2 VulkanAccess( TBitFlags<ResourceAccess> resourceAccess )
+    {
+        VkAccessFlags2 accessMask = VK_ACCESS_2_NONE;
+
+        // D3D12_BARRIER_ACCESS_COMMON is "any access", and Vulkan spells that MEMORY_READ plus
+        // MEMORY_WRITE. It is the broad mapping the phase document warns about, and it is also
+        // the honest one: DeviceTextureState starts every texture at ResourceAccess::Common, so
+        // this is what the first barrier on any texture uses as its source.
+        if ( resourceAccess.IsFlagSet( ResourceAccess::Common ) ) { accessMask |= VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT; }
+        // Direct3D 12 maps Present onto COMMON. A Vulkan presentation engine read needs no
+        // access bits at all, only the PRESENT_SRC layout, so NONE is both correct and narrower.
+        if ( resourceAccess.IsFlagSet( ResourceAccess::Present ) ) { accessMask |= VK_ACCESS_2_NONE; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::ConstantBuffer ) ) { accessMask |= VK_ACCESS_2_UNIFORM_READ_BIT; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::IndexBuffer ) ) { accessMask |= VK_ACCESS_2_INDEX_READ_BIT; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::RenderTarget ) ) { accessMask |= VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::UnorderedAccess ) ) { accessMask |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::DepthWrite ) ) { accessMask |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::DepthRead ) ) { accessMask |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT; }
+        // A Direct3D shader resource view covers both a sampled texture and a read-only
+        // structured buffer, and Vulkan splits those into two access bits.
+        if ( resourceAccess.IsFlagSet( ResourceAccess::ShaderResource ) ) { accessMask |= VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::IndirectArgument ) ) { accessMask |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::CopyDestination ) ) { accessMask |= VK_ACCESS_2_TRANSFER_WRITE_BIT; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::CopySource ) ) { accessMask |= VK_ACCESS_2_TRANSFER_READ_BIT; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::AccelerationStructureRead ) ) { accessMask |= VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::AccelerationStructureWrite ) ) { accessMask |= VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::ShadingRateSource ) ) { accessMask |= VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::VideoDecodeRead ) ) { accessMask |= VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::VideoDecodeWrite ) ) { accessMask |= VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::VideoEncodeRead ) ) { accessMask |= VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR; }
+        if ( resourceAccess.IsFlagSet( ResourceAccess::VideoEncodeWrite ) ) { accessMask |= VK_ACCESS_2_VIDEO_ENCODE_WRITE_BIT_KHR; }
+        // VideoProcessRead and VideoProcessWrite have no Vulkan equivalent, for the same reason
+        // PipelineStage::VideoProcess has none.
+
+        return accessMask;
+    }
+
+    // A TextureState is a Direct3D barrier layout, and this is its Vulkan one. The texture is
+    // needed because one state does not answer on its own: see the ShaderResource case.
+    static VkImageLayout VulkanImageLayout( TextureState textureState, VulkanTexture const* pVulkanTexture )
+    {
+        switch ( textureState )
+        {
+            case TextureState::Undefined: return VK_IMAGE_LAYOUT_UNDEFINED;
+            // D3D12_BARRIER_LAYOUT_COMMON allows any access, and GENERAL is the Vulkan layout
+            // that does.
+            case TextureState::Common: return VK_IMAGE_LAYOUT_GENERAL;
+            // **Not always SHADER_READ_ONLY_OPTIMAL.** P5.6 wrote the sampled descriptor with
+            // the texture's m_shaderReadLayout, which is GENERAL when the texture is also an
+            // RWTexture, and a descriptor's layout has to match the layout the image is in.
+            case TextureState::ShaderResource: return pVulkanTexture->m_shaderReadLayout;
+            case TextureState::UnorderedAccess: return VK_IMAGE_LAYOUT_GENERAL;
+            case TextureState::Present: return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            case TextureState::RenderTarget: return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            case TextureState::DepthWrite: return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            case TextureState::DepthRead: return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            case TextureState::ShadingRateSource: return VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+            case TextureState::VideoDecodeRead: return VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR;
+            case TextureState::VideoDecodeWrite: return VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR;
+            case TextureState::VideoEncodeRead: return VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR;
+            case TextureState::VideoEncodeWrite: return VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR;
+            // Vulkan has no video processing, so no layout for it either.
+            case TextureState::VideoProcessRead:
+            case TextureState::VideoProcessWrite: return VK_IMAGE_LAYOUT_GENERAL;
+        }
+
+        EE_UNREACHABLE_CODE();
+        return VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+
+    // A stage mask of NONE may carry no access bits. The two are built from independent
+    // arguments, so a caller can produce an empty sync with a non-empty access, and the queue
+    // filtering below can produce one too.
+    static void NormalizeBarrierMasks( VkPipelineStageFlags2 stageMask, VkAccessFlags2& accessMask )
+    {
+        if ( stageMask == VK_PIPELINE_STAGE_2_NONE )
+        {
+            accessMask = VK_ACCESS_2_NONE;
+        }
+    }
+
+    // Copied from RHI_Direct3D12.cpp:3408, TODO comment and all: the graphics-only stages are
+    // dropped from the source on a queue that has no such stages, and asserted absent from the
+    // destination. Vulkan is stricter than Direct3D here, so this is not optional; naming a
+    // graphics stage in a barrier on a compute queue is a validation error.
+    static void ClearGraphicsOnlyStages( VulkanCommandBuffer const* pVulkanCommandBuffer, TBitFlags<PipelineStage>& sourceSync, TBitFlags<PipelineStage> destinationSync )
+    {
+        if ( pVulkanCommandBuffer->m_pQueue->m_queueType != QueueType::Graphics )
+        {
+            sourceSync.ClearFlags( PipelineStageFlags_GraphicsQueueOnly );
+            EE_ASSERT( !destinationSync.AreAnyFlagsSet( PipelineStage::Draw, PipelineStage::PixelShader ) );
+        }
+    }
+
+    // Everything recorded since the last flush, in one call. Called by every draw, every
+    // dispatch and EndCommandBuffer, which are the points Direct3D 12 flushes at too.
+    static void FlushBarriers( VulkanCommandBuffer* pVulkanCommandBuffer )
+    {
+        if ( pVulkanCommandBuffer->m_globalBarriers.empty() &&
+             pVulkanCommandBuffer->m_bufferBarriers.empty() &&
+             pVulkanCommandBuffer->m_imageBarriers.empty() )
+        {
+            return;
+        }
+
+        // **A barrier may not run inside dynamic rendering.** This is the one place that has to
+        // know it, which is why every other caller goes through the flush rather than reaching
+        // for the render pass itself. The pass resumes at the next draw.
+        SuspendRendering( pVulkanCommandBuffer );
+
+        VkDependencyInfo dependencyInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+        dependencyInfo.memoryBarrierCount = uint32_t( pVulkanCommandBuffer->m_globalBarriers.size() );
+        dependencyInfo.pMemoryBarriers = pVulkanCommandBuffer->m_globalBarriers.data();
+        dependencyInfo.bufferMemoryBarrierCount = uint32_t( pVulkanCommandBuffer->m_bufferBarriers.size() );
+        dependencyInfo.pBufferMemoryBarriers = pVulkanCommandBuffer->m_bufferBarriers.data();
+        dependencyInfo.imageMemoryBarrierCount = uint32_t( pVulkanCommandBuffer->m_imageBarriers.size() );
+        dependencyInfo.pImageMemoryBarriers = pVulkanCommandBuffer->m_imageBarriers.data();
+
+        vkCmdPipelineBarrier2( pVulkanCommandBuffer->m_commandBuffer, &dependencyInfo );
+
+        pVulkanCommandBuffer->m_globalBarriers.clear();
+        pVulkanCommandBuffer->m_bufferBarriers.clear();
+        pVulkanCommandBuffer->m_imageBarriers.clear();
+    }
+
     void CmdBarrier( CommandBuffer* pCommandBuffer, TBitFlags<PipelineStage> sourceSync, TBitFlags<PipelineStage> destinationSync, TBitFlags<ResourceAccess> sourceAccess, TBitFlags<ResourceAccess> destinationAccess )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        ClearGraphicsOnlyStages( pVulkanCommandBuffer, sourceSync, destinationSync );
+
+        VkMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+        barrier.srcStageMask = VulkanPipelineStage( sourceSync );
+        barrier.dstStageMask = VulkanPipelineStage( destinationSync );
+        barrier.srcAccessMask = VulkanAccess( sourceAccess );
+        barrier.dstAccessMask = VulkanAccess( destinationAccess );
+
+        NormalizeBarrierMasks( barrier.srcStageMask, barrier.srcAccessMask );
+        NormalizeBarrierMasks( barrier.dstStageMask, barrier.dstAccessMask );
+
+        pVulkanCommandBuffer->m_globalBarriers.emplace_back( barrier );
     }
 
     void CmdBarrier( CommandBuffer* pCommandBuffer, Buffer* pBuffer, TBitFlags<PipelineStage> sourceSync, TBitFlags<PipelineStage> destinationSync, TBitFlags<ResourceAccess> sourceAccess, TBitFlags<ResourceAccess> destinationAccess )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanBuffer* pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
+
+        ClearGraphicsOnlyStages( pVulkanCommandBuffer, sourceSync, destinationSync );
+
+        VkBufferMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2 };
+        barrier.srcStageMask = VulkanPipelineStage( sourceSync );
+        barrier.dstStageMask = VulkanPipelineStage( destinationSync );
+        barrier.srcAccessMask = VulkanAccess( sourceAccess );
+        barrier.dstAccessMask = VulkanAccess( destinationAccess );
+        // No queue ownership transfer. CreateBuffer and CreateTexture give a resource
+        // CONCURRENT sharing across every family the context uses, which is what a Direct3D 12
+        // resource has: none. See the sharing mode helper in CreateContext.
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = pVulkanBuffer->m_buffer;
+        barrier.offset = 0;
+        barrier.size = VK_WHOLE_SIZE;
+
+        NormalizeBarrierMasks( barrier.srcStageMask, barrier.srcAccessMask );
+        NormalizeBarrierMasks( barrier.dstStageMask, barrier.dstAccessMask );
+
+        pVulkanCommandBuffer->m_bufferBarriers.emplace_back( barrier );
     }
 
     void CmdBarrier( CommandBuffer* pCommandBuffer, Texture* pTexture, TBitFlags<PipelineStage> sourceSync, TBitFlags<PipelineStage> destinationSync, TBitFlags<ResourceAccess> sourceAccess, TBitFlags<ResourceAccess> destinationAccess, TextureState sourceState, TextureState destinationState, TextureBarrierRegion region, TBitFlags<TextureBarrierFlags> flags )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( pTexture );
+
+        ClearGraphicsOnlyStages( pVulkanCommandBuffer, sourceSync, destinationSync );
+
+        VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+        barrier.srcStageMask = VulkanPipelineStage( sourceSync );
+        barrier.dstStageMask = VulkanPipelineStage( destinationSync );
+        barrier.srcAccessMask = VulkanAccess( sourceAccess );
+        barrier.dstAccessMask = VulkanAccess( destinationAccess );
+
+        // **The old layout comes from the texture, not from sourceState.** This is P5.6's first
+        // obligation: vkCreateImage only accepts VK_IMAGE_LAYOUT_UNDEFINED, so a texture the
+        // engine believes is already in its m_initialState is in fact in UNDEFINED until the
+        // first barrier moves it. The caller's belief is asserted against the truth below rather
+        // than used, so the two cannot drift silently.
+        barrier.oldLayout = pVulkanTexture->m_currentLayout;
+        barrier.newLayout = VulkanImageLayout( destinationState, pVulkanTexture );
+
+        EE_ASSERT( pVulkanTexture->m_currentLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+                   pVulkanTexture->m_currentLayout == VulkanImageLayout( sourceState, pVulkanTexture ) );
+
+        // Direct3D's discard flag says the old contents are not needed. UNDEFINED as the old
+        // layout says exactly that, and it lets the driver skip decompressing what it is about
+        // to overwrite.
+        if ( flags.IsFlagSet( TextureBarrierFlags::Discard ) )
+        {
+            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        }
+
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = pVulkanTexture->m_image;
+        // Every aspect the image has. A barrier that moved the depth and left the stencil behind
+        // would put one image in two layouts, which is the thing m_currentLayout cannot express.
+        barrier.subresourceRange.aspectMask = pVulkanTexture->m_aspectMask;
+        barrier.subresourceRange.baseMipLevel = region.m_mipLevel;
+        barrier.subresourceRange.levelCount = region.m_numMipLevels ? region.m_numMipLevels : pVulkanTexture->m_mipLevels;
+        barrier.subresourceRange.baseArrayLayer = region.m_arraySlice;
+        barrier.subresourceRange.layerCount = region.m_numArraySlices ? region.m_numArraySlices : pVulkanTexture->m_arrayLayers;
+
+        NormalizeBarrierMasks( barrier.srcStageMask, barrier.srcAccessMask );
+        NormalizeBarrierMasks( barrier.dstStageMask, barrier.dstAccessMask );
+
+        pVulkanCommandBuffer->m_imageBarriers.emplace_back( barrier );
+
+        // One layout for the whole image, which is exact only while callers barrier the whole
+        // texture. Every engine barrier does: DeviceResourceStates::FlushBarriers passes an empty
+        // TextureBarrierRegion. A caller that barriers one mip would leave this describing the
+        // rest of the image wrongly, and the assert above is what would catch it.
+        pVulkanTexture->m_currentLayout = barrier.newLayout;
     }
 
     void CmdResetQueryPool( CommandBuffer* pCommandBuffer, QueryPool* pQueryPool, uint32_t startQuery, uint32_t numQueries )
@@ -2592,6 +3014,28 @@ namespace EE::Render::RHI
         return height > 1 ? ViewDimension::Texture2D : ViewDimension::Texture1D;
     }
 
+    // **Direct3D 12 resources have no queue ownership at all.** A resource written on the
+    // compute queue is read on the graphics queue with only a barrier between them, and the
+    // engine's async compute path relies on that. Vulkan's EXCLUSIVE sharing needs an ownership
+    // transfer for the same thing, and nothing in RHI.h says which queue last touched a
+    // resource, so there is nothing to build a transfer out of.
+    //
+    // CONCURRENT reproduces the Direct3D semantics exactly. It costs some compression on some
+    // hardware, and it costs nothing when the device exposes one queue family, which is the case
+    // this leaves EXCLUSIVE. P5.5 recorded the decision as P5.9's; this is it.
+    static void SetSharingMode( VulkanContext const* pVulkanContext, VkSharingMode& sharingMode, uint32_t& queueFamilyIndexCount, uint32_t const*& pQueueFamilyIndices )
+    {
+        if ( pVulkanContext->m_sharingQueueFamilies.size() < 2 )
+        {
+            sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            return;
+        }
+
+        sharingMode = VK_SHARING_MODE_CONCURRENT;
+        queueFamilyIndexCount = uint32_t( pVulkanContext->m_sharingQueueFamilies.size() );
+        pQueueFamilyIndices = pVulkanContext->m_sharingQueueFamilies.data();
+    }
+
     static void TrackResourceAllocation( VulkanContext* pVulkanContext, TBitFlags<DescriptorTypeFlags> descriptorTypes, bool isTexture, bool isAllocation, uint64_t numBytes )
     {
         if ( numBytes == 0 )
@@ -2741,12 +3185,7 @@ namespace EE::Render::RHI
         VkBufferCreateInfo bufferCreateInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferCreateInfo.size = allocationSize;
         bufferCreateInfo.usage = usage;
-        // Direct3D 12 buffers have no queue ownership at all. CONCURRENT would let any queue
-        // touch this without an ownership transfer and reproduce that, at a cost on some
-        // hardware; EXCLUSIVE is the faster and stricter choice. P5.9 owns barriers, so the
-        // ownership transfers belong there. This is EXCLUSIVE because most buffers never move
-        // between queues, and P5.9 has to get the transfers right regardless.
-        bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        SetSharingMode( pVulkanContext, bufferCreateInfo.sharingMode, bufferCreateInfo.queueFamilyIndexCount, bufferCreateInfo.pQueueFamilyIndices );
 
         VmaAllocationCreateInfo allocationCreateInfo = {};
         switch ( parameters.m_memoryType )
@@ -3175,9 +3614,7 @@ namespace EE::Render::RHI
         imageCreateInfo.mipLevels = parameters.m_mipLevels;
         imageCreateInfo.samples = VkSampleCountFlagBits( parameters.m_numSamples );
         imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        // Same reasoning as CreateBuffer: Direct3D 12 resources have no queue ownership, and
-        // CONCURRENT would reproduce that at a cost. P5.9 owns the ownership transfers.
-        imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        SetSharingMode( pVulkanContext, imageCreateInfo.sharingMode, imageCreateInfo.queueFamilyIndexCount, imageCreateInfo.pQueueFamilyIndices );
         // vkCreateImage accepts UNDEFINED or PREINITIALIZED and nothing else, and the second is
         // for linear tiling. See VulkanTexture::m_currentLayout for what that costs P5.9.
         imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
