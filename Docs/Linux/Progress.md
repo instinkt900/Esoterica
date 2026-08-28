@@ -14,11 +14,16 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 answered: the plain loader, not `volk`. **P5.1 to P5.10 are all written and have never been
 run.**
 
-**Which of the 16 groups are real: P5.1, P5.2, P5.3, P5.4, P5.5, P5.6, P5.7, P5.8, P5.9, P5.10
-and P5.12, all unverified.** P5.7 covers graphics and compute pipelines, with mesh and raytracing
-left to P5.14 and P5.16. P5.12 owes one `SetDebugName` overload to P5.11, which has to define the
-query pool type first. Phase 5's own note says this count is the single most important piece of
-state, so it leads this section.
+**Which of the 16 groups are real: P5.1 to P5.12, all unverified.** That is twelve of the
+sixteen. P5.7 covers graphics and compute pipelines, with mesh and raytracing left to P5.14 and
+P5.16. **The four that are not real are P5.13, which cannot be, and P5.14, P5.15 and P5.16, which
+are the optional feature groups.** Phase 5's own note says this count is the single most important
+piece of state, so it leads this section.
+
+**13 `EE_UNIMPLEMENTED_FUNCTION` remain, and every one is accounted for**: six are P5.16
+raytracing, three are P5.14 mesh shaders, one is P5.15 variable rate shading, one is the indirect
+refusal from open question 7, and two are markers rather than functions - the custom sampler
+border colour and the static-sampler path.
 
 **The frame cannot draw, and closing that needs a decision nobody has made yet.** Every render
 pass is built on `CmdExecuteIndirect` - `RenderPass_ForwardShading` uses it six times,
@@ -106,7 +111,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.10 and P5.12 written, never run**, and P5.13 is half written. 21 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. Six of the 21 are markers rather than whole RHI functions: the custom sampler border colour, the static-sampler path, the mesh and raytracing `CreatePipeline` overloads, and two inside `CmdExecuteIndirect`. **11 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.12 written, never run**, and P5.13 is half written. 13 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and all 13 belong to P5.14, P5.15, P5.16 or open question 7. **12 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -119,26 +124,26 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.12-debug-utilities`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.11-query-pools`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
 `p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
 `p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34),
-`p5.3-swapchain` (#35), `p5.13-indirect-draws` (#36), then this. None merged yet. Nothing has run
-any of it.
+`p5.3-swapchain` (#35), `p5.13-indirect-draws` (#36), `p5.12-debug-utilities` (#37), then this.
+None merged yet. Nothing has run any of it.
 
-**Next: P5.11, query pools.** A development build's profile scopes use them every frame, and
-P5.12 owes its `SetDebugName( QueryPool* )` overload to it. After that only the optional feature
-groups are left: P5.14 mesh shaders, P5.15 variable rate shading, P5.16 raytracing.
+**Every group the engine's frame uses is now written.** What is left is P5.14 mesh shaders, which
+`RenderPass_DebugDraw` does use, P5.15 variable rate shading, which nothing uses, and P5.16
+raytracing, which nothing uses. P5.14 is therefore the next one that matters.
 
 **Open question 7 blocks the frame and is not scheduled.** It is the indirect-draw decision
-described above and in the P5.13 entry.
+described above and in the P5.13 entry. **No amount of further Phase 5 work moves past it**, so it
+is the thing to settle before Phase 6.
 
 **Still owed to other groups**, each asserted or commented at the line rather than silently
 skipped:
 
 | Owed by | What |
 |---|---|
-| P5.11 | `SetDebugName( Context*, QueryPool*, StringView )` is `VK_OBJECT_TYPE_QUERY_POOL` through `SetVulkanObjectName`, and there is no `VulkanQueryPool` type to cast to yet. It is the only one of the nine that halts. |
 | P5.14 | `CmdExecuteIndirect` on a `DispatchMesh` signature is `vkCmdDrawMeshTasksIndirectEXT`, which cannot be named until `VK_EXT_mesh_shader` is enabled. It halts at the line today. |
 | P5.16 | The same for a `DispatchRays` signature, which is `vkCmdTraceRaysIndirect2KHR`. |
 
@@ -175,6 +180,74 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.11 Query pools
+
+**All seven query functions are implemented, and the `SetDebugName` overload P5.12 owed to this
+group is filled in.** 13 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 21. Nothing has run.
+
+#### A correction: nothing in the engine calls any of this
+
+The P5.12 entry said P5.11 was needed for "the query pools a development build's profile scopes
+use every frame". **That is wrong.** `EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE` at `RHI.h:1705` expands
+to a CPU profile scope and a `CommandBufferMarkerScope`, which is a debug marker. It records no
+timestamp. There is no `CreateQueryPool` call anywhere in `Code/Engine` or `Code/Applications`.
+
+The group is written for parity, not because the frame needs it.
+
+#### The four mappings that are not one for one
+
+| `RHI.h` | Vulkan |
+|---|---|
+| `CmdResetQueryPool` | **Direct3D 12 does nothing here and Vulkan requires it.** This is the one place in the backend where the asymmetry runs that way: a Vulkan query is undefined until it has been reset. It may not run inside a render pass, so it goes through `PrepareTransfer`. |
+| `CmdBeginQuery` on a timestamp pool | Nothing. A timestamp is written at one point, not over a range, and `vkCmdBeginQuery` on a timestamp pool is a validation error. It matches what the reference achieves anyway; see "Upstream issues observed". |
+| `CmdEndQuery` on a timestamp pool | `vkCmdWriteTimestamp2` at `BOTTOM_OF_PIPE`, because Direct3D's `EndQuery` timestamp is taken after the work the scope covers. **It is legal inside a render pass**, which matters: a profile scope around a pass must not tear it the way a reset would. |
+| `GetQueryTimestampFrequency` | `1e9 / timestampPeriod`. Vulkan reports nanoseconds per tick and Direct3D 12 reports ticks per second, which is the inversion the phase document asks for. |
+
+#### Two things Direct3D 12 has no equivalent of, and both are asserted
+
+- **A queue family may report zero valid timestamp bits**, meaning it cannot write one at all.
+  `VulkanQueue` now carries `m_timestampValidBits` and `m_timestampPeriod`, both read in
+  `CreateQueue`, because `GetQueryTimestampFrequency` is handed a `Queue` and no `Context`.
+- **`pipelineStatisticsQuery` is a device feature**, and a `PipelineStatistics` pool cannot be
+  created without it. It is enabled **when the device has it and never required**, so a device
+  missing it is not refused over a capability nothing uses. `CreateQueryPool` asserts on the flag.
+
+#### The resolve writes eight bytes per query, which is only right for a timestamp
+
+The destination offset is the reference's, `startQuery * 8` at `RHI_Direct3D12.cpp:3528`, and a
+pipeline statistics query resolves to eleven counters rather than one. Both backends have to write
+the same layout, so `CmdResolveQuery` asserts the pool is a timestamp pool rather than inventing a
+second layout. Nothing creates a statistics pool.
+
+`VK_QUERY_RESULT_WAIT_BIT` is set, because Direct3D's `ResolveQueryData` reads finished results.
+Without it the copy could write nothing and report availability separately.
+
+#### The eleven pipeline statistics all map
+
+`D3D12_QUERY_DATA_PIPELINE_STATISTICS` has eleven counters and every one has a Vulkan equivalent,
+which is unusual enough to be worth saying. They are listed in declaration order in
+`CreateQueryPool`.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 111 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. The seven this adds are
+  `vkCreateQueryPool`, `vkDestroyQueryPool`, `vkCmdResetQueryPool`, `vkCmdBeginQuery`,
+  `vkCmdEndQuery`, `vkCmdWriteTimestamp2` and `vkCmdCopyQueryPoolResults`.
+- The new code adds no compiler warning.
+- **All 13 remaining `EE_UNIMPLEMENTED_FUNCTION` were read and attributed**: six P5.16, three
+  P5.14, one P5.15, one open question 7, two markers.
+
+#### Not verified
+
+No query written, no timestamp read. The first thing worth checking is the frequency inversion,
+because a wrong one gives plausible-looking timings that are wrong by a constant factor, which is
+the sort of thing nobody notices.
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.12 Debug names and markers
 
@@ -3157,6 +3230,15 @@ The Vulkan backend maps both `DontCare` values to preserve, and leaves `Clear`, 
 `StoreActionType::None` exact. A caller that really wants an attachment left alone still has
 `StoreActionType::None`. Worth raising upstream: the fix there is either a non-discarding default
 or explicit actions at each call site.
+
+### `RHI_Direct3D12.cpp:3490` - `CmdBeginQuery` calls `BeginQuery` on a timestamp query
+
+`ID3D12GraphicsCommandList::BeginQuery` does not support `D3D12_QUERY_TYPE_TIMESTAMP`; a timestamp
+is written by `EndQuery` alone. The reference switches on exactly that type and calls `BeginQuery`
+for it, which the debug layer rejects.
+
+Nothing in the engine calls `CmdBeginQuery`, so it has never run. The Vulkan backend does nothing
+for a timestamp begin, which is what the reference effectively achieves minus the complaint.
 
 ### `RHI_Direct3D12.cpp:3714` - `CmdWriteDebugMarker` packs its auto flags two different ways
 

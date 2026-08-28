@@ -263,6 +263,9 @@ namespace EE::Render::RHI
         PFN_vkCmdBeginDebugUtilsLabelEXT                                m_vkCmdBeginDebugUtilsLabel = nullptr;
         PFN_vkCmdEndDebugUtilsLabelEXT                                  m_vkCmdEndDebugUtilsLabel = nullptr;
 
+        // Optional, unlike everything in the required feature list. See CreateQueryPool.
+        bool                                                            m_pipelineStatisticsQuery = false;
+
         void*                                                           m_pRenderDocLibrary = nullptr;
         RENDERDOC_API_1_0_0*                                            m_pRenderDocAPI = nullptr;
 
@@ -920,6 +923,17 @@ namespace EE::Render::RHI
 
         enabledFeatures.m_mutableDescriptorType.mutableDescriptorType = VK_TRUE;
 
+        // **Asked for when the device has it, and never required.** P5.11 needs it to create a
+        // PipelineStatistics query pool, nothing in the engine creates one, and refusing a whole
+        // device over an unused capability would be wrong. CreateQueryPool asserts on the flag
+        // rather than on the device.
+        RequiredFeatures availableFeatures = {};
+        availableFeatures.Chain();
+        vkGetPhysicalDeviceFeatures2( pVulkanContext->m_physicalDevice, &availableFeatures.m_features2 );
+
+        pVulkanContext->m_pipelineStatisticsQuery = availableFeatures.m_features2.features.pipelineStatisticsQuery == VK_TRUE;
+        enabledFeatures.m_features2.features.pipelineStatisticsQuery = availableFeatures.m_features2.features.pipelineStatisticsQuery;
+
         VkDeviceCreateInfo deviceCreateInfo = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         deviceCreateInfo.pNext = &enabledFeatures.m_features2;
         deviceCreateInfo.queueCreateInfoCount = uint32_t( queueCreateInfos.size() );
@@ -1297,6 +1311,12 @@ namespace EE::Render::RHI
         uint64_t                                            m_nextSemaphoreValue = 1;
         uint32_t                                            m_queueFamilyIndex = ~0U;
 
+        // GetQueryTimestampFrequency takes a Queue and no Context, and both numbers are per
+        // queue family. A family reporting zero valid bits cannot write a timestamp at all,
+        // which Direct3D 12 has no equivalent of.
+        float                                               m_timestampPeriod = 0.0F;
+        uint32_t                                            m_timestampValidBits = 0;
+
         // Vulkan has no standalone queue wait. ID3D12CommandQueue::Wait blocks everything
         // submitted to the queue after it, and the only Vulkan construct with that meaning is a
         // wait attached to a submit. So QueueDeviceWait records the wait here and the next
@@ -1397,6 +1417,12 @@ namespace EE::Render::RHI
     struct VulkanCommandPool final : CommandPool
     {
         VkCommandPool                                       m_commandPool = VK_NULL_HANDLE;
+    };
+
+    struct VulkanQueryPool final : QueryPool
+    {
+        VkQueryPool                                         m_queryPool = VK_NULL_HANDLE;
+        VkQueryType                                         m_queryType = VK_QUERY_TYPE_TIMESTAMP;
     };
 
     struct VulkanBuffer final : Buffer
@@ -1573,6 +1599,17 @@ namespace EE::Render::RHI
 
         vkGetDeviceQueue( pVulkanContext->m_device, pVulkanQueue->m_queueFamilyIndex, queueIndex, &pVulkanQueue->m_queue );
         EE_ASSERT( pVulkanQueue->m_queue != VK_NULL_HANDLE );
+
+        // Timestamps, for P5.11. Both numbers belong to the queue family, and GetQueryTimestamp-
+        // Frequency is handed a Queue with no Context to ask.
+        pVulkanQueue->m_timestampPeriod = pVulkanContext->m_physicalDeviceProperties.limits.timestampPeriod;
+
+        uint32_t numQueueFamilies = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties( pVulkanContext->m_physicalDevice, &numQueueFamilies, nullptr );
+        TVector<VkQueueFamilyProperties> queueFamilyProperties( numQueueFamilies );
+        vkGetPhysicalDeviceQueueFamilyProperties( pVulkanContext->m_physicalDevice, &numQueueFamilies, queueFamilyProperties.data() );
+
+        pVulkanQueue->m_timestampValidBits = queueFamilyProperties[pVulkanQueue->m_queueFamilyIndex].timestampValidBits;
 
         VkSemaphoreTypeCreateInfo semaphoreTypeCreateInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
         semaphoreTypeCreateInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -3489,24 +3526,99 @@ namespace EE::Render::RHI
         pVulkanTexture->m_currentLayout = barrier.newLayout;
     }
 
+    //-------------------------------------------------------------------------
+    // Queries
+    //-------------------------------------------------------------------------
+    // **Nothing in the engine calls any of this.** `EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE` at
+    // RHI.h:1705 is a debug marker and a CPU profile scope, not a timestamp query, so the whole
+    // group is API surface that the renderer has not started using. It is written for parity.
+    //
+    // A timestamp needs a begin and an end on Direct3D 12 and only an end on Vulkan, so
+    // CmdBeginQuery does nothing for one. That matches what the reference actually achieves:
+    // ID3D12GraphicsCommandList::BeginQuery rejects D3D12_QUERY_TYPE_TIMESTAMP, so the reference's
+    // own begin is a no-op with a debug-layer complaint attached. See "Upstream issues observed".
+
     void CmdResetQueryPool( CommandBuffer* pCommandBuffer, QueryPool* pQueryPool, uint32_t startQuery, uint32_t numQueries )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanQueryPool*     pVulkanQueryPool = static_cast<VulkanQueryPool*>( pQueryPool );
+
+        EE_ASSERT( startQuery + numQueries <= pVulkanQueryPool->m_numQueries );
+
+        // **Direct3D 12 does nothing here and Vulkan requires it**, which is the one place in
+        // this backend where the asymmetry runs that way: a query is undefined until it has been
+        // reset, and a reset may not run inside a render pass.
+        PrepareTransfer( pVulkanCommandBuffer );
+
+        vkCmdResetQueryPool( pVulkanCommandBuffer->m_commandBuffer, pVulkanQueryPool->m_queryPool, startQuery, numQueries );
     }
 
     void CmdBeginQuery( CommandBuffer* pCommandBuffer, QueryPool* pQueryPool, uint32_t queryIndex )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanQueryPool*     pVulkanQueryPool = static_cast<VulkanQueryPool*>( pQueryPool );
+
+        EE_ASSERT( queryIndex < pVulkanQueryPool->m_numQueries );
+
+        // A timestamp is written at one point, not over a range, so it has no begin. CmdEndQuery
+        // writes it. vkCmdBeginQuery on a timestamp pool is a validation error.
+        if ( pVulkanQueryPool->m_queryType == VK_QUERY_TYPE_TIMESTAMP )
+        {
+            return;
+        }
+
+        vkCmdBeginQuery( pVulkanCommandBuffer->m_commandBuffer, pVulkanQueryPool->m_queryPool, queryIndex, 0 );
     }
 
     void CmdEndQuery( CommandBuffer* pCommandBuffer, QueryPool* pQueryPool, uint32_t queryIndex )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanQueryPool*     pVulkanQueryPool = static_cast<VulkanQueryPool*>( pQueryPool );
+
+        EE_ASSERT( queryIndex < pVulkanQueryPool->m_numQueries );
+
+        if ( pVulkanQueryPool->m_queryType == VK_QUERY_TYPE_TIMESTAMP )
+        {
+            // A queue family may report zero valid timestamp bits, which means it cannot write
+            // one at all. Direct3D 12 has no equivalent, so a caller would never think to check.
+            EE_ASSERT( pVulkanCommandBuffer->m_pQueue != nullptr );
+            EE_ASSERT( static_cast<VulkanQueue const*>( pVulkanCommandBuffer->m_pQueue )->m_timestampValidBits > 0 );
+
+            // BOTTOM_OF_PIPE, because Direct3D 12's EndQuery timestamp is taken after the work
+            // the scope covers. This is legal inside a render pass, which matters: a profile
+            // scope around a pass must not tear it the way a reset would.
+            vkCmdWriteTimestamp2( pVulkanCommandBuffer->m_commandBuffer, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+                                  pVulkanQueryPool->m_queryPool, queryIndex );
+            return;
+        }
+
+        vkCmdEndQuery( pVulkanCommandBuffer->m_commandBuffer, pVulkanQueryPool->m_queryPool, queryIndex );
     }
 
     void CmdResolveQuery( CommandBuffer* pCommandBuffer, QueryPool* pQueryPool, Buffer const* pReadbackBuffer, uint32_t startQuery, uint32_t numQueries )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+        VulkanQueryPool*     pVulkanQueryPool = static_cast<VulkanQueryPool*>( pQueryPool );
+        VulkanBuffer const*  pVulkanReadbackBuffer = static_cast<VulkanBuffer const*>( pReadbackBuffer );
+
+        EE_ASSERT( startQuery + numQueries <= pVulkanQueryPool->m_numQueries );
+
+        // **Eight bytes per query, which is only right for a timestamp.** The destination offset
+        // is the reference's, `startQuery * 8` at RHI_Direct3D12.cpp:3528, and a pipeline
+        // statistics query resolves to eleven counters rather than one. Both backends have to
+        // write the same layout, so this asserts rather than inventing a second one. Nothing
+        // creates a statistics pool.
+        EE_ASSERT( pVulkanQueryPool->m_queryType == VK_QUERY_TYPE_TIMESTAMP );
+
+        PrepareTransfer( pVulkanCommandBuffer );
+
+        // WAIT_BIT, because Direct3D 12's ResolveQueryData reads finished results and the engine
+        // reads the buffer after the submit completes. Without it the copy could write nothing
+        // and report availability separately.
+        vkCmdCopyQueryPoolResults( pVulkanCommandBuffer->m_commandBuffer, pVulkanQueryPool->m_queryPool,
+                                   startQuery, numQueries,
+                                   pVulkanReadbackBuffer->m_buffer, uint64_t( startQuery ) * 8, 8,
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT );
     }
 
     void CmdCopyBuffer( CommandBuffer* pCommandBuffer, Buffer const* pDstBuffer, uint64_t dstOffset, Buffer const* pSrcBuffer, uint64_t srcOffset, uint64_t srcSize )
@@ -5999,19 +6111,88 @@ namespace EE::Render::RHI
 
     QueryPool* CreateQueryPool( Context* pContext, QueryPoolParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext*   pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanQueryPool* pVulkanQueryPool = pVulkanContext->CreateObject<VulkanQueryPool>();
+
+        // Vulkan has no linked-node adapter, so CreateContext always reports a single node.
+        EE_ASSERT( parameters.m_nodeIndex == 0 );
+        EE_ASSERT( parameters.m_numQueries > 0 );
+
+        VkQueryPoolCreateInfo queryPoolCreateInfo = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+        queryPoolCreateInfo.queryCount = parameters.m_numQueries;
+
+        switch ( parameters.m_queryType )
+        {
+            case QueryType::Timestamp:
+            {
+                queryPoolCreateInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            }
+            break;
+
+            case QueryType::PipelineStatistics:
+            {
+                // Optional rather than required, so a device without it refuses the pool rather
+                // than failing device selection. See CreateContext.
+                EE_ASSERT( pVulkanContext->m_pipelineStatisticsQuery );
+
+                queryPoolCreateInfo.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+                // The eleven counters of D3D12_QUERY_DATA_PIPELINE_STATISTICS, in the order that
+                // structure declares them. Every one has a Vulkan equivalent, which is unusual
+                // enough to be worth saying.
+                queryPoolCreateInfo.pipelineStatistics =
+                    VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_CONTROL_SHADER_PATCHES_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_SHADER_INVOCATIONS_BIT |
+                    VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT;
+            }
+            break;
+        }
+
+        VkResult const result = vkCreateQueryPool( pVulkanContext->m_device, &queryPoolCreateInfo, nullptr, &pVulkanQueryPool->m_queryPool );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanQueryPool->m_queryType = queryPoolCreateInfo.queryType;
+        pVulkanQueryPool->m_numQueries = parameters.m_numQueries;
+
+        SetDebugName( pVulkanContext, pVulkanQueryPool, parameters.m_debugName );
+
+        return pVulkanQueryPool;
     }
 
     void DestroyQueryPool( Context* pContext, QueryPool*&& pQueryPool )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pQueryPool != nullptr )
+        {
+            VulkanContext*   pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanQueryPool* pVulkanQueryPool = static_cast<VulkanQueryPool*>( pQueryPool );
+
+            if ( pVulkanQueryPool->m_queryPool != VK_NULL_HANDLE )
+            {
+                vkDestroyQueryPool( pVulkanContext->m_device, pVulkanQueryPool->m_queryPool, nullptr );
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanQueryPool ) );
+            pQueryPool = nullptr;
+        }
     }
 
     double GetQueryTimestampFrequency( Queue* pQueue )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return 0.0;
+        VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+
+        // **Vulkan reports nanoseconds per tick and Direct3D 12 reports ticks per second**, so
+        // this is the inversion the phase document asks for. A period of 1.0 is one tick per
+        // nanosecond, which is a frequency of 1e9.
+        EE_ASSERT( pVulkanQueue->m_timestampPeriod > 0.0F );
+
+        return 1.0e9 / double( pVulkanQueue->m_timestampPeriod );
     }
 
     //-------------------------------------------------------------------------
@@ -6034,9 +6215,8 @@ namespace EE::Render::RHI
 
     void SetDebugName( Context* pContext, QueryPool* pQueryPool, StringView debugName )
     {
-        // VK_OBJECT_TYPE_QUERY_POOL, once P5.11 defines the VulkanQueryPool that holds the
-        // handle. There is no type to cast to yet.
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanQueryPool* pVulkanQueryPool = static_cast<VulkanQueryPool*>( pQueryPool );
+        SetVulkanObjectName( static_cast<VulkanContext*>( pContext ), VK_OBJECT_TYPE_QUERY_POOL, uint64_t( pVulkanQueryPool->m_queryPool ), debugName );
     }
 
     void SetDebugName( Context* pContext, Buffer* pBuffer, StringView debugName )
