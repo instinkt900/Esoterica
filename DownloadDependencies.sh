@@ -82,6 +82,26 @@ requirements_meshoptimizer()
     require_command ninja ninja-build
 }
 
+# The Vulkan loader and headers are not fetched here. Every target distribution packages them,
+# they carry an ICD loader that has to match the installed drivers, and a source build of the
+# loader would fight that. libvulkan-dev is the dependency; External/ holds only what sits on
+# top of it.
+requirements_vma()
+{
+    require_header /usr/include/vulkan/vulkan.h libvulkan-dev
+}
+
+requirements_spirv_reflect()
+{
+    require_command cc build-essential
+    require_command ar binutils
+}
+
+requirements_renderdoc()
+{
+    require_command curl curl
+}
+
 requirements_ixwebsocket()
 {
     require_command cmake cmake
@@ -531,9 +551,108 @@ fetch_ctt()
     info "ctt installed"
 }
 
+# VulkanMemoryAllocator. The Vulkan equivalent of D3D12MemoryAllocator, which upstream vendors
+# under Code/Base/ThirdParty and Exclusions.txt drops on Linux. Conventions rule 5 forbids
+# vendoring the replacement next to it, so it arrives here instead.
+#
+# Header only: one 20k-line header with the implementation behind VMA_IMPLEMENTATION, which
+# exactly one translation unit in the Vulkan backend defines. Nothing is built here.
+VMA_REPO="https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git"
+VMA_TAG="v3.4.0"
+
+fetch_vma()
+{
+    local target="${EXTERNAL_DIR}/VMA"
+
+    if [[ -f "${target}/include/vk_mem_alloc.h" ]]
+    then
+        info "VMA already present"
+        return
+    fi
+
+    info "fetching VMA ${VMA_TAG}"
+    rm -rf "${target}.src"
+    git clone -q --depth 1 --branch "${VMA_TAG}" "${VMA_REPO}" "${target}.src"
+
+    mkdir -p "${target}/include"
+    cp "${target}.src/include/vk_mem_alloc.h" "${target}/include/"
+
+    rm -rf "${target}.src"
+    info "VMA installed"
+}
+
+# SPIRV-Reflect. Replaces ID3D12ShaderReflection, which RHI_Direct3D12.cpp calls in
+# ExtractReflection (:1003) to read bound resources, constant buffer variables and the thread
+# group size out of compiled bytecode. The Vulkan backend needs the same information from
+# SPIR-V, in CreateShader and CreateRootSignature.
+#
+# The layout mirrors the source tree rather than a conventional include/ prefix, because
+# spirv_reflect.h includes "./include/spirv/unified1/spirv.h" relative to itself. Moving the
+# header would need -DSPIRV_REFLECT_USE_SYSTEM_SPIRV_H and a system SPIR-V headers package.
+#
+# Built with cc and ar rather than its CMake, which is three lines of CMake option guessing for
+# one C file.
+SPIRV_REFLECT_REPO="https://github.com/KhronosGroup/SPIRV-Reflect.git"
+SPIRV_REFLECT_TAG="vulkan-sdk-1.4.357.0"
+
+fetch_spirv_reflect()
+{
+    local target="${EXTERNAL_DIR}/SPIRV-Reflect"
+
+    if [[ -f "${target}/lib/libspirv-reflect.a" && -f "${target}/spirv_reflect.h" ]]
+    then
+        info "SPIRV-Reflect already present"
+        return
+    fi
+
+    info "fetching SPIRV-Reflect ${SPIRV_REFLECT_TAG}"
+    rm -rf "${target}.src"
+    git clone -q --depth 1 --branch "${SPIRV_REFLECT_TAG}" "${SPIRV_REFLECT_REPO}" "${target}.src"
+
+    info "building SPIRV-Reflect"
+    # -fPIC because Esoterica.Base is a .so, and a static library linked into one has to be
+    # position independent.
+    cc -c -O2 -fPIC -o "${target}.src/spirv_reflect.o" "${target}.src/spirv_reflect.c"
+    ar rcs "${target}.src/libspirv-reflect.a" "${target}.src/spirv_reflect.o"
+
+    mkdir -p "${target}/lib" "${target}/include/spirv/unified1"
+    cp "${target}.src/spirv_reflect.h" "${target}/"
+    cp "${target}.src/include/spirv/unified1/spirv.h" "${target}/include/spirv/unified1/"
+    cp "${target}.src/libspirv-reflect.a" "${target}/lib/"
+
+    rm -rf "${target}.src"
+    info "SPIRV-Reflect installed"
+}
+
+# RenderDoc's in-application API header. RHI_Direct3D12.cpp includes <renderdoc_app.h> and calls
+# StartFrameCapture and EndFrameCapture through it, and RenderDoc.props points at
+# External/RenderDoc, so the Vulkan backend needs the header in the same place.
+#
+# One header, fetched with curl. The renderdoc repository is a full GUI application; a clone of
+# it for one file would be a gigabyte. Nothing is linked: the library is found at runtime with
+# dlopen( "librenderdoc.so" ).
+RENDERDOC_TAG="v1.45"
+RENDERDOC_URL="https://raw.githubusercontent.com/baldurk/renderdoc/${RENDERDOC_TAG}/renderdoc/api/app/renderdoc_app.h"
+
+fetch_renderdoc()
+{
+    local target="${EXTERNAL_DIR}/RenderDoc"
+
+    if [[ -f "${target}/renderdoc_app.h" ]]
+    then
+        info "RenderDoc header already present"
+        return
+    fi
+
+    info "fetching RenderDoc header ${RENDERDOC_TAG}"
+    mkdir -p "${target}"
+    curl -fL --no-progress-meter -o "${target}/renderdoc_app.h" "${RENDERDOC_URL}"
+    info "RenderDoc header installed"
+}
+
 #-------------------------------------------------------------------------
 
-ALL_DEPENDENCIES=( optick meshoptimizer ctt ixwebsocket gamenetworkingsockets directx_headers dxc llvm )
+ALL_DEPENDENCIES=( optick meshoptimizer ctt ixwebsocket gamenetworkingsockets directx_headers dxc llvm vma spirv_reflect renderdoc )
 
 list_dependencies()
 {
@@ -550,6 +669,9 @@ list_dependencies()
             ixwebsocket)            [[ -f "${EXTERNAL_DIR}/ixwebsocket/include/ixwebsocket/IXWebSocket.h" ]] && status="ready" ;;
             gamenetworkingsockets)  [[ -f "${EXTERNAL_DIR}/GameNetworkingSockets/include/GameNetworkingSockets/steam/steamnetworkingsockets.h" ]] && status="ready" ;;
             llvm)                   [[ -f "${EXTERNAL_DIR}/LLVM/bin/llvm-config" ]] && status="ready ($( "${EXTERNAL_DIR}/LLVM/bin/llvm-config" --version ))" ;;
+            vma)                    [[ -f "${EXTERNAL_DIR}/VMA/include/vk_mem_alloc.h" ]] && status="ready (${VMA_TAG})" ;;
+            spirv_reflect)          [[ -f "${EXTERNAL_DIR}/SPIRV-Reflect/lib/libspirv-reflect.a" ]] && status="ready (${SPIRV_REFLECT_TAG})" ;;
+            renderdoc)              [[ -f "${EXTERNAL_DIR}/RenderDoc/renderdoc_app.h" ]] && status="ready (${RENDERDOC_TAG})" ;;
         esac
         printf '%-24s %s\n' "${name}" "${status}"
     done
@@ -583,6 +705,9 @@ main()
             ixwebsocket)            fetch_ixwebsocket ;;
             gamenetworkingsockets)  fetch_gamenetworkingsockets ;;
             llvm)                   fetch_llvm ;;
+            vma)                    fetch_vma ;;
+            spirv_reflect)          fetch_spirv_reflect ;;
+            renderdoc)              fetch_renderdoc ;;
             *)                      fail "unknown dependency \"${name}\". Try --list." ;;
         esac
     done
