@@ -14,16 +14,20 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 answered: the plain loader, not `volk`. **P5.1 to P5.10 are all written and have never been
 run.**
 
-**Which of the 16 groups are real: P5.1 to P5.12, all unverified.** That is twelve of the
-sixteen. P5.7 covers graphics and compute pipelines, with mesh and raytracing left to P5.14 and
-P5.16. **The four that are not real are P5.13, which cannot be, and P5.14, P5.15 and P5.16, which
-are the optional feature groups.** Phase 5's own note says this count is the single most important
-piece of state, so it leads this section.
+**Which of the 16 groups are real: P5.1 to P5.12 and P5.14, all unverified.** That is thirteen of
+the sixteen. P5.7 covers graphics and compute pipelines, with raytracing left to P5.16. **The three
+that are not real are P5.13, which cannot be, and P5.15 and P5.16, which nothing uses.** Phase 5's
+own note says this count is the single most important piece of state, so it leads this section.
 
-**13 `EE_UNIMPLEMENTED_FUNCTION` remain, and every one is accounted for**: six are P5.16
-raytracing, three are P5.14 mesh shaders, one is P5.15 variable rate shading, one is the indirect
-refusal from open question 7, and two are markers rather than functions - the custom sampler
-border colour and the static-sampler path.
+**10 `EE_UNIMPLEMENTED_FUNCTION` remain, and every one is accounted for**: six are P5.16
+raytracing, one is P5.15 variable rate shading, one is the indirect refusal from open question 7,
+and two are markers rather than functions - the custom sampler border colour and the
+static-sampler path.
+
+**Neither GPU in this development machine supports mesh shaders**, so the engine's debug draw
+cannot run here. `VK_EXT_mesh_shader` is present only on `llvmpipe`, the software rasteriser. The
+Intel UHD 620 and the NVIDIA MX250 both lack it, and both would lack it on Direct3D 12 as well, so
+this is the hardware being below the engine's bar rather than a port problem. See the P5.14 entry.
 
 **The frame cannot draw, and closing that needs a decision nobody has made yet.** Every render
 pass is built on `CmdExecuteIndirect` - `RenderPass_ForwardShading` uses it six times,
@@ -111,7 +115,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.12 written, never run**, and P5.13 is half written. 13 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and all 13 belong to P5.14, P5.15, P5.16 or open question 7. **12 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 to P5.12 and P5.14 written, never run**, and P5.13 is half written. 10 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and all 10 belong to P5.15, P5.16 or open question 7. **13 of the 16 groups are real, all unverified.** P5.13 is not one of them: no engine call site takes the path it implements |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -124,16 +128,17 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.11-query-pools`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+**Phase 5, on `linux/p5.14-mesh-shaders`.** Stacked: `p5.0-vulkan-deps` (PR #24),
 `p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
 `p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
 `p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34),
-`p5.3-swapchain` (#35), `p5.13-indirect-draws` (#36), `p5.12-debug-utilities` (#37), then this.
-None merged yet. Nothing has run any of it.
+`p5.3-swapchain` (#35), `p5.13-indirect-draws` (#36), `p5.12-debug-utilities` (#37),
+`p5.11-query-pools` (#38), then this. None merged yet. Nothing has run any of it.
 
-**Every group the engine's frame uses is now written.** What is left is P5.14 mesh shaders, which
-`RenderPass_DebugDraw` does use, P5.15 variable rate shading, which nothing uses, and P5.16
-raytracing, which nothing uses. P5.14 is therefore the next one that matters.
+**Every group the engine's frame uses is now written.** What is left is P5.15 variable rate
+shading and P5.16 raytracing, and **the engine calls neither**. `CmdSetShadingRate` is only
+reached once `FillDeviceCapabilities` stops reporting `ShadingRate::NotSupported`, which the
+Direct3D 12 backend also reports, and nothing anywhere creates an acceleration structure.
 
 **Open question 7 blocks the frame and is not scheduled.** It is the indirect-draw decision
 described above and in the P5.13 entry. **No amount of further Phase 5 work moves past it**, so it
@@ -180,6 +185,83 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P5.14 Mesh shaders. No GPU in this machine has them
+
+**`CmdDispatchMesh`, the mesh `CreatePipeline` overload and the indirect mesh path are
+implemented.** 10 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 13. Nothing has run.
+
+#### The finding that matters more than the code
+
+**Neither real GPU in this development machine supports `VK_EXT_mesh_shader`.** `vulkaninfo`
+reports it on `llvmpipe` alone, the software rasteriser. The Intel UHD 620 and the NVIDIA MX250
+both lack it.
+
+That is not a port problem. Both are below the hardware bar for mesh shaders on Direct3D 12 too,
+so the engine's debug draw would fail on Windows on this machine as well. It does mean **the debug
+draw path cannot be verified here**, and whoever first runs a development build on this machine
+will hit the assert in `CmdDispatchMesh`.
+
+#### Optional, not required, and that is a decision
+
+Every other capability the backend needs is in `g_requiredDeviceExtensions`, and a device missing
+one is refused at `CreateContext` with the extension named. Mesh shaders are not, for one reason:
+**the engine has no capability flag for them and no fallback path.** `RenderPass_DebugDraw` calls
+`CmdDispatchMesh` outright, `RHI.h` has no mesh shader field in `DeviceCapabilities`, and nothing
+anywhere asks whether they exist. Direct3D 12 simply assumes the hardware has them.
+
+Requiring the extension would refuse a device the rest of the engine renders on perfectly well,
+which is exactly the situation this machine is in. So the extension is asked for when present,
+`CreateContext` logs a warning when it is missing, and every use asserts.
+
+#### A mesh dispatch is a draw
+
+`CmdDispatchMesh` calls `PrepareDraw`, not the flush-and-suspend pair `CmdDispatchCompute` uses.
+`DispatchMesh` is Direct3D's name for it; it rasterises, it runs inside a render pass, and leaving
+the pass for it would be wrong.
+
+#### One pipeline body for two overloads
+
+`MeshPipelineParameters` derives from `GraphicsPipelineParameters` and adds nothing, and Vulkan
+builds both with `vkCreateGraphicsPipelines`. The whole delta is which shader stages are wanted
+and whether there is an input assembler, so `CreateGraphicsOrMeshPipeline` takes a flag and both
+overloads call it. A second copy of two hundred lines of blend, depth, raster and dynamic
+rendering state would only be a place for the two to drift apart.
+
+`pVertexInputState` and `pInputAssemblyState` are null on a mesh pipeline. There is no input
+assembler in front of a mesh shader, and the spec says to leave both out.
+
+#### A barrier correction that P5.9 flagged and could not make
+
+`VulkanPipelineStage` mapped `PipelineStage::NonPixelShader` and `AllShader` onto every shader
+stage **except task and mesh**, because naming a stage from a disabled extension is a validation
+error. Now that the extension is conditionally enabled, both bits go in when it is.
+
+**Without them a barrier before a mesh draw would not cover the stage that reads the result**,
+which is a silent wrong-data bug rather than a validation one. `VulkanPipelineStage` is handed
+flags and no `Context`, so the answer is a file static, `g_meshShaderEnabled`, set by
+`CreateContext` and cleared by `DestroyContext`. One context at a time, which is what the engine
+creates, and the same shape the leak counters already use.
+
+#### Verified, in the only sense available
+
+- All eight Linux targets that are supposed to build compile and link. `Checks.py` passes.
+  `Applications/Editor` and `Applications/ResourceServer` still fail on the same five Phase 7
+  errors, unchanged.
+- 111 `vk*` symbols resolve against `libvulkan.so.1`, none unresolved. The count is unchanged on
+  purpose: all three mesh entry points are extension functions looked up through
+  `vkGetDeviceProcAddr`.
+- The new code adds no compiler warning.
+- `vulkaninfo` was read for the mesh shader support on both GPUs in this machine, rather than
+  assumed.
+
+#### Not verified
+
+No mesh shader compiled into a pipeline, no mesh draw issued, and **it cannot be verified on this
+machine at all**. The first hardware with `VK_EXT_mesh_shader` should check the debug draw pass
+before anything else, because it is the only consumer.
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.11 Query pools
 
