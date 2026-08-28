@@ -1,0 +1,1010 @@
+# 34 generated files
+file: BilateralUpsample.cpp
+file: BucketResolve.cpp
+file: ClusterCulling.cpp
+file: ComplexSurfacePBR.cpp
+file: ComplexSurfacePBR.parameters.h
+file: CubemapDownsample.cpp
+file: DebugDraw.cpp
+file: DebugDrawMesh.cpp
+file: DebugDrawResolve.cpp
+file: DefaultColorOnlyPBR.cpp
+file: DefaultColorOnlyPBR.parameters.h
+file: DefaultPBR.cpp
+file: DefaultPBR.parameters.h
+file: Denoise.cpp
+file: Downsample.cpp
+file: Imgui.cpp
+file: InstanceCulling.cpp
+file: InstancePickingResolve.cpp
+file: IrradianceFiltering.cpp
+file: LightCulling_CullLights.cpp
+file: MainPass.cpp
+file: OITResolve.cpp
+file: Placeholder.cpp
+file: Placeholder.parameters.h
+file: PostProcess.cpp
+file: PrecomputeDFG.cpp
+file: PrefilterDepth.cpp
+file: RadianceFiltering.cpp
+file: SMAA_BlendingWeightCalculation.cpp
+file: SMAA_EdgeDetection.cpp
+file: SMAA_NeighborhoodBlending.cpp
+file: ShaderRegistration.cpp
+file: ShaderRegistration.h
+file: WorldUpdate.cpp
+
+===== BilateralUpsample.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_BilateralUpsample_VS[] =
+{
+static char const g_byteCode_BilateralUpsample_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_BilateralUpsample( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_BilateralUpsample_VS, g_byteCode_BilateralUpsample_VS_decompressedSize, g_byteCode_BilateralUpsample_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_BilateralUpsample_PS, g_byteCode_BilateralUpsample_PS_decompressedSize, g_byteCode_BilateralUpsample_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "BilateralUpsample" ), shaderByteCodeParameters ) );
+}
+}
+
+===== BucketResolve.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_BucketResolve_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_BucketResolve( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_BucketResolve_CS, g_byteCode_BucketResolve_CS_decompressedSize, g_byteCode_BucketResolve_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "BucketResolve" ), shaderByteCodeParameters ) );
+}
+}
+
+===== ClusterCulling.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_ClusterCulling_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_ClusterCulling( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_ClusterCulling_CS, g_byteCode_ClusterCulling_CS_decompressedSize, g_byteCode_ClusterCulling_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "ClusterCulling" ), shaderByteCodeParameters ) );
+}
+}
+
+===== ComplexSurfacePBR.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_ComplexSurfacePBR_MS[] =
+{
+static char const g_byteCode_ComplexSurfacePBR_PS_Default[] =
+{
+static char const g_byteCode_ComplexSurfacePBR_PS_AlphaTest[] =
+{
+static char const g_byteCode_ComplexSurfacePBR_PS_DepthOnly_AlphaTest[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_ComplexSurfacePBR( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Mesh, StringID( "MS" ), g_byteCode_ComplexSurfacePBR_MS, g_byteCode_ComplexSurfacePBR_MS_decompressedSize, g_byteCode_ComplexSurfacePBR_MS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_Default" ), g_byteCode_ComplexSurfacePBR_PS_Default, g_byteCode_ComplexSurfacePBR_PS_Default_decompressedSize, g_byteCode_ComplexSurfacePBR_PS_Default_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_AlphaTest" ), g_byteCode_ComplexSurfacePBR_PS_AlphaTest, g_byteCode_ComplexSurfacePBR_PS_AlphaTest_decompressedSize, g_byteCode_ComplexSurfacePBR_PS_AlphaTest_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_DepthOnly_AlphaTest" ), g_byteCode_ComplexSurfacePBR_PS_DepthOnly_AlphaTest, g_byteCode_ComplexSurfacePBR_PS_DepthOnly_AlphaTest_decompressedSize, g_byteCode_ComplexSurfacePBR_PS_DepthOnly_AlphaTest_decodedSize ) );
+MaterialShader* pCreatedShader = &materialShaders.emplace_back( MaterialShader( pContextRHI, StringID( "ComplexSurfacePBR" ), shaderByteCodeParameters ) );
+pCreatedShader->m_allowBufferWritesInPixelShader = false;
+pCreatedShader->m_showInResourceEditor = true;
+pCreatedShader->m_parametersStructName = StringID( "CustomParameters" );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "uint" ), StringID( "m_shaderIndex" ), 4, 0 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "TBitFlags<MaterialShaderFlags>" ), StringID( "m_shaderFlags" ), 4, 4 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "float" ), StringID( "m_opacity" ), 4, 8 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "m_reservedESF0" ), 4, 12 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "float" ), StringID( "m_emissiveStrength" ), 4, 16 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "SamplerState" ), StringID( "m_textureSamplerLinear" ), 2, 20 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "SamplerState" ), StringID( "m_textureSamplerPoint" ), 2, 22 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "Texture2D" ), StringID( "m_albedoTexture" ), 2, 24 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "Texture2D" ), StringID( "m_pbrTexture" ), 2, 26 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "Texture2D" ), StringID( "m_normalTexture" ), 2, 28 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "Texture2D" ), StringID( "m_emissiveTexture" ), 2, 30 );
+}
+}
+
+===== ComplexSurfacePBR.parameters.h =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#pragma once
+#include "Base/TypeSystem/ReflectedType.h"
+#include "Base/Types/BitFlags.h"
+#include "Base/Resource/ResourcePtr.h"
+#include "Base/Render/RHI.esh"
+#include "Engine/Render/Shaders/EngineShader.h"
+#include "Engine/Render/RenderTexture.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+struct ComplexSurfacePBRParameters : public IReflectedType
+{
+EE_REFLECT_TYPE( ComplexSurfacePBRParameters );
+public:
+EE_REFLECT();
+TBitFlags<MaterialShaderFlags> m_shaderFlags;
+EE_REFLECT();
+float m_opacity = 1.0F;
+EE_REFLECT();
+float m_emissiveStrength = 0.0F;
+EE_REFLECT();
+TResourcePtr<TextureResource> m_albedoTexture = ResourceID( "data://Render/Textures/DefaultColor.texture" );
+EE_REFLECT();
+TResourcePtr<TextureResource> m_pbrTexture = ResourceID( "data://Render/Textures/DefaultColor.texture" );
+EE_REFLECT();
+TResourcePtr<TextureResource> m_normalTexture = ResourceID( "data://Render/Textures/DefaultNormal.texture" );
+EE_REFLECT();
+TResourcePtr<TextureResource> m_emissiveTexture = ResourceID( "data://Render/Textures/DefaultBlack.texture" );
+};
+}
+
+===== CubemapDownsample.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_CubemapDownsample_VS[] =
+{
+static char const g_byteCode_CubemapDownsample_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_CubemapDownsample( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_CubemapDownsample_VS, g_byteCode_CubemapDownsample_VS_decompressedSize, g_byteCode_CubemapDownsample_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_CubemapDownsample_PS, g_byteCode_CubemapDownsample_PS_decompressedSize, g_byteCode_CubemapDownsample_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "CubemapDownsample" ), shaderByteCodeParameters ) );
+}
+}
+
+===== DebugDraw.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_DebugDraw_MS[] =
+{
+static char const g_byteCode_DebugDraw_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_DebugDraw( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Mesh, StringID( "MS" ), g_byteCode_DebugDraw_MS, g_byteCode_DebugDraw_MS_decompressedSize, g_byteCode_DebugDraw_MS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_DebugDraw_PS, g_byteCode_DebugDraw_PS_decompressedSize, g_byteCode_DebugDraw_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "DebugDraw" ), shaderByteCodeParameters ) );
+}
+}
+
+===== DebugDrawMesh.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_DebugDrawMesh_MS[] =
+{
+static char const g_byteCode_DebugDrawMesh_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_DebugDrawMesh( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Mesh, StringID( "MS" ), g_byteCode_DebugDrawMesh_MS, g_byteCode_DebugDrawMesh_MS_decompressedSize, g_byteCode_DebugDrawMesh_MS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_DebugDrawMesh_PS, g_byteCode_DebugDrawMesh_PS_decompressedSize, g_byteCode_DebugDrawMesh_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "DebugDrawMesh" ), shaderByteCodeParameters ) );
+}
+}
+
+===== DebugDrawResolve.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_DebugDrawResolve_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_DebugDrawResolve( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_DebugDrawResolve_CS, g_byteCode_DebugDrawResolve_CS_decompressedSize, g_byteCode_DebugDrawResolve_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "DebugDrawResolve" ), shaderByteCodeParameters ) );
+}
+}
+
+===== DefaultColorOnlyPBR.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_DefaultColorOnlyPBR_MS[] =
+{
+static char const g_byteCode_DefaultColorOnlyPBR_PS_Default[] =
+{
+static char const g_byteCode_DefaultColorOnlyPBR_PS_AlphaTest[] =
+{
+static char const g_byteCode_DefaultColorOnlyPBR_PS_DepthOnly_AlphaTest[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_DefaultColorOnlyPBR( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Mesh, StringID( "MS" ), g_byteCode_DefaultColorOnlyPBR_MS, g_byteCode_DefaultColorOnlyPBR_MS_decompressedSize, g_byteCode_DefaultColorOnlyPBR_MS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_Default" ), g_byteCode_DefaultColorOnlyPBR_PS_Default, g_byteCode_DefaultColorOnlyPBR_PS_Default_decompressedSize, g_byteCode_DefaultColorOnlyPBR_PS_Default_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_AlphaTest" ), g_byteCode_DefaultColorOnlyPBR_PS_AlphaTest, g_byteCode_DefaultColorOnlyPBR_PS_AlphaTest_decompressedSize, g_byteCode_DefaultColorOnlyPBR_PS_AlphaTest_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_DepthOnly_AlphaTest" ), g_byteCode_DefaultColorOnlyPBR_PS_DepthOnly_AlphaTest, g_byteCode_DefaultColorOnlyPBR_PS_DepthOnly_AlphaTest_decompressedSize, g_byteCode_DefaultColorOnlyPBR_PS_DepthOnly_AlphaTest_decodedSize ) );
+MaterialShader* pCreatedShader = &materialShaders.emplace_back( MaterialShader( pContextRHI, StringID( "DefaultColorOnlyPBR" ), shaderByteCodeParameters ) );
+pCreatedShader->m_allowBufferWritesInPixelShader = false;
+pCreatedShader->m_showInResourceEditor = true;
+pCreatedShader->m_parametersStructName = StringID( "CustomParameters" );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "uint" ), StringID( "m_shaderIndex" ), 4, 0 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "TBitFlags<MaterialShaderFlags>" ), StringID( "m_shaderFlags" ), 4, 4 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "float" ), StringID( "m_opacity" ), 4, 8 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "m_reservedESF0" ), 4, 12 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "Color" ), StringID( "m_albedoColor" ), 4, 16 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "Color" ), StringID( "m_emissiveColor" ), 4, 20 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "float" ), StringID( "m_roughness" ), 4, 24 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "float" ), StringID( "m_metalness" ), 4, 28 );
+}
+}
+
+===== DefaultColorOnlyPBR.parameters.h =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#pragma once
+#include "Base/TypeSystem/ReflectedType.h"
+#include "Base/Types/BitFlags.h"
+#include "Base/Resource/ResourcePtr.h"
+#include "Base/Render/RHI.esh"
+#include "Engine/Render/Shaders/EngineShader.h"
+#include "Engine/Render/RenderTexture.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+struct DefaultColorOnlyPBRParameters : public IReflectedType
+{
+EE_REFLECT_TYPE( DefaultColorOnlyPBRParameters );
+public:
+EE_REFLECT();
+TBitFlags<MaterialShaderFlags> m_shaderFlags;
+EE_REFLECT();
+float m_opacity = 1.0F;
+EE_REFLECT();
+Color m_albedoColor;
+EE_REFLECT();
+Color m_emissiveColor;
+EE_REFLECT();
+float m_roughness;
+EE_REFLECT();
+float m_metalness;
+};
+}
+
+===== DefaultPBR.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_DefaultPBR_MS[] =
+{
+static char const g_byteCode_DefaultPBR_PS_Default[] =
+{
+static char const g_byteCode_DefaultPBR_PS_AlphaTest[] =
+{
+static char const g_byteCode_DefaultPBR_PS_DepthOnly_AlphaTest[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_DefaultPBR( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Mesh, StringID( "MS" ), g_byteCode_DefaultPBR_MS, g_byteCode_DefaultPBR_MS_decompressedSize, g_byteCode_DefaultPBR_MS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_Default" ), g_byteCode_DefaultPBR_PS_Default, g_byteCode_DefaultPBR_PS_Default_decompressedSize, g_byteCode_DefaultPBR_PS_Default_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_AlphaTest" ), g_byteCode_DefaultPBR_PS_AlphaTest, g_byteCode_DefaultPBR_PS_AlphaTest_decompressedSize, g_byteCode_DefaultPBR_PS_AlphaTest_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_DepthOnly_AlphaTest" ), g_byteCode_DefaultPBR_PS_DepthOnly_AlphaTest, g_byteCode_DefaultPBR_PS_DepthOnly_AlphaTest_decompressedSize, g_byteCode_DefaultPBR_PS_DepthOnly_AlphaTest_decodedSize ) );
+MaterialShader* pCreatedShader = &materialShaders.emplace_back( MaterialShader( pContextRHI, StringID( "DefaultPBR" ), shaderByteCodeParameters ) );
+pCreatedShader->m_allowBufferWritesInPixelShader = false;
+pCreatedShader->m_showInResourceEditor = true;
+pCreatedShader->m_parametersStructName = StringID( "CustomParameters" );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "uint" ), StringID( "m_shaderIndex" ), 4, 0 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "TBitFlags<MaterialShaderFlags>" ), StringID( "m_shaderFlags" ), 4, 4 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "float" ), StringID( "m_opacity" ), 4, 8 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "m_reservedESF0" ), 4, 12 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "SamplerState" ), StringID( "m_textureSamplerLinear" ), 2, 16 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "Texture2D" ), StringID( "m_albedoTexture" ), 2, 18 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "esf_parameter_padding0" ), 4, 20 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "esf_parameter_padding1" ), 4, 24 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "esf_parameter_padding2" ), 4, 28 );
+}
+}
+
+===== DefaultPBR.parameters.h =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#pragma once
+#include "Base/TypeSystem/ReflectedType.h"
+#include "Base/Types/BitFlags.h"
+#include "Base/Resource/ResourcePtr.h"
+#include "Base/Render/RHI.esh"
+#include "Engine/Render/Shaders/EngineShader.h"
+#include "Engine/Render/RenderTexture.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+struct DefaultPBRParameters : public IReflectedType
+{
+EE_REFLECT_TYPE( DefaultPBRParameters );
+public:
+EE_REFLECT();
+TBitFlags<MaterialShaderFlags> m_shaderFlags;
+EE_REFLECT();
+float m_opacity = 1.0F;
+EE_REFLECT();
+TResourcePtr<TextureResource> m_albedoTexture = ResourceID( "data://Render/Textures/DefaultColor.texture" );
+};
+}
+
+===== Denoise.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_Denoise_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_Denoise( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_Denoise_CS, g_byteCode_Denoise_CS_decompressedSize, g_byteCode_Denoise_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "Denoise" ), shaderByteCodeParameters ) );
+}
+}
+
+===== Downsample.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_Downsample_VS[] =
+{
+static char const g_byteCode_Downsample_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_Downsample( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_Downsample_VS, g_byteCode_Downsample_VS_decompressedSize, g_byteCode_Downsample_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_Downsample_PS, g_byteCode_Downsample_PS_decompressedSize, g_byteCode_Downsample_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "Downsample" ), shaderByteCodeParameters ) );
+}
+}
+
+===== Imgui.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_Imgui_VS[] =
+{
+static char const g_byteCode_Imgui_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_Imgui( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_Imgui_VS, g_byteCode_Imgui_VS_decompressedSize, g_byteCode_Imgui_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_Imgui_PS, g_byteCode_Imgui_PS_decompressedSize, g_byteCode_Imgui_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "Imgui" ), shaderByteCodeParameters ) );
+}
+}
+
+===== InstanceCulling.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_InstanceCulling_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_InstanceCulling( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_InstanceCulling_CS, g_byteCode_InstanceCulling_CS_decompressedSize, g_byteCode_InstanceCulling_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "InstanceCulling" ), shaderByteCodeParameters ) );
+}
+}
+
+===== InstancePickingResolve.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_InstancePickingResolve_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_InstancePickingResolve( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_InstancePickingResolve_CS, g_byteCode_InstancePickingResolve_CS_decompressedSize, g_byteCode_InstancePickingResolve_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "InstancePickingResolve" ), shaderByteCodeParameters ) );
+}
+}
+
+===== IrradianceFiltering.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_IrradianceFiltering_VS[] =
+{
+static char const g_byteCode_IrradianceFiltering_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_IrradianceFiltering( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_IrradianceFiltering_VS, g_byteCode_IrradianceFiltering_VS_decompressedSize, g_byteCode_IrradianceFiltering_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_IrradianceFiltering_PS, g_byteCode_IrradianceFiltering_PS_decompressedSize, g_byteCode_IrradianceFiltering_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "IrradianceFiltering" ), shaderByteCodeParameters ) );
+}
+}
+
+===== LightCulling_CullLights.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_LightCulling_CullLights_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_LightCulling_CullLights( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_LightCulling_CullLights_CS, g_byteCode_LightCulling_CullLights_CS_decompressedSize, g_byteCode_LightCulling_CullLights_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "LightCulling_CullLights" ), shaderByteCodeParameters ) );
+}
+}
+
+===== MainPass.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_MainPass_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_MainPass( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_MainPass_CS, g_byteCode_MainPass_CS_decompressedSize, g_byteCode_MainPass_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "MainPass" ), shaderByteCodeParameters ) );
+}
+}
+
+===== OITResolve.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_OITResolve_VS[] =
+{
+static char const g_byteCode_OITResolve_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_OITResolve( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_OITResolve_VS, g_byteCode_OITResolve_VS_decompressedSize, g_byteCode_OITResolve_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_OITResolve_PS, g_byteCode_OITResolve_PS_decompressedSize, g_byteCode_OITResolve_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "OITResolve" ), shaderByteCodeParameters ) );
+}
+}
+
+===== Placeholder.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_Placeholder_MS[] =
+{
+static char const g_byteCode_Placeholder_PS_Default[] =
+{
+static char const g_byteCode_Placeholder_PS_AlphaTest[] =
+{
+static char const g_byteCode_Placeholder_PS_DepthOnly_AlphaTest[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_Placeholder( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Mesh, StringID( "MS" ), g_byteCode_Placeholder_MS, g_byteCode_Placeholder_MS_decompressedSize, g_byteCode_Placeholder_MS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_Default" ), g_byteCode_Placeholder_PS_Default, g_byteCode_Placeholder_PS_Default_decompressedSize, g_byteCode_Placeholder_PS_Default_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_AlphaTest" ), g_byteCode_Placeholder_PS_AlphaTest, g_byteCode_Placeholder_PS_AlphaTest_decompressedSize, g_byteCode_Placeholder_PS_AlphaTest_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS_DepthOnly_AlphaTest" ), g_byteCode_Placeholder_PS_DepthOnly_AlphaTest, g_byteCode_Placeholder_PS_DepthOnly_AlphaTest_decompressedSize, g_byteCode_Placeholder_PS_DepthOnly_AlphaTest_decodedSize ) );
+MaterialShader* pCreatedShader = &materialShaders.emplace_back( MaterialShader( pContextRHI, StringID( "Placeholder" ), shaderByteCodeParameters ) );
+pCreatedShader->m_allowBufferWritesInPixelShader = false;
+pCreatedShader->m_showInResourceEditor = true;
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "uint" ), StringID( "m_shaderIndex" ), 4, 0 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "TBitFlags<MaterialShaderFlags>" ), StringID( "m_shaderFlags" ), 4, 4 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "float" ), StringID( "m_opacity" ), 4, 8 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "m_reservedESF0" ), 4, 12 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "esf_parameter_padding0" ), 4, 16 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "esf_parameter_padding1" ), 4, 20 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "esf_parameter_padding2" ), 4, 24 );
+pCreatedShader->m_parameterInfo.emplace_back( StringID( "esf_padding_t" ), StringID( "esf_parameter_padding3" ), 4, 28 );
+}
+}
+
+===== Placeholder.parameters.h =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#pragma once
+#include "Base/TypeSystem/ReflectedType.h"
+#include "Base/Types/BitFlags.h"
+#include "Base/Resource/ResourcePtr.h"
+#include "Base/Render/RHI.esh"
+#include "Engine/Render/Shaders/EngineShader.h"
+#include "Engine/Render/RenderTexture.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+struct PlaceholderParameters : public IReflectedType
+{
+EE_REFLECT_TYPE( PlaceholderParameters );
+public:
+EE_REFLECT();
+TBitFlags<MaterialShaderFlags> m_shaderFlags;
+EE_REFLECT();
+float m_opacity = 1.0F;
+};
+}
+
+===== PostProcess.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_PostProcess_VS[] =
+{
+static char const g_byteCode_PostProcess_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_PostProcess( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_PostProcess_VS, g_byteCode_PostProcess_VS_decompressedSize, g_byteCode_PostProcess_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_PostProcess_PS, g_byteCode_PostProcess_PS_decompressedSize, g_byteCode_PostProcess_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "PostProcess" ), shaderByteCodeParameters ) );
+}
+}
+
+===== PrecomputeDFG.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_PrecomputeDFG_VS[] =
+{
+static char const g_byteCode_PrecomputeDFG_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_PrecomputeDFG( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_PrecomputeDFG_VS, g_byteCode_PrecomputeDFG_VS_decompressedSize, g_byteCode_PrecomputeDFG_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_PrecomputeDFG_PS, g_byteCode_PrecomputeDFG_PS_decompressedSize, g_byteCode_PrecomputeDFG_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "PrecomputeDFG" ), shaderByteCodeParameters ) );
+}
+}
+
+===== PrefilterDepth.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_PrefilterDepth_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_PrefilterDepth( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_PrefilterDepth_CS, g_byteCode_PrefilterDepth_CS_decompressedSize, g_byteCode_PrefilterDepth_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "PrefilterDepth" ), shaderByteCodeParameters ) );
+}
+}
+
+===== RadianceFiltering.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_RadianceFiltering_VS[] =
+{
+static char const g_byteCode_RadianceFiltering_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_RadianceFiltering( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_RadianceFiltering_VS, g_byteCode_RadianceFiltering_VS_decompressedSize, g_byteCode_RadianceFiltering_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_RadianceFiltering_PS, g_byteCode_RadianceFiltering_PS_decompressedSize, g_byteCode_RadianceFiltering_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "RadianceFiltering" ), shaderByteCodeParameters ) );
+}
+}
+
+===== SMAA_BlendingWeightCalculation.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_SMAA_BlendingWeightCalculation_VS[] =
+{
+static char const g_byteCode_SMAA_BlendingWeightCalculation_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_SMAA_BlendingWeightCalculation( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_SMAA_BlendingWeightCalculation_VS, g_byteCode_SMAA_BlendingWeightCalculation_VS_decompressedSize, g_byteCode_SMAA_BlendingWeightCalculation_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_SMAA_BlendingWeightCalculation_PS, g_byteCode_SMAA_BlendingWeightCalculation_PS_decompressedSize, g_byteCode_SMAA_BlendingWeightCalculation_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "SMAA_BlendingWeightCalculation" ), shaderByteCodeParameters ) );
+}
+}
+
+===== SMAA_EdgeDetection.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_SMAA_EdgeDetection_VS[] =
+{
+static char const g_byteCode_SMAA_EdgeDetection_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_SMAA_EdgeDetection( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_SMAA_EdgeDetection_VS, g_byteCode_SMAA_EdgeDetection_VS_decompressedSize, g_byteCode_SMAA_EdgeDetection_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_SMAA_EdgeDetection_PS, g_byteCode_SMAA_EdgeDetection_PS_decompressedSize, g_byteCode_SMAA_EdgeDetection_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "SMAA_EdgeDetection" ), shaderByteCodeParameters ) );
+}
+}
+
+===== SMAA_NeighborhoodBlending.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_SMAA_NeighborhoodBlending_VS[] =
+{
+static char const g_byteCode_SMAA_NeighborhoodBlending_PS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_SMAA_NeighborhoodBlending( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Vertex, StringID( "VS" ), g_byteCode_SMAA_NeighborhoodBlending_VS, g_byteCode_SMAA_NeighborhoodBlending_VS_decompressedSize, g_byteCode_SMAA_NeighborhoodBlending_VS_decodedSize ) );
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Pixel, StringID( "PS" ), g_byteCode_SMAA_NeighborhoodBlending_PS, g_byteCode_SMAA_NeighborhoodBlending_PS_decompressedSize, g_byteCode_SMAA_NeighborhoodBlending_PS_decodedSize ) );
+surfaceShaders.emplace_back( SurfaceShader( pContextRHI, StringID( "SMAA_NeighborhoodBlending" ), shaderByteCodeParameters ) );
+}
+}
+
+===== ShaderRegistration.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#pragma once
+#include "ShaderRegistration.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// Shader Registration
+//-------------------------------------------------------------------------
+void Initialize( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+Register_BilateralUpsample( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_DebugDraw( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_DebugDrawMesh( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_DebugDrawResolve( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_Downsample( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_Denoise( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_MainPass( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_PrefilterDepth( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_ComplexSurfacePBR( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_DefaultPBR( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_Placeholder( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_DefaultColorOnlyPBR( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_OITResolve( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_InstancePickingResolve( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_CubemapDownsample( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_IrradianceFiltering( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_PrecomputeDFG( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_RadianceFiltering( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_PostProcess( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_Imgui( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_BucketResolve( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_ClusterCulling( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_InstanceCulling( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_LightCulling_CullLights( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_WorldUpdate( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_SMAA_BlendingWeightCalculation( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_SMAA_EdgeDetection( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+Register_SMAA_NeighborhoodBlending( pContextRHI, materialShaders, surfaceShaders, computeShaders );
+}
+}
+
+===== ShaderRegistration.h =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#pragma once
+#include "Engine/Render/Shaders/EngineShader.h"
+#include "Base/Render/RHI.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+void Initialize( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+//-------------------------------------------------------------------------
+void Register_BilateralUpsample( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_DebugDraw( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_DebugDrawMesh( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_DebugDrawResolve( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_Downsample( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_Denoise( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_MainPass( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_PrefilterDepth( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_ComplexSurfacePBR( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_DefaultPBR( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_Placeholder( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_DefaultColorOnlyPBR( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_OITResolve( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_InstancePickingResolve( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_CubemapDownsample( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_IrradianceFiltering( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_PrecomputeDFG( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_RadianceFiltering( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_PostProcess( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_Imgui( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_BucketResolve( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_ClusterCulling( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_InstanceCulling( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_LightCulling_CullLights( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_WorldUpdate( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_SMAA_BlendingWeightCalculation( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_SMAA_EdgeDetection( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+void Register_SMAA_NeighborhoodBlending( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders );
+}
+
+===== WorldUpdate.cpp =====
+//-------------------------------------------------------------------------
+// This is an auto-generated file - DO NOT edit
+//-------------------------------------------------------------------------
+#include "Engine/Render/Shaders/EngineShader.h"
+//-------------------------------------------------------------------------
+namespace EE::Render::Shaders
+{
+// LZAV Compressed Byte Code in Base85
+//-------------------------------------------------------------------------
+static char const g_byteCode_WorldUpdate_CS[] =
+{
+// Registration Code
+//-------------------------------------------------------------------------
+void Register_WorldUpdate( RHI::Context* pContextRHI, TVector<MaterialShader>& materialShaders, TVector<SurfaceShader>& surfaceShaders, TVector<ComputeShader>& computeShaders )
+{
+ByteCodeList shaderByteCodeParameters;
+shaderByteCodeParameters.clear();
+shaderByteCodeParameters.emplace_back( RHI::ShaderByteCode( RHI::ShaderStage::Compute, StringID( "CS" ), g_byteCode_WorldUpdate_CS, g_byteCode_WorldUpdate_CS_decompressedSize, g_byteCode_WorldUpdate_CS_decodedSize ) );
+computeShaders.emplace_back( ComputeShader( pContextRHI, StringID( "WorldUpdate" ), shaderByteCodeParameters ) );
+}
+}
