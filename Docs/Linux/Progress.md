@@ -11,10 +11,11 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1 is written and has never been run.**
+answered: the plain loader, not `volk`. **P5.1 and P5.2 are written and have never been run.**
 
-**Which of the 16 groups are real: P5.1 only, and it is unverified.** Phase 5's own note says
-that is the single most important piece of state, so it leads this section.
+**Which of the 16 groups are real: P5.1 and P5.2, both unverified.** P5.2 is complete except
+`QueuePresent`, which cannot be written before P5.3 supplies a swapchain. Phase 5's own note says
+this count is the single most important piece of state, so it leads this section.
 
 **Nothing on Linux can execute an RHI call yet, and that is a deliberate decision.** The engine
 binary does not exist on Linux, and building one is blocked behind all of Phase 6: `BaseModule::
@@ -66,7 +67,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 written, never run**; 95 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. **1 of the 16 groups is real, and it is unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 and P5.2 written, never run**; 87 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. **2 of the 16 groups are real, both unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -79,26 +80,36 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.1-device-context`.** Stacked on `linux/p5.0-vulkan-deps`, which is PR #24
-and not merged yet. P5.1 is written; nothing has run it.
+**Phase 5, on `linux/p5.2-queues-sync`.** Stacked: `p5.0-vulkan-deps` (PR #24), then
+`p5.1-device-context` (PR #25), then this. None merged yet. Nothing has run any of it.
 
-**Next: P5.2, queues and synchronization.** It is the group the phase document says to get right
-first, and P5.1 already chose the queue families that `vkCreateDevice` needed, so P5.2 turns
-`VulkanContext::m_graphicsQueueFamily`, `m_computeQueueFamily` and `m_transferQueueFamily` into
-`Queue` objects. The monotonic counter model in `RHI.h` maps onto timeline semaphores, which the
-device already enables. Read the note at the top of
-[Phase5-VulkanRHI.md](Phases/Phase5-VulkanRHI.md) before writing any of it.
+**Next: P5.4, command pools and buffers.** It is small, it has no decisions in it, and P5.2
+already needed `VulkanCommandBuffer` to exist, so P5.4 extends a struct rather than inventing one.
+After that P5.5 buffers, then P5.7 shaders and pipelines.
 
-`RenderSystem::Initialize` is the order that matters for what to write next. It is straight-line
-with no early exit: `CreateContext`, three `CreateQueue`, `CreateBuffer`, `InitializeShaders`,
-then `CreateCommandPool` and `CreateCommandBuffer` in loops. The first engine run therefore needs
-**P5.1, P5.2, P5.4, P5.5 and P5.7** together. Each group moves the halt one function along.
+`RenderSystem::Initialize` is the order that matters. It is straight-line with no early exit:
+`CreateContext`, three `CreateQueue`, `CreateBuffer`, `InitializeShaders`, then
+`CreateCommandPool` and `CreateCommandBuffer` in loops. The first engine run needs **P5.1, P5.2,
+P5.4, P5.5 and P5.7** together. Two of the five are written.
 
-**P5.6 owes P5.1 something.** `DeviceCapabilities::m_canShaderReadFrom`, `m_canShaderWriteTo` and
-`m_canRenderTargetWriteTo` are left all-false, because filling them needs the complete
-`DataFormat` to `VkFormat` mapping, which is P5.6's largest piece. Fill them there, in the same
-task as the mapping. A second partial mapping here is exactly the disagreement the phase document
-warns corrupts textures in a way that looks like a bug somewhere else.
+**Owed by later groups, recorded so they are not forgotten:**
+
+| Group | What it owes |
+|---|---|
+| P5.3 | `QueuePresent`, which is still a stub. `VkPresentInfoKHR` takes binary semaphores only, so the swapchain has to carry one per image, the submit before the present must signal it next to the timeline value, and the present waits on it. Acquire needs the mirror of the same thing. |
+| P5.6 | `DeviceCapabilities::m_canShaderReadFrom`, `m_canShaderWriteTo`, `m_canRenderTargetWriteTo`, all left false. Fill them in the same task as the `DataFormat` to `VkFormat` mapping, never separately. |
+| P5.4 | Extends `VulkanCommandBuffer`, which P5.2 defined with the one member `QueueSubmit` needs. |
+| P5.9, P5.12 | Two `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT` sites in `QueueDeviceWait` and `QueueSubmit`, listed below. P5.12 builds its nine `SetDebugName` overloads on `SetVulkanObjectName`, which P5.2 wrote. |
+
+## `ALL_COMMANDS` sites
+
+Phase 5's "do not" list says to record every temporary `ALL_COMMANDS` barrier rather than leave it
+to be found later. Both current sites are in `RHI_Vulkan.cpp`, in P5.2:
+
+| Site | Why it is there | What narrowing it needs |
+|---|---|---|
+| `QueueDeviceWait`, wait `stageMask` | `ID3D12CommandQueue::Wait` blocks the whole queue, and this has to mean the same thing. | Knowledge of what the waiting submit does, which the caller does not pass. |
+| `QueueSubmit`, signal `stageMask` | The signalled timeline value has to mean "everything in this submit finished". | Nothing. `ALL_COMMANDS` is arguably correct here rather than lazy, since that is the semantic. |
 
 ---
 
@@ -114,6 +125,88 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-28 - P5.2 Queues and synchronization. Written, never run
+
+**Eight of the nine P5.2 functions are implemented. `QueuePresent` is not, and cannot be.** 87
+`EE_UNIMPLEMENTED_FUNCTION` remain, down from 95. Nothing has run.
+
+**The monotonic counter is a timeline semaphore, and the mapping is nearly free.** One
+`VK_SEMAPHORE_TYPE_TIMELINE` semaphore per queue. `QueueGetCompletedSemaphore` is
+`vkGetSemaphoreCounterValue`, `QueueHostWait` is `vkWaitSemaphores`, `WaitQueueIdle` is
+`vkQueueWaitIdle`. The phase document calls this the one thing to get right first; it is right
+because `RHI.h` was already written against a counter rather than a fence object.
+
+**The counter starts at 1 and means "the next value to be signalled".** `QueueGetCurrentSemaphore`
+therefore returns a value that has *not* happened yet. That looks wrong and is not: it is exactly
+what `Direct3D12Queue::m_fenceValue` does, initialised to 1 at `RHI_Direct3D12.cpp:2554`, and the
+engine is written against that meaning. The timeline's initial value is 0, which is why both
+backends skip a wait on 0.
+
+**`QueueDeviceWait` is the one real mismatch.** `ID3D12CommandQueue::Wait` is a standalone queue
+operation that blocks everything submitted after it. Vulkan has no such thing: a wait only exists
+attached to a submit. So the wait is recorded on the queue and the next `QueueSubmit` drains it.
+
+The obvious alternative is wrong and worth writing down. Submitting an empty `vkQueueSubmit2`
+carrying only the wait does **not** reproduce the semantics, because submissions on one queue may
+overlap: a wait in submit N does not hold back submit N+1. The pending-wait list does.
+
+A wait with no submit after it is dropped. That is a behaviour difference from Direct3D 12 with no
+observable consequence, since a queue wait that nothing follows cannot be observed.
+
+**P5.1 had to be amended, and the reason is a deadlock.** `CreateContext` previously asked for one
+`VkQueue` per unique family. On a device with no dedicated async compute or transfer family, all
+three RHI queues then share one `VkQueue`, and a `QueueDeviceWait` between two of them waits for a
+timeline value that only a later submit on that same `VkQueue` can signal. That is a hang, not a
+slowdown. `CreateContext` now asks for as many queues per family as the engine will take, clamped
+to `VkQueueFamilyProperties::queueCount`, and `CreateQueue` hands out distinct queue indices.
+Where the family really does expose one queue, the queues still share it, which is correct but
+serialised.
+
+**`QueuePresent` belongs to P5.3, not to P5.2.** `VkPresentInfoKHR` accepts binary semaphores
+only; there is no timeline path. Presenting needs the swapchain to carry a binary semaphore per
+image, the submit before the present to signal it alongside the timeline value, and the present
+to wait on it. None of that can be written before `VulkanSwapchain` exists. The stub says so, at
+the stub.
+
+**Two things `QueueParameters` asks for that Vulkan will not give:**
+
+| Parameter | Status |
+|---|---|
+| `QueuePriority` | **Not honoured.** Vulkan fixes queue priorities at `vkCreateDevice`, and `CreateQueue` runs long after. Honouring it would mean recreating the device. Nothing in the engine sets it: `RenderSystem::Initialize` leaves all three queues on `Normal`. `GlobalRealtime` would additionally need `VK_EXT_global_priority`, also at device creation. |
+| `QueueFlags::DisableTimeout` | **No equivalent.** `D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT` has no Vulkan counterpart. Nothing sets it either. |
+
+Both are recorded rather than silently ignored, so that the first caller to set one finds an
+explanation instead of a mystery.
+
+**Two structures were written here that other groups own.**
+
+- `VulkanCommandBuffer`, with the single `VkCommandBuffer` member `QueueSubmit` reads. P5.4 owns
+  command buffers and extends it. The type has to exist for `QueueSubmit` to compile at all.
+- `SetVulkanObjectName`, the one `vkSetDebugUtilsObjectNameEXT` call underneath all nine
+  `SetDebugName` overloads. P5.12 owns those and builds them on this. It is written now because
+  `CreateQueue` names its queue, and because the phase document says to do debug utils early: a
+  named object makes every later group easier to debug.
+
+`Queue::m_unifiedMemory` comes from a new `VulkanContext::m_isUnifiedMemory`, computed in
+`FillDeviceCapabilities` as "no memory type is device-local without also being host-visible".
+Direct3D 12 reads the same flag from D3D12MA's `IsUMA()`.
+
+**Verified, in the only sense available:**
+
+- All eight Linux targets compile and link. `ninja` exits 0.
+- 44 `vk*` symbols are now undefined in `libEsoterica.Base.so` and resolve against
+  `libvulkan.so.1`, up from 37.
+- `Checks.py` passes.
+- Every Vulkan structure, enum and entry point was read out of
+  `/usr/include/vulkan/vulkan_core.h` before use.
+
+**Not verified:** that a queue is ever created, that a timeline semaphore ever signals, or that
+the pending-wait scheme behaves as reasoned. The `QueueDeviceWait` argument above is the piece
+most worth re-checking with validation layers on, because it is reasoning about Vulkan's execution
+model rather than a mechanical translation.
+
+**Upstream files edited: none.**
 
 ### 2026-08-28 - P5.1 Device, context and memory. Written, never run
 

@@ -151,6 +151,44 @@ namespace EE::Render::RHI
         uint32_t                                                        m_computeQueueFamily = ~0U;
         uint32_t                                                        m_transferQueueFamily = ~0U;
 
+        // How many VkQueues were actually created from each family, and which one CreateQueue
+        // hands out next. A family the device only exposes one queue on gives every RHI queue
+        // the same VkQueue, which is correct but serialises them.
+        struct QueueFamilyAllocation
+        {
+            uint32_t                                        m_familyIndex = ~0U;
+            uint32_t                                        m_numQueues = 0;
+            uint32_t                                        m_nextQueueIndex = 0;
+        };
+
+        TInlineVector<QueueFamilyAllocation, 3>                         m_queueFamilyAllocations;
+
+        // Queue::m_unifiedMemory, which Direct3D 12 reads from D3D12MA's IsUMA(). True when
+        // every device-local memory type is also host-visible, which is what a shared-memory
+        // GPU looks like from here.
+        bool                                                            m_isUnifiedMemory = false;
+
+        template<typename T>
+        T* CreateObject()
+        {
+            void* pObjectMemory = Memory::Allocators::g_RHI.Alloc( sizeof( T ), alignof( T ) );
+            return new( pObjectMemory ) T();
+        }
+
+        template<typename T>
+        void DestroyObject( T*&& pObject )
+        {
+            if ( pObject != nullptr )
+            {
+                pObject->~T();
+                Memory::Allocators::g_RHI.Free( (void*&) pObject );
+            }
+        }
+
+        // VK_EXT_debug_utils is an extension, so its entry points are not exported by the
+        // loader and have to be looked up. Null when the extension is not present.
+        PFN_vkSetDebugUtilsObjectNameEXT                                m_vkSetDebugUtilsObjectName = nullptr;
+
         void*                                                           m_pRenderDocLibrary = nullptr;
         RENDERDOC_API_1_0_0*                                            m_pRenderDocAPI = nullptr;
 
@@ -345,6 +383,19 @@ namespace EE::Render::RHI
             if ( heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT )
             {
                 capabilities.m_dedicatedVideoMemory += heap.size;
+            }
+        }
+
+        // Direct3D 12 reads this from D3D12MA's IsUMA(). The Vulkan equivalent is that no
+        // memory is device-only: every device-local type can also be mapped.
+        pVulkanContext->m_isUnifiedMemory = true;
+        for ( uint32_t typeIndex = 0; typeIndex < pVulkanContext->m_memoryProperties.memoryTypeCount; ++typeIndex )
+        {
+            VkMemoryPropertyFlags const flags = pVulkanContext->m_memoryProperties.memoryTypes[typeIndex].propertyFlags;
+            if ( ( flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ) && !( flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ) )
+            {
+                pVulkanContext->m_isUnifiedMemory = false;
+                break;
             }
         }
 
@@ -649,23 +700,50 @@ namespace EE::Render::RHI
         // Device
         //-------------------------------------------------------------------------
 
-        float const queuePriority = 1.0f;
+        // One VkQueue per RHI queue where the family allows it. Two RHI queues sharing one
+        // VkQueue is legal but it makes a cross-queue QueueDeviceWait between them a deadlock:
+        // the wait would be for a value that only a later submit on the same VkQueue signals.
+        // Asking for distinct queues up front is what keeps that from being possible.
+        uint32_t numQueueFamilies = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties( pVulkanContext->m_physicalDevice, &numQueueFamilies, nullptr );
+        TVector<VkQueueFamilyProperties> queueFamilyProperties( numQueueFamilies );
+        vkGetPhysicalDeviceQueueFamilyProperties( pVulkanContext->m_physicalDevice, &numQueueFamilies, queueFamilyProperties.data() );
+
+        float const queuePriorities[3] = { 1.0f, 1.0f, 1.0f };
         TInlineVector<VkDeviceQueueCreateInfo, 3> queueCreateInfos;
-        TInlineVector<uint32_t, 3> queueFamilies;
 
         for ( uint32_t familyIndex : { pVulkanContext->m_graphicsQueueFamily, pVulkanContext->m_computeQueueFamily, pVulkanContext->m_transferQueueFamily } )
         {
-            if ( VectorContains( queueFamilies, familyIndex ) )
+            VulkanContext::QueueFamilyAllocation* pAllocation = nullptr;
+            for ( VulkanContext::QueueFamilyAllocation& allocation : pVulkanContext->m_queueFamilyAllocations )
             {
-                continue;
+                if ( allocation.m_familyIndex == familyIndex )
+                {
+                    pAllocation = &allocation;
+                    break;
+                }
             }
 
-            queueFamilies.emplace_back( familyIndex );
+            if ( pAllocation == nullptr )
+            {
+                pVulkanContext->m_queueFamilyAllocations.emplace_back( VulkanContext::QueueFamilyAllocation{ familyIndex, 0, 0 } );
+                pAllocation = &pVulkanContext->m_queueFamilyAllocations.back();
+            }
 
+            // Never ask for more queues than the family has. A family with one queue is normal
+            // on integrated parts.
+            if ( pAllocation->m_numQueues < queueFamilyProperties[familyIndex].queueCount )
+            {
+                pAllocation->m_numQueues++;
+            }
+        }
+
+        for ( VulkanContext::QueueFamilyAllocation const& allocation : pVulkanContext->m_queueFamilyAllocations )
+        {
             VkDeviceQueueCreateInfo queueCreateInfo = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
-            queueCreateInfo.queueFamilyIndex = familyIndex;
-            queueCreateInfo.queueCount = 1;
-            queueCreateInfo.pQueuePriorities = &queuePriority;
+            queueCreateInfo.queueFamilyIndex = allocation.m_familyIndex;
+            queueCreateInfo.queueCount = allocation.m_numQueues;
+            queueCreateInfo.pQueuePriorities = queuePriorities;
             queueCreateInfos.emplace_back( queueCreateInfo );
         }
 
@@ -743,6 +821,8 @@ namespace EE::Render::RHI
         EE_ASSERT( result == VK_SUCCESS );
 
         //-------------------------------------------------------------------------
+
+        pVulkanContext->m_vkSetDebugUtilsObjectName = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkSetDebugUtilsObjectNameEXT" ) );
 
         pVulkanContext->m_hostValidation = parameters.m_enableHostValidation && validationLayerAvailable;
         pVulkanContext->m_deviceValidation = parameters.m_enableDeviceValidation && validationLayerAvailable;
@@ -910,54 +990,290 @@ namespace EE::Render::RHI
         }
     }
 
+    //-------------------------------------------------------------------------
+    // Debug names
+    //-------------------------------------------------------------------------
+    // P5.12 owns the nine SetDebugName overloads. This is the one call underneath all of them,
+    // written here because CreateQueue needs it and the phase document says to do debug utils
+    // early: a named object makes every later group easier to debug.
+
+    static void SetVulkanObjectName( VulkanContext* pVulkanContext, VkObjectType objectType, uint64_t objectHandle, StringView debugName )
+    {
+        if ( debugName.empty() )
+        {
+            return;
+        }
+
+        if ( pVulkanContext->m_vkSetDebugUtilsObjectName == nullptr )
+        {
+            return;
+        }
+
+        // StringView is not null terminated, and Vulkan wants a C string.
+        TInlineString<MaxDebugNameLength> name( debugName.data(), debugName.size() );
+
+        VkDebugUtilsObjectNameInfoEXT nameInfo = { VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT };
+        nameInfo.objectType = objectType;
+        nameInfo.objectHandle = objectHandle;
+        nameInfo.pObjectName = name.c_str();
+
+        pVulkanContext->m_vkSetDebugUtilsObjectName( pVulkanContext->m_device, &nameInfo );
+    }
+
+    //-------------------------------------------------------------------------
+    // Queues and synchronization
+    //-------------------------------------------------------------------------
+    // RHI.h exposes a monotonic counter, which is a Vulkan timeline semaphore and not a binary
+    // one. One timeline per queue, and the counter the RHI hands back is a value on it.
+    //
+    // The counter runs the way Direct3D 12 runs its fence: m_nextSemaphoreValue is the value the
+    // *next* submit will signal, so QueueGetCurrentSemaphore returns a value that has not been
+    // signalled yet. That is what the Direct3D 12 backend does with m_fenceValue, and the engine
+    // is written against it.
+
+    struct VulkanQueue final : Queue
+    {
+        // QueueGetCompletedSemaphore and QueueHostWait take no Context, so the queue has to
+        // carry the device it belongs to.
+        VkDevice                                            m_device = VK_NULL_HANDLE;
+        VkQueue                                             m_queue = VK_NULL_HANDLE;
+        VkSemaphore                                         m_timelineSemaphore = VK_NULL_HANDLE;
+        uint64_t                                            m_nextSemaphoreValue = 1;
+        uint32_t                                            m_queueFamilyIndex = ~0U;
+
+        // Vulkan has no standalone queue wait. ID3D12CommandQueue::Wait blocks everything
+        // submitted to the queue after it, and the only Vulkan construct with that meaning is a
+        // wait attached to a submit. So QueueDeviceWait records the wait here and the next
+        // QueueSubmit drains it.
+        //
+        // An empty submit carrying just the wait would be the obvious alternative and it is
+        // wrong: submits on one queue may overlap, so a wait in submit N does not hold back
+        // submit N+1.
+        TInlineVector<VkSemaphoreSubmitInfo, 8>             m_pendingWaits;
+
+        TVector<VkCommandBufferSubmitInfo>                  m_submitCommandBuffers{ Memory::Allocators::g_RHI };
+    };
+
+    // P5.4 owns command pools and buffers and will extend this. QueueSubmit needs the handle
+    // out of it, so the type has to exist now; one member is the whole of what P5.2 uses.
+    struct VulkanCommandBuffer final : CommandBuffer
+    {
+        VkCommandBuffer                                     m_commandBuffer = VK_NULL_HANDLE;
+    };
+
+    //-------------------------------------------------------------------------
+
     Queue* CreateQueue( Context* pContext, QueueParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanQueue* pVulkanQueue = pVulkanContext->CreateObject<VulkanQueue>();
+
+        // Vulkan has no linked-node adapter, so CreateContext always reports a single node.
+        EE_ASSERT( parameters.m_nodeIndex == 0 );
+
+        switch ( parameters.m_queueType )
+        {
+            case QueueType::Graphics: pVulkanQueue->m_queueFamilyIndex = pVulkanContext->m_graphicsQueueFamily; break;
+            case QueueType::Compute:  pVulkanQueue->m_queueFamilyIndex = pVulkanContext->m_computeQueueFamily; break;
+            case QueueType::Transfer: pVulkanQueue->m_queueFamilyIndex = pVulkanContext->m_transferQueueFamily; break;
+        }
+
+        EE_ASSERT( pVulkanQueue->m_queueFamilyIndex != ~0U );
+
+        // Hand out a distinct VkQueue from the family while there is one left, and repeat the
+        // last one after that. Repeating is legal, and CreateContext already asked for as many
+        // as the family allows, so it only happens on a device that cannot do better.
+        uint32_t queueIndex = 0;
+        for ( VulkanContext::QueueFamilyAllocation& allocation : pVulkanContext->m_queueFamilyAllocations )
+        {
+            if ( allocation.m_familyIndex != pVulkanQueue->m_queueFamilyIndex )
+            {
+                continue;
+            }
+
+            queueIndex = Math::Min( allocation.m_nextQueueIndex, allocation.m_numQueues - 1 );
+            allocation.m_nextQueueIndex++;
+            break;
+        }
+
+        vkGetDeviceQueue( pVulkanContext->m_device, pVulkanQueue->m_queueFamilyIndex, queueIndex, &pVulkanQueue->m_queue );
+        EE_ASSERT( pVulkanQueue->m_queue != VK_NULL_HANDLE );
+
+        VkSemaphoreTypeCreateInfo semaphoreTypeCreateInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+        semaphoreTypeCreateInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        semaphoreTypeCreateInfo.initialValue = 0;
+
+        VkSemaphoreCreateInfo semaphoreCreateInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+        semaphoreCreateInfo.pNext = &semaphoreTypeCreateInfo;
+
+        VkResult const result = vkCreateSemaphore( pVulkanContext->m_device, &semaphoreCreateInfo, nullptr, &pVulkanQueue->m_timelineSemaphore );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_QUEUE, uint64_t( pVulkanQueue->m_queue ), parameters.m_debugName );
+
+        // QueuePriority is not honoured. Vulkan fixes queue priorities at vkCreateDevice, and
+        // CreateQueue runs long after that, so the priority would need the device recreated.
+        // Nothing in the engine sets it: RenderSystem::Initialize leaves all three queues on
+        // Normal. VK_EXT_global_priority is what GlobalRealtime would need, also at device
+        // creation time. Revisit only when a caller actually asks for a priority.
+        //
+        // QueueFlags::DisableTimeout is D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT, which has
+        // no Vulkan equivalent at all. Nothing sets it either.
+
+        pVulkanQueue->m_device = pVulkanContext->m_device;
+        pVulkanQueue->m_queueType = parameters.m_queueType;
+        pVulkanQueue->m_nodeIndex = parameters.m_nodeIndex;
+        pVulkanQueue->m_unifiedMemory = pVulkanContext->m_isUnifiedMemory;
+
+        return pVulkanQueue;
     }
 
     void DestroyQueue( Context* pContext, Queue*&& pQueue )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pQueue != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+
+            if ( pVulkanQueue->m_timelineSemaphore != VK_NULL_HANDLE )
+            {
+                vkDestroySemaphore( pVulkanContext->m_device, pVulkanQueue->m_timelineSemaphore, nullptr );
+            }
+
+            // The VkQueue itself is owned by the device and is not destroyed.
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanQueue ) );
+            pQueue = nullptr;
+        }
     }
 
     uint64_t QueueGetCurrentSemaphore( Queue* pQueue )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return 0;
+        VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+        return pVulkanQueue->m_nextSemaphoreValue;
     }
 
     uint64_t QueueGetCompletedSemaphore( Queue* pQueue )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return 0;
+        VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+
+        uint64_t completedValue = 0;
+        VkResult const result = vkGetSemaphoreCounterValue( pVulkanQueue->m_device, pVulkanQueue->m_timelineSemaphore, &completedValue );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        return completedValue;
     }
 
     void QueueHostWait( Queue* pQueue, uint64_t semaphore )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+
+        // Value 0 is the timeline's initial value, so it is always already satisfied. The
+        // Direct3D 12 backend skips it for the same reason, and says so at its own call site.
+        if ( semaphore == 0 )
+        {
+            return;
+        }
+
+        VkSemaphoreWaitInfo waitInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+        waitInfo.semaphoreCount = 1;
+        waitInfo.pSemaphores = &pVulkanQueue->m_timelineSemaphore;
+        waitInfo.pValues = &semaphore;
+
+        VkResult const result = vkWaitSemaphores( pVulkanQueue->m_device, &waitInfo, UINT64_MAX );
+        EE_ASSERT( result == VK_SUCCESS );
     }
 
     void QueueDeviceWait( Queue* pQueueThatWaits, Queue* pQueueToWaitFor, uint64_t semaphore )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        EE_ASSERT( pQueueThatWaits != pQueueToWaitFor );
+
+        VulkanQueue* pVulkanQueueThatWaits = static_cast<VulkanQueue*>( pQueueThatWaits );
+        VulkanQueue* pVulkanQueueToWaitFor = static_cast<VulkanQueue*>( pQueueToWaitFor );
+
+        if ( semaphore == 0 )
+        {
+            return;
+        }
+
+        EE_ASSERT( semaphore < pVulkanQueueToWaitFor->m_nextSemaphoreValue );
+
+        VkSemaphoreSubmitInfo waitInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+        waitInfo.semaphore = pVulkanQueueToWaitFor->m_timelineSemaphore;
+        waitInfo.value = semaphore;
+        // ALL_COMMANDS, because ID3D12CommandQueue::Wait blocks the whole queue and this has to
+        // mean the same thing. It is the correct-but-untuned choice the phase document allows,
+        // and it is recorded as an ALL_COMMANDS site in Docs/Linux/Progress.md. Narrowing it
+        // needs to know what the waiting submit will do, which the caller does not tell us.
+        waitInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+        pVulkanQueueThatWaits->m_pendingWaits.emplace_back( waitInfo );
     }
 
-    uint64_t QueueSubmit( Queue* pQueue, TArrayView<CommandBuffer*> commandBuffer )
+    uint64_t QueueSubmit( Queue* pQueue, TArrayView<CommandBuffer*> commandBuffers )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return 0;
+        VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+
+        pVulkanQueue->m_submitCommandBuffers.clear();
+        pVulkanQueue->m_submitCommandBuffers.reserve( commandBuffers.size() );
+
+        for ( CommandBuffer* pCommandBuffer : commandBuffers )
+        {
+            VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+            VkCommandBufferSubmitInfo commandBufferSubmitInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO };
+            commandBufferSubmitInfo.commandBuffer = pVulkanCommandBuffer->m_commandBuffer;
+            pVulkanQueue->m_submitCommandBuffers.emplace_back( commandBufferSubmitInfo );
+        }
+
+        uint64_t const signalSemaphore = pVulkanQueue->m_nextSemaphoreValue++;
+
+        VkSemaphoreSubmitInfo signalInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+        signalInfo.semaphore = pVulkanQueue->m_timelineSemaphore;
+        signalInfo.value = signalSemaphore;
+        signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+        VkSubmitInfo2 submitInfo = { VK_STRUCTURE_TYPE_SUBMIT_INFO_2 };
+        submitInfo.waitSemaphoreInfoCount = uint32_t( pVulkanQueue->m_pendingWaits.size() );
+        submitInfo.pWaitSemaphoreInfos = pVulkanQueue->m_pendingWaits.data();
+        submitInfo.commandBufferInfoCount = uint32_t( pVulkanQueue->m_submitCommandBuffers.size() );
+        submitInfo.pCommandBufferInfos = pVulkanQueue->m_submitCommandBuffers.data();
+        submitInfo.signalSemaphoreInfoCount = 1;
+        submitInfo.pSignalSemaphoreInfos = &signalInfo;
+
+        // Direct3D 12 skips ExecuteCommandLists on an empty list but still signals. Signalling
+        // with no work is exactly what an empty submit does here, so the shape is the same.
+        VkResult const result = vkQueueSubmit2( pVulkanQueue->m_queue, 1, &submitInfo, VK_NULL_HANDLE );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanQueue->m_pendingWaits.clear();
+
+        return signalSemaphore;
     }
 
     uint64_t QueuePresent( Queue* pQueue, Swapchain* pSwapchain, uint32_t imageIndex )
     {
+        // P5.3 finishes this, and it cannot be written before the swapchain exists.
+        //
+        // VkPresentInfoKHR takes binary semaphores only; it has no timeline path. So the
+        // swapchain has to carry a binary semaphore per image, the submit before the present
+        // has to signal it alongside the timeline value, and the present waits on that binary
+        // semaphore. Acquire needs the mirror image of the same thing.
+        //
+        // Everything else here is ready: the timeline value this returns is the one the queue
+        // signals, exactly as QueueSubmit does.
         EE_UNIMPLEMENTED_FUNCTION();
         return 0;
     }
 
     void WaitQueueIdle( Queue* pQueue )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
+
+        // Direct3D 12 signals its fence and blocks on an event, because it has no queue-idle
+        // call. Vulkan has one, and it means precisely this.
+        VkResult const result = vkQueueWaitIdle( pVulkanQueue->m_queue );
+        EE_ASSERT( result == VK_SUCCESS );
     }
 
     Swapchain* CreateSwapchain( Context* pContext, SwapchainParameters const& parameters )
