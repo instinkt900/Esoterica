@@ -1054,11 +1054,24 @@ namespace EE::Render::RHI
         TVector<VkCommandBufferSubmitInfo>                  m_submitCommandBuffers{ Memory::Allocators::g_RHI };
     };
 
-    // P5.4 owns command pools and buffers and will extend this. QueueSubmit needs the handle
-    // out of it, so the type has to exist now; one member is the whole of what P5.2 uses.
+    // Declared here rather than in the P5.4 section below, because QueueSubmit reads the handle
+    // out of it and is defined first.
     struct VulkanCommandBuffer final : CommandBuffer
     {
+        // Mirrors Direct3D12CommandBuffer::Stage. Vulkan tracks the same lifecycle itself and
+        // the validation layers enforce it, but an EE_ASSERT names the caller that got it wrong
+        // instead of a message from the layer three frames later.
+        enum struct Stage
+        {
+            Invalid,
+            Created,
+            Recording,
+            Closed
+        };
+
+        VkDevice                                            m_device = VK_NULL_HANDLE;
         VkCommandBuffer                                     m_commandBuffer = VK_NULL_HANDLE;
+        Stage                                               m_stage = Stage::Invalid;
     };
 
     //-------------------------------------------------------------------------
@@ -1298,41 +1311,159 @@ namespace EE::Render::RHI
         EE_UNIMPLEMENTED_FUNCTION();
     }
 
+    //-------------------------------------------------------------------------
+    // Command pools and buffers
+    //-------------------------------------------------------------------------
+
+    struct VulkanCommandPool final : CommandPool
+    {
+        VkCommandPool                                       m_commandPool = VK_NULL_HANDLE;
+    };
+
+    //-------------------------------------------------------------------------
+
     CommandPool* CreateCommandPool( Context* pContext, CommandPoolParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( parameters.m_pQueue );
+        VulkanCommandPool* pVulkanCommandPool = pVulkanContext->CreateObject<VulkanCommandPool>();
+
+        VkCommandPoolCreateInfo commandPoolCreateInfo = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
+        commandPoolCreateInfo.queueFamilyIndex = pVulkanQueue->m_queueFamilyIndex;
+        // RESET_COMMAND_BUFFER_BIT, so that vkBeginCommandBuffer implicitly resets the one
+        // buffer. That is what ID3D12GraphicsCommandList::Reset( allocator, nullptr ) does, and
+        // the engine calls BeginCommandBuffer per buffer rather than resetting the pool every
+        // time. Without the bit, a second Begin without an intervening ResetCommandPool is
+        // invalid. It can cost a little, because some drivers give such a pool per-buffer
+        // allocators, and correctness comes first.
+        commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+        VkResult const result = vkCreateCommandPool( pVulkanContext->m_device, &commandPoolCreateInfo, nullptr, &pVulkanCommandPool->m_commandPool );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanCommandPool->m_pQueue = parameters.m_pQueue;
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_COMMAND_POOL, uint64_t( pVulkanCommandPool->m_commandPool ), parameters.m_debugName );
+
+        return pVulkanCommandPool;
     }
 
     void DestroyCommandPool( Context* pContext, CommandPool*&& pCommandPool )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pCommandPool != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanCommandPool* pVulkanCommandPool = static_cast<VulkanCommandPool*>( pCommandPool );
+
+            // Destroying the pool frees every command buffer allocated from it, so a buffer
+            // that outlives its pool is already a use-after-free. The engine destroys buffers
+            // first; see RenderSystem::Shutdown.
+            if ( pVulkanCommandPool->m_commandPool != VK_NULL_HANDLE )
+            {
+                vkDestroyCommandPool( pVulkanContext->m_device, pVulkanCommandPool->m_commandPool, nullptr );
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanCommandPool ) );
+            pCommandPool = nullptr;
+        }
     }
 
     void ResetCommandPool( Context* pContext, CommandPool* pCommandPool )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanCommandPool* pVulkanCommandPool = static_cast<VulkanCommandPool*>( pCommandPool );
+
+        // No RELEASE_RESOURCES flag. ID3D12CommandAllocator::Reset keeps the memory for reuse,
+        // and this is called once per frame per pool, so handing the memory back to the driver
+        // every frame would be the opposite of what the caller wants.
+        VkResult const result = vkResetCommandPool( pVulkanContext->m_device, pVulkanCommandPool->m_commandPool, 0 );
+        EE_ASSERT( result == VK_SUCCESS );
     }
 
     CommandBuffer* CreateCommandBuffer( Context* pContext, CommandBufferParameters const& parameters )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
-        return nullptr;
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        VulkanCommandPool* pVulkanCommandPool = static_cast<VulkanCommandPool*>( parameters.m_pCommandPool );
+        VulkanCommandBuffer* pVulkanCommandBuffer = pVulkanContext->CreateObject<VulkanCommandBuffer>();
+
+        VkCommandBufferAllocateInfo allocateInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+        allocateInfo.commandPool = pVulkanCommandPool->m_commandPool;
+        allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocateInfo.commandBufferCount = 1;
+
+        VkResult const result = vkAllocateCommandBuffers( pVulkanContext->m_device, &allocateInfo, &pVulkanCommandBuffer->m_commandBuffer );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanCommandBuffer->m_device = pVulkanContext->m_device;
+        pVulkanCommandBuffer->m_pQueue = parameters.m_pCommandPool->m_pQueue;
+        pVulkanCommandBuffer->m_pCommandPool = parameters.m_pCommandPool;
+        pVulkanCommandBuffer->m_nodeIndex = parameters.m_pCommandPool->m_pQueue->m_nodeIndex;
+
+        // Direct3D 12 creates a command list already recording and closes it straight away to
+        // match every other API. Vulkan already starts in the initial state, so there is
+        // nothing to undo here.
+        pVulkanCommandBuffer->m_stage = VulkanCommandBuffer::Stage::Closed;
+
+        SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_COMMAND_BUFFER, uint64_t( pVulkanCommandBuffer->m_commandBuffer ), parameters.m_debugName );
+
+        return pVulkanCommandBuffer;
     }
 
     void DestroyCommandBuffer( Context* pContext, CommandBuffer*&& pCommandBuffer )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        if ( pCommandBuffer != nullptr )
+        {
+            VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+            VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+            VulkanCommandPool* pVulkanCommandPool = static_cast<VulkanCommandPool*>( pVulkanCommandBuffer->m_pCommandPool );
+
+            if ( pVulkanCommandBuffer->m_commandBuffer != VK_NULL_HANDLE )
+            {
+                vkFreeCommandBuffers( pVulkanContext->m_device, pVulkanCommandPool->m_commandPool, 1, &pVulkanCommandBuffer->m_commandBuffer );
+            }
+
+            pVulkanContext->DestroyObject( eastl::move( pVulkanCommandBuffer ) );
+            pCommandBuffer = nullptr;
+        }
     }
 
     void BeginCommandBuffer( CommandBuffer* pCommandBuffer )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        EE_ASSERT( pVulkanCommandBuffer->m_stage == VulkanCommandBuffer::Stage::Closed );
+
+        VkCommandBufferBeginInfo beginInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+        // No ONE_TIME_SUBMIT. It would be faster and it is not safe to assume: Direct3D 12
+        // allows a closed command list to be submitted more than once without re-recording, and
+        // nothing here proves the engine never does. Set it only once that has been checked.
+        beginInfo.flags = 0;
+
+        VkResult const result = vkBeginCommandBuffer( pVulkanCommandBuffer->m_commandBuffer, &beginInfo );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanCommandBuffer->m_stage = VulkanCommandBuffer::Stage::Recording;
+
+        // Direct3D 12 calls SetDescriptorHeaps here, once per command buffer. The Vulkan
+        // equivalent is binding the heap descriptor set, and the Phase 4 binding model puts
+        // that in CmdSetPipeline instead, because set 1 is disturbed whenever a pipeline with a
+        // different set 0 layout is bound. See the binding model entry in Docs/Linux/Progress.md.
+        pVulkanCommandBuffer->m_pBoundRootSignature = nullptr;
+        pVulkanCommandBuffer->m_pBoundPipeline = nullptr;
     }
 
     void EndCommandBuffer( CommandBuffer* pCommandBuffer )
     {
-        EE_UNIMPLEMENTED_FUNCTION();
+        VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        EE_ASSERT( pVulkanCommandBuffer->m_stage == VulkanCommandBuffer::Stage::Recording );
+
+        // Direct3D 12 flushes pending barriers here. P5.9 decides whether the Vulkan side
+        // batches barriers the same way; if it does, the flush belongs at this line.
+        VkResult const result = vkEndCommandBuffer( pVulkanCommandBuffer->m_commandBuffer );
+        EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanCommandBuffer->m_stage = VulkanCommandBuffer::Stage::Closed;
     }
 
     void CmdSetRenderTargets( CommandBuffer* pCommandBuffer, TArrayView<Texture* const> renderTargets, Texture* pDepthStencil, LoadAction* pLoadAction, TArrayView<uint32_t const> colorArraySlices, TArrayView<uint32_t const> colorMipSlices, uint32_t depthArraySlice, uint32_t depthMipSlice )

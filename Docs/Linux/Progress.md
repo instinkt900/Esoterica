@@ -11,9 +11,10 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 ## Current state
 
 **Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1 and P5.2 are written and have never been run.**
+answered: the plain loader, not `volk`. **P5.1, P5.2 and P5.4 are written and have never been
+run.**
 
-**Which of the 16 groups are real: P5.1 and P5.2, both unverified.** P5.2 is complete except
+**Which of the 16 groups are real: P5.1, P5.2 and P5.4, all unverified.** P5.2 is complete except
 `QueuePresent`, which cannot be written before P5.3 supplies a swapchain. Phase 5's own note says
 this count is the single most important piece of state, so it leads this section.
 
@@ -67,7 +68,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1 and P5.2 written, never run**; 87 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. **2 of the 16 groups are real, both unverified** |
+| 5 - Vulkan RHI | **in progress.** Dependencies are in place. **P5.1, P5.2 and P5.4 written, never run**; 80 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103. **3 of the 16 groups are real, all unverified** |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -80,17 +81,19 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.2-queues-sync`.** Stacked: `p5.0-vulkan-deps` (PR #24), then
-`p5.1-device-context` (PR #25), then this. None merged yet. Nothing has run any of it.
+**Phase 5, on `linux/p5.4-command-buffers`.** Stacked: `p5.0-vulkan-deps` (PR #24),
+`p5.1-device-context` (#25), `p5.2-queues-sync` (#26), then this. None merged yet. Nothing has run
+any of it.
 
-**Next: P5.4, command pools and buffers.** It is small, it has no decisions in it, and P5.2
-already needed `VulkanCommandBuffer` to exist, so P5.4 extends a struct rather than inventing one.
-After that P5.5 buffers, then P5.7 shaders and pipelines.
+**Next: P5.5, buffers.** It is where the Phase 4 binding model stops being a document and becomes
+code, because `GetBufferHandle` returns the bindless heap offset. Read the binding model entry
+before writing it, and reuse `BufferSubAllocation`, `PageAllocator` and `HandleAllocator` from
+`Code/Base/Render/`, which are platform-neutral. After that P5.7, shaders and pipelines.
 
 `RenderSystem::Initialize` is the order that matters. It is straight-line with no early exit:
 `CreateContext`, three `CreateQueue`, `CreateBuffer`, `InitializeShaders`, then
 `CreateCommandPool` and `CreateCommandBuffer` in loops. The first engine run needs **P5.1, P5.2,
-P5.4, P5.5 and P5.7** together. Two of the five are written.
+P5.4, P5.5 and P5.7** together. Three of the five are written.
 
 **Owed by later groups, recorded so they are not forgotten:**
 
@@ -98,7 +101,7 @@ P5.4, P5.5 and P5.7** together. Two of the five are written.
 |---|---|
 | P5.3 | `QueuePresent`, which is still a stub. `VkPresentInfoKHR` takes binary semaphores only, so the swapchain has to carry one per image, the submit before the present must signal it next to the timeline value, and the present waits on it. Acquire needs the mirror of the same thing. |
 | P5.6 | `DeviceCapabilities::m_canShaderReadFrom`, `m_canShaderWriteTo`, `m_canRenderTargetWriteTo`, all left false. Fill them in the same task as the `DataFormat` to `VkFormat` mapping, never separately. |
-| P5.4 | Extends `VulkanCommandBuffer`, which P5.2 defined with the one member `QueueSubmit` needs. |
+| P5.9 | `EndCommandBuffer` is where a batched barrier flush belongs, if the Vulkan side batches them the way Direct3D 12 does. The line is marked. |
 | P5.9, P5.12 | Two `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT` sites in `QueueDeviceWait` and `QueueSubmit`, listed below. P5.12 builds its nine `SetDebugName` overloads on `SetVulkanObjectName`, which P5.2 wrote. |
 
 ## `ALL_COMMANDS` sites
@@ -125,6 +128,49 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-28 - P5.4 Command pools and buffers. Written, never run
+
+**All seven functions are implemented.** 80 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 87.
+Nothing has run.
+
+The group is nearly a straight translation, so this entry is short. Four things are worth keeping.
+
+**The pool takes `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT`.** Direct3D 12 resets an
+individual command list against its allocator, in `ID3D12GraphicsCommandList::Reset`, and the
+engine calls `BeginCommandBuffer` per buffer rather than resetting the pool each time. Without the
+bit, a second `vkBeginCommandBuffer` with no intervening `vkResetCommandPool` is invalid. Some
+drivers give such a pool per-buffer allocators, which costs a little; correctness first, and the
+flag is the direct equivalent of what the reference does.
+
+**`ResetCommandPool` passes no flags**, so `VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT` is off.
+`ID3D12CommandAllocator::Reset` keeps its memory for reuse, and this runs once per frame per pool,
+so handing memory back to the driver every frame is the opposite of what the caller wants.
+
+**`BeginCommandBuffer` does not set `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT`.** It would be
+faster, and it is an assumption rather than a fact: Direct3D 12 allows a closed command list to be
+submitted more than once without re-recording, and nothing here proves the engine never does. The
+flag is a validation error the moment it is wrong. Set it once someone has checked, not before.
+
+**`BeginCommandBuffer` does not bind any descriptor set**, and Direct3D 12's does the equivalent.
+`RHI_Direct3D12.cpp:2917` calls `SetDescriptorHeaps` once per command buffer. The Phase 4 binding
+model puts the matching `vkCmdBindDescriptorSets` in `CmdSetPipeline` instead, because set 1 is
+disturbed whenever a pipeline with a different set 0 layout is bound. P5.8 writes it there. The
+comment at the empty spot says so, so that the absence reads as a decision rather than an
+oversight.
+
+Two smaller notes. Vulkan command buffers start in the initial state, so there is nothing matching
+Direct3D 12's trick of creating a list already recording and closing it immediately; the stage is
+just set to `Closed`. And `VulkanCommandBuffer` gains the `Stage` enum its Direct3D 12 sibling
+has: the validation layers track the same lifecycle, but an `EE_ASSERT` names the caller that got
+it wrong instead of a layer message three frames later.
+
+**Verified, in the only sense available:** all eight Linux targets compile and link, `ninja` exits
+0, and 51 `vk*` symbols now resolve against `libvulkan.so.1`, up from 44.
+
+**Not verified:** that a pool is ever created or a command buffer ever recorded.
+
+**Upstream files edited: none.**
 
 ### 2026-08-28 - P5.2 Queues and synchronization. Written, never run
 
