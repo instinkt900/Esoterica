@@ -93,6 +93,10 @@ Vulkan-targeting flags. What matters:
 - **`-fvk-use-dx-layout`**, or its equivalent, keeps constant buffer layout consistent with the
   Direct3D path. A layout mismatch between the two backends produces silently wrong rendering,
   which costs a great deal to debug in Phase 5. Get this right now.
+  **Decided on 2026-08-28: pass it.** Seven shared types are laid out wrong without it. It
+  requires the `scalarBlockLayout` device feature, and validation needs
+  `--scalar-block-layout` to match. It also exposed **defect 3**, which leaves `MeshCluster`
+  wrong and is not fixed. Full detail in [Progress.md](../Progress.md).
 - **Bindless and descriptor indexing.** The engine targets Shader Model 6.6 with a bindless
   model. DXC's SPIR-V backend maps SM6.6 resource descriptor heaps onto Vulkan descriptor
   indexing, but the mapping is not automatic. Investigate `-fvk-bind-resource-heap`,
@@ -222,11 +226,13 @@ these up. That is P0.4.
 3. All 26 `.esh` files compile to valid SPIR-V. Check with `spirv-val`. Every module passes.
    **Done, 2026-08-28.** All 46 shader stages compile and validate. The shaders are the 28
    `.esf` files, not the 26 `.esh` headers; see the P4.5 entry. **Validate with
-   `External/DirectXShaderCompiler/bin/x64/spirv-val`**, which `DownloadDependencies.sh` builds
-   from the SPIRV-Tools that DXC vendors. A distribution's `spirv-val` is not interchangeable
-   with it: Ubuntu 24.04's v2025.1 rejects all six mesh stages on
-   `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036` and is wrong to. See the entry in
-   [Progress.md](../Progress.md).
+   `External/DirectXShaderCompiler/bin/x64/spirv-val --target-env vulkan1.3
+   --scalar-block-layout`**, which `DownloadDependencies.sh` builds from the SPIRV-Tools that DXC
+   vendors. Two things are load-bearing there. A distribution's `spirv-val` is not
+   interchangeable: Ubuntu 24.04's v2025.1 rejects all six mesh stages on
+   `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036` and is wrong to. And `--scalar-block-layout` is
+   required because the shaders are compiled with `-fvk-use-dx-layout`; without it 18 stages are
+   rejected. See the entries in [Progress.md](../Progress.md).
 4. No `.esh` file is edited.
 5. The generated `.cpp` files compile as part of `Esoterica.Base` and
    `Esoterica.Engine.Runtime`. **Done, 2026-08-28.** Re-run `NinjaGen.py` after the first shader
