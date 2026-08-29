@@ -102,6 +102,25 @@ requirements_renderdoc()
     require_command curl curl
 }
 
+# X11 and Wayland are both forced on in the SDL3 build, so both sets of headers are required
+# rather than optional. A missing one silently drops that video backend otherwise.
+requirements_sdl3()
+{
+    require_command cmake cmake
+    require_command ninja ninja-build
+    require_command c++ build-essential
+    require_pkg_config x11 libx11-dev
+    require_pkg_config xext libxext-dev
+    require_pkg_config xrandr libxrandr-dev
+    require_pkg_config xi libxi-dev
+    require_pkg_config xcursor libxcursor-dev
+    require_pkg_config xfixes libxfixes-dev
+    require_pkg_config wayland-client libwayland-dev
+    require_pkg_config wayland-egl libwayland-dev
+    require_pkg_config wayland-scanner wayland-protocols
+    require_pkg_config xkbcommon libxkbcommon-dev
+}
+
 requirements_ixwebsocket()
 {
     require_command cmake cmake
@@ -650,9 +669,62 @@ fetch_renderdoc()
     info "RenderDoc header installed"
 }
 
+# SDL3. Phase 6 windowing and input: the window, the event loop, keyboard, mouse, gamepad, and
+# the Vulkan surface that Phase 5's swapchain binds. Dear ImGui's imgui_impl_sdl3.cpp is the
+# platform backend the port uses in place of the vendored imgui_impl_win32.cpp.
+#
+# Built from source, not taken from the distribution. This answers open question 4: Ubuntu 24.04
+# LTS, the development target, has no libsdl3-dev at all. SDL3 first shipped in January 2025 and
+# is packaged from Ubuntu 25.04 onwards, so a distribution package cannot be relied on yet.
+#
+# Pinned to a release tag. SDL3's API settled at 3.2.0, but the ABI still grows every release
+# and imgui_impl_sdl3.cpp calls into recent additions.
+SDL3_REPO="https://github.com/libsdl-org/SDL.git"
+SDL3_TAG="release-3.4.14"
+
+fetch_sdl3()
+{
+    local target="${EXTERNAL_DIR}/SDL3"
+
+    if [[ -f "${target}/include/SDL3/SDL.h" && -f "${target}/lib/libSDL3.so" ]]
+    then
+        info "SDL3 already present"
+        return
+    fi
+
+    info "fetching SDL3 ${SDL3_TAG}"
+    rm -rf "${target}.src"
+    git clone -q --depth 1 --branch "${SDL3_TAG}" "${SDL3_REPO}" "${target}.src"
+
+    info "building SDL3"
+    # SDL_X11 and SDL_WAYLAND are forced on rather than left to detection. SDL's CMake drops a
+    # video backend whose headers are missing and still configures successfully, which produces
+    # a library that builds, links, and then finds no display at run time.
+    #
+    # CMAKE_INSTALL_LIBDIR is set because GNUInstallDirs on Debian and Ubuntu installs into
+    # lib/x86_64-linux-gnu, and the generator's SDL3 sheet points at lib/.
+    cmake -S "${target}.src" -B "${target}.src/build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="${target}" \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DSDL_SHARED=ON \
+        -DSDL_STATIC=OFF \
+        -DSDL_X11=ON \
+        -DSDL_WAYLAND=ON \
+        -DSDL_TESTS=OFF \
+        -DSDL_TEST_LIBRARY=OFF \
+        -DSDL_EXAMPLES=OFF \
+        -DSDL_INSTALL_TESTS=OFF
+    cmake --build "${target}.src/build" --parallel "${BUILD_JOBS}"
+    cmake --install "${target}.src/build"
+
+    rm -rf "${target}.src"
+    info "SDL3 installed"
+}
+
 #-------------------------------------------------------------------------
 
-ALL_DEPENDENCIES=( optick meshoptimizer ctt ixwebsocket gamenetworkingsockets directx_headers dxc llvm vma spirv_reflect renderdoc )
+ALL_DEPENDENCIES=( optick meshoptimizer ctt ixwebsocket gamenetworkingsockets directx_headers dxc llvm vma spirv_reflect renderdoc sdl3 )
 
 list_dependencies()
 {
@@ -672,6 +744,7 @@ list_dependencies()
             vma)                    [[ -f "${EXTERNAL_DIR}/VMA/include/vk_mem_alloc.h" ]] && status="ready (${VMA_TAG})" ;;
             spirv_reflect)          [[ -f "${EXTERNAL_DIR}/SPIRV-Reflect/lib/libspirv-reflect.a" ]] && status="ready (${SPIRV_REFLECT_TAG})" ;;
             renderdoc)              [[ -f "${EXTERNAL_DIR}/RenderDoc/renderdoc_app.h" ]] && status="ready (${RENDERDOC_TAG})" ;;
+            sdl3)                   [[ -f "${EXTERNAL_DIR}/SDL3/lib/libSDL3.so" ]] && status="ready (${SDL3_TAG})" ;;
         esac
         printf '%-24s %s\n' "${name}" "${status}"
     done
@@ -708,6 +781,7 @@ main()
             vma)                    fetch_vma ;;
             spirv_reflect)          fetch_spirv_reflect ;;
             renderdoc)              fetch_renderdoc ;;
+            sdl3)                   fetch_sdl3 ;;
             *)                      fail "unknown dependency \"${name}\". Try --list." ;;
         esac
     done

@@ -10,7 +10,12 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 5 (written and merged, not complete).** All sixteen groups are on `main`. The
+**Phase: 6 (started). P6.1 is done and SDL3 is in the build.** `./DownloadDependencies.sh sdl3`
+builds SDL3 `release-3.4.14` from source into `External/SDL3/`, and `Esoterica.Base` links
+`-lSDL3`. **Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS
+packages none.** No source file includes an SDL header yet. **P6.2, `LinuxApplication`, is next.**
+
+**Phase 5 remains written and merged, not complete.** All sixteen groups are on `main`. The
 seventeen stacked PRs, #24 to #41, are merged and nothing is in flight. **Nothing in any of them
 has ever run.**
 
@@ -132,7 +137,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
 | 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | not started |
+| 6 - Windowing and Input | **started.** P6.1 done: SDL3 builds from source into `External/` and `Esoterica.Base` links it. P6.2 onwards not started |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -144,7 +149,10 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Nothing.** The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
+**`linux/p6.1-sdl3`.** SDL3 in `DownloadDependencies.sh` and in the generator's sheet table. PR
+open, not merged.
+
+The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
 ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
 it.**
 
@@ -152,7 +160,7 @@ it.**
 more code:
 
 1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands. **This is the next thing to do.**
+   before it lands. **Started: P6.1 is done, P6.2 is next.**
 2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
    the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
    after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
@@ -204,6 +212,55 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - P6.1 SDL3, and open question 4 is answered
+
+**SDL3 is fetched, built and wired into the generator.** `./DownloadDependencies.sh sdl3` builds
+`release-3.4.14` from source into `External/SDL3/`, and `Esoterica.Base` now links `-lSDL3`.
+Nothing includes an SDL header yet: P6.2 onwards does that.
+
+**Open question 4 is answered: no, and the port always builds SDL3 from source.** Ubuntu 24.04
+LTS, the development target, packages no SDL3 at all. SDL3 first shipped in January 2025 and
+reaches the archives from Ubuntu 25.04 onwards, so a distribution package cannot be relied on.
+That also settles the version question: a source build pins one version for every distribution,
+which matters because the vendored Dear ImGui is 1.92.9b and its `imgui_impl_sdl3.cpp` calls
+recent SDL3 additions.
+
+**The sheet points at `External/`, not at `pkg-config --libs sdl3`**, which is what
+[Phase6-WindowingInput.md](Phases/Phase6-WindowingInput.md) planned. There is no `sdl3.pc` on the
+system to find, and once `External/SDL3/` holds a build, a pkg-config lookup would need
+`PKG_CONFIG_PATH` set to reach it. Every other `External/` dependency uses include and library
+directories, so SDL3 does too. `Toolchain.py` adds `-Wl,-rpath` for every library directory
+already, so the built binaries find `libSDL3.so.0` without a staging step.
+
+**X11 and Wayland are both forced on in the CMake configure, rather than left to detection.**
+SDL's CMake drops a video backend whose headers are missing and still configures successfully,
+which produces a library that builds, links, and then finds no display at run time. That is the
+silent failure this build guards against, so `requirements_sdl3()` checks all the X11, Wayland
+and xkbcommon packages by `pkg-config` name and reports every missing one in one message.
+`CMAKE_INSTALL_LIBDIR=lib` is set too, because `GNUInstallDirs` on Debian and Ubuntu would
+install into `lib/x86_64-linux-gnu`.
+
+**Checked at run time, once, with a scratch program.** A green build hides all of this. The
+built library reports video drivers `wayland`, `x11`, `kmsdrm`, `offscreen`, `dummy` and
+`evdev`; `SDL_CreateWindow` with `SDL_WINDOW_VULKAN` succeeds; and
+`SDL_Vulkan_GetInstanceExtensions` returns `VK_KHR_surface` and `VK_KHR_xlib_surface`, both of
+which `CreateContext` already enables. This session runs X11. The program is not committed:
+the build is the test, and this was a one-off check of a run-time property.
+
+- Files added: none.
+- Files edited: `DownloadDependencies.sh` (the `sdl3` target),
+  `Code/Scripts/NinjaGen/Toolchain.py` (the `SDL3` sheet, and `Esoterica.Base` in
+  `LINUX_ONLY_SHEETS`). Both are new files this fork owns, and both are already registered.
+- **Upstream files edited: none.**
+- Build: `python3 Code/Scripts/NinjaGen/NinjaGen.py` and `ninja -f Build/Linux/Esoterica.ninja
+  -k 0` fail on `Esoterica.Applications.Editor` and `Esoterica.Applications.ResourceServer`
+  only, which is exactly where they failed before. `Checks.py` passes.
+- Acceptance criteria: P6.1 has none of its own. Phase 6 criterion 10, the Windows build, is
+  untouched: neither edited file is read by MSBuild.
+
+**For P6.2.** `External/SDL3/lib/cmake` and `External/SDL3/lib/pkgconfig` are installed and
+unused. Leave them; deleting them would only make a future `find_package` harder.
 
 ### 2026-08-29 - The Phase 5 stack is merged, and one question is left
 
@@ -3510,7 +3567,7 @@ question to "Decisions made" once you answer it.
 | 1 | ~~Does `ctt` (texture compression) build on Linux?~~ | Phase 3 | **answered: yes, it is open source. Built from crates.io.** |
 | 2 | Which LLVM version does the Reflector need, and does `clangAST` compile against it on Linux? | Phase 2 | open |
 | 3 | ~~Use `volk`, or the plain Vulkan loader?~~ | Phase 5 | **answered: the plain loader.** Nothing is profiled yet, and nothing can be until the backend renders |
-| 4 | Do the target distros package SDL3, or must we always build it? | Phase 6 | open |
+| 4 | ~~Do the target distros package SDL3, or must we always build it?~~ | Phase 6 | **answered 2026-08-29: always build it.** Ubuntu 24.04 LTS has no SDL3 package; it arrives from 25.04. `DownloadDependencies.sh` builds `release-3.4.14` from source |
 | 5 | ~~Does `GameNetworkingSockets` block the first `Base` link?~~ | Phase 1 | **answered: yes, and at compile time, not link** |
 | 6 | ~~Does the `VirtualAlloc` region in `Memory.cpp` have a working non-Windows path?~~ | Phase 1 | **answered: no** |
 | 7 | ~~How do the engine's indirect draws reach Vulkan?~~ | Phase 5, and the whole frame | **answered 2026-08-29: the shader reads its own command's root data out of the argument buffer, indexed by `DrawIndex`.** Scheduled as P5.17, after Phase 6 bring-up. See the decision entry |
