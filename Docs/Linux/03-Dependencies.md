@@ -44,7 +44,7 @@ Taken from `Code/PropertySheets/*.props` and the `.lib` files they reference.
 
 | Dependency | Purpose | How to get it |
 |---|---|---|
-| **SDL3** | Windowing, input, gamepad, and the X11 or Wayland abstraction | Build from source, or use a distro package where SDL3 (not SDL2) exists. Pin the version. |
+| **SDL3** | Windowing, input, gamepad, and the X11 or Wayland abstraction | Always built from source: `./DownloadDependencies.sh sdl3` installs `release-3.4.14` into `External/SDL3/`. Ubuntu 24.04 LTS packages no SDL3, so a distro package is not an option. See open question 4. |
 | **Vulkan headers and loader** | Vulkan API | `libvulkan-dev`. Not fetched into `External/`: the loader carries an ICD layer that has to match the installed drivers. **Plain loader, not `volk`** - see open question 3. |
 | **VulkanMemoryAllocator (VMA)** | GPU allocator. Replaces `D3D12MemoryAllocator`. | Header only. `./DownloadDependencies.sh vma` puts `vk_mem_alloc.h` in `External/VMA/include/`. Pinned to `v3.4.0`. |
 | **SPIRV-Reflect** | Shader reflection. Replaces `ID3D12ShaderReflection`. | `./DownloadDependencies.sh spirv_reflect` builds one C file into `External/SPIRV-Reflect/lib/libspirv-reflect.a`. Pinned to `vulkan-sdk-1.4.357.0`. |
@@ -84,7 +84,7 @@ elements to decide what to link. This is the table it implements.
 | `SuperLuminal.props` | *(skipped)* | Dropped |
 | `LivePP.props` | *(skipped)* | Dropped |
 | `NavPower.props` | *(skipped)* | Dropped |
-| *(new)* SDL3 | `pkg-config --libs sdl3` | `Base` needs it from Phase 6 |
+| *(new)* SDL3 | `-LExternal/SDL3/lib -lSDL3` | `Base` needs it from Phase 6. Not pkg-config: nothing packages SDL3 on the target |
 | *(new)* Vulkan | `pkg-config --libs vulkan` | `Base` needs it from Phase 5 |
 | *(new)* VMA | *(none)* | Header only. `Base` needs it from Phase 5 |
 | *(new)* SPIRVReflect | `-lspirv-reflect` | `Base` needs it from Phase 5 |
@@ -145,8 +145,10 @@ those, and it is the one open question that blocks work today.
 3. ~~**`volk` or the Vulkan loader.**~~ *(Phase 5)* **Answered: the plain loader.** Nothing has
    been profiled yet, and nothing can be until the backend renders, so the default stands. It is
    one line in `Toolchain.SHEETS` plus an include if a profile ever argues otherwise.
-4. **SDL3 availability.** *(Phase 6)* Confirm whether the target distributions package SDL3, or
-   whether `DownloadDependencies.sh` must always build it.
+4. ~~**SDL3 availability.**~~ *(Phase 6)* **Answered: `DownloadDependencies.sh` always builds
+   it.** Ubuntu 24.04 LTS, the development target, has no SDL3 package. SDL3 first shipped in
+   January 2025 and reaches the archives from Ubuntu 25.04 onwards. A source build also pins one
+   version everywhere, which the vendored Dear ImGui 1.92.9b backend needs.
 5. **Does GameNetworkingSockets block the early phases?** *(Phase 1)* `Esoterica.Base` imports
    it, so it may block the first link. Check whether the linker can reach the networking code
    without it, or whether the build needs it before Phase 1 can finish.
