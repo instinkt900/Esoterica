@@ -55,17 +55,19 @@ turns out to be unworkable, that is a joint re-decision. Escalate. Do not diverg
 | `CmdDispatchRays`, `CmdBuildAccelerationStructure`, `AccelerationStructure*` | `VK_KHR_ray_tracing_pipeline`, `VK_KHR_acceleration_structure`, `VK_KHR_deferred_host_operations` |
 | `CmdDispatchMesh` | `VK_EXT_mesh_shader` |
 | `CmdSetShadingRate`, `ShadingRateCombiner`, `ShadingRateCaps` | `VK_KHR_fragment_shading_rate` |
-| `CmdExecuteIndirect`, `CommandSignature` | `VK_KHR_draw_indirect_count` (core 1.2), plus a compute pre-pass for multi-argument signatures |
+| `CmdExecuteIndirect`, `CommandSignature` | `VK_KHR_draw_indirect_count` (core 1.2). A signature that carries root data needs a shader change, not a pre-pass. See [open question 7](../Progress.md#open-questions) |
 | `SetDebugName` (9 overloads), `Cmd*DebugMarker` | `VK_EXT_debug_utils` |
 | `RootSignature`, `CmdSetRootConstants` | `VkPipelineLayout` and push constants |
 | `WaveOpsSupportFlags` | subgroup queries (core 1.1 and 1.2) |
 | `BeginFrameCapture` and `EndFrameCapture` | RenderDoc in-app API, through `dlopen( "librenderdoc.so" )` |
 | `GetTotalAllocatedDeviceMemory`, `ResourceAllocationStatistic`, `ReportDeviceMemoryLeaks` | VMA statistics |
 
-`CmdExecuteIndirect` is the awkward one. Direct3D 12 command signatures can bind vertex buffers
-and set root constants per draw, and Vulkan's indirect draws cannot. Read how the engine actually
-uses it (`grep -rn 'CmdExecuteIndirect' Code/Engine`) before you design the workaround. The
-engine may use draw-argument signatures only, in which case the mapping is direct.
+`CmdExecuteIndirect` is the awkward one, and P5.13 answered it. Direct3D 12 command signatures
+can set root constants and bind root descriptors per command, and Vulkan's indirect draws cannot.
+**Every engine signature carries root data**, so no engine call site takes the path that maps
+directly. A compute pre-pass does not help, because a pre-pass cannot bind a descriptor either.
+Both remaining shapes change the shaders, which is Phase 4's. This is
+[open question 7](../Progress.md#open-questions), it is still open, and it blocks the frame.
 
 ---
 
@@ -200,6 +202,14 @@ debug, and the group is cheap.
 
 See the note above on `IndirectArgumentType`.
 
+**Half written, by decision.** `CreateCommandSignature` and `DestroyCommandSignature` are real,
+and `CmdExecuteIndirect` handles a signature that carries only a draw or dispatch argument and
+refuses the rest at the line. See the P5.13 entry in [Progress.md](../Progress.md).
+
+**Open question 7 is now answered, and [P5.17](#p517---the-indirect-draw-shader-change---scheduled-not-started)
+finishes this group.** Do not try to complete P5.13 on its own; the missing half is a shader
+change.
+
 ### P5.14 - Mesh shaders
 
 `CmdDispatchMesh`, plus the mesh `CreatePipeline` overload
@@ -216,6 +226,141 @@ See the note above on `IndirectArgumentType`.
 This is the largest optional-feature group. `AccelerationStructureBuildFlags`,
 `AccelerationStructureGeometryFlags`, and `AccelerationStructureInstanceFlags` map closely onto
 their `VK_KHR_acceleration_structure` equivalents, so it is more mechanical than it looks.
+
+### P5.17 - The indirect draw shader change - **scheduled, not started**
+
+**This finishes P5.13 and unblocks the frame. It is the answer to open question 7, and the
+approach is decided: the shader reads its own command's root data out of the argument buffer.**
+Read the decision entry in [Progress.md](../Progress.md) before starting; it records why the two
+alternatives were rejected.
+
+**Do this after Phase 6 bring-up, not before.** Nothing here can be tested until the engine runs,
+and this is a change to shaders that Windows also compiles. Bring the window, the input and the
+swapchain up first, then take this on with a live engine and RenderDoc in front of you.
+
+#### The problem, in one picture
+
+A Direct3D 12 command signature sets shader bindings per command as the GPU walks the argument
+buffer. One material command is laid out like this:
+
+```
+[ root constants   40 bytes ]  set 0 binding b0 - per-draw data, different for every command
+[ root CBV address  8 bytes ]  set 0 binding b1 - a GPU address, different for every command
+[ dispatch args    12 bytes ]  VkDrawMeshTasksIndirectCommandEXT
+```
+
+`vkCmdDrawMeshTasksIndirectEXT` takes a stride, so it reads the last block correctly and can do
+nothing at all with the first two. **No Vulkan indirect draw rebinds a descriptor per command.**
+
+#### The fix
+
+**Turn the push into a pull.** Instead of the command processor writing the root data into the
+shader, the shader reads its own command out of the argument buffer, using its command index.
+Vulkan supplies that index as the `DrawIndex` builtin.
+
+Two facts were checked before choosing this, because every engine indirect draw is a *mesh*
+dispatch rather than a classic vertex draw:
+
+- The bundled SPIR-V validator allows `DrawIndex` in `MeshEXT` and `TaskEXT`, not only `Vertex`
+  (`External/DirectXShaderCompiler_src/external/SPIRV-Tools/source/val/validate_builtins.cpp:4009`).
+- DXC accepts `[[vk::builtin( "DrawIndex" )]]` and special-cases mesh and amplification inputs to
+  allow it (`.../tools/clang/lib/SPIRV/DeclResultIdMapper.cpp:3508`).
+
+`DrawIndex` needs `VK_KHR_shader_draw_parameters`, which is core in Vulkan 1.1. **No new device
+requirement, and no new extension.**
+
+#### The shape that fits what is already there
+
+This is a sketch, not a specification. Read the code and improve on it.
+
+1. **The pipeline layout gains a push constant range.** `RHI_Vulkan.cpp` uses **no push constants
+   at all** today - `CmdSetRootConstants` and `CmdSetRootParameter` are push-descriptor writes
+   into set 0 - so the whole range is free. Put the argument buffer's device address, the
+   signature's stride, and the byte offset of the root block in it.
+2. **`CmdExecuteIndirect` pushes that block, then draws.** It already knows all three numbers:
+   `CreateCommandSignature` records the stride and the offsets, and the argument buffer is a
+   parameter. **No change to `CreateCommandSignature`, and no change to `EngineShader.cpp`** - the
+   signature is still the description of the buffer layout, which is what both backends need.
+3. **The shader reads its root data from `argumentBufferAddress + DrawIndex * stride +
+   rootOffset`.** A buffer device address deref, which the bindless model already relies on.
+4. **Hide all of it in the `RHI.esh` macros.** `EE_DECLARE_ROOT_CONSTANTS` and
+   `EE_DECLARE_ROOT_CBV` (`RHI.esh:124` and `:125`) expand to `ConstantBuffer<T> RootConstants`
+   and `ConstantBuffer<T> RootCBV`. Add indirect variants that expand to the buffer read on
+   SPIR-V, keeping the names `RootConstants` and `RootCBV`, so **shader bodies do not change at
+   all** - only the declaration line at the top of each file.
+
+#### Guard it on `__spirv__`, so Windows is untouched
+
+DXC defines `__spirv__` when it targets SPIR-V
+(`.../tools/clang/lib/Frontend/InitPreprocessor.cpp:403`), and it is the only guard needed. The
+`#else` branch is the declaration that is there today, so **the Direct3D 12 path keeps its command
+signature and compiles to identical DXIL.** That matters twice: the Windows build must keep
+working, and these are upstream files, so the smaller and more mechanical the diff, the cheaper
+the next upstream merge.
+
+`DrawIndex` has no Direct3D 12 equivalent for a mesh shader, which is exactly why the two backends
+keep different paths here rather than converging on one.
+
+#### The shaders that change
+
+Only the ones reached by an indirect draw. Every other shader keeps `CmdSetRootConstants` and is
+not touched:
+
+| Shader | Reached by |
+|---|---|
+| `Renderer/DefaultMeshShader.esh` | The material path. `MaterialShader` builds a `DispatchMesh` signature at `EngineShader.cpp:139`, and forward shading and cascaded shadows execute it. |
+| `Debug/DebugDrawMesh.esf`, `Debug/DebugDraw.esf` | `SurfaceShader`, which builds `Draw`, `DrawIndexed` and `DispatchMesh` signatures at `EngineShader.cpp:208` to `:216`. `RenderPass_DebugDraw` executes them six times. |
+| `Renderer/ClusterCulling.esf` | The one indirect **compute** dispatch, at `Renderer_ForwardShading.cpp:794`. See below; it is the hard one. |
+
+`BucketResolve.esf` and `InstanceCulling.esf` **write** argument buffers and are dispatched
+directly. Their layouts (`DrawArgument`, `ClusterCullingArgument` in `RendererTypes.esh`) are the
+contract this change reads, so read them, but they should not need to change.
+
+#### Indirect compute is the part that does not fall out for free
+
+**`DrawIndex` does not exist in a compute shader, and `vkCmdDispatchIndirect` runs exactly one
+dispatch and reads no counter buffer.** `Renderer_ForwardShading.cpp:794` needs both: it passes
+`maxNumCommands` of `clusterCapacity / 64` and a counter buffer, and `InstanceCulling.esf:210`
+appends one command per thread group that found visible clusters, each with its own cluster range
+in its root constants. `CmdExecuteIndirect` refuses this case at the line today, and it is the
+only engine call site that hits that refusal.
+
+Two candidate answers. **Decide between them with the engine running, not now:**
+
+| Approach | What it costs |
+|---|---|
+| **Record `maxNumCommands` separate `vkCmdDispatchIndirect` calls**, each at its own offset, pushing the command index as the push constant that `DrawIndex` supplies for a draw. | Records a lot of commands that usually do nothing. Needs the argument buffer zeroed each frame so an unused slot dispatches `(0,0,0)`, which is a legal no-op - **check whether the engine already clears it, and escalate if it does not**, because that is an engine-side change. |
+| **Flatten to one dispatch.** A pre-pass computes a prefix sum of the per-command group counts, one indirect dispatch covers the total, and each group works out which command it belongs to. | More shader work in `ClusterCulling.esf`, and a pre-pass to write. Repacking is something a compute pre-pass *can* do; binding a descriptor is not. Scales properly. |
+
+Start with the first. It is a few lines and it makes the frame draw. Move to the second only if a
+capture says the empty dispatches cost something.
+
+#### This edits upstream files, which normally means escalate
+
+**It was escalated, and the human approved it on 2026-08-29.** `RHI.esh` and the four shader files
+above are upstream files, and Conventions rule 3 and the escalation list in
+[/AGENTS.md](../../AGENTS.md) both say to stop before editing one that
+[TouchedFiles.md](../TouchedFiles.md) does not list. They are on the registry now, marked
+`planned`, with the guard shape that keeps each diff small. **Keep every edit inside an
+`#ifdef __spirv__`.** A change that alters the Direct3D path has broken the prime directive, not
+just the Windows build.
+
+#### Done when
+
+1. `CmdExecuteIndirect` has no `EE_UNIMPLEMENTED_FUNCTION` left, which takes
+   `RHI_Vulkan.cpp` to 2 markers, both of them unreachable-caller markers.
+2. `./CompileShaders.sh` exits 0, and all 46 stages pass `spirv-val --target-env vulkan1.3
+   --scalar-block-layout` with the validator in `External/DirectXShaderCompiler/bin/x64/`.
+3. The Windows MSBuild build still succeeds and the DXIL is unchanged. `git diff` on the shader
+   files shows nothing outside an `#ifdef __spirv__`.
+4. The engine frame draws geometry on Linux, with validation layers on and no errors.
+5. A Windows screenshot and a Linux screenshot of the same scene are compared, and every
+   difference is listed with an explanation. This is Phase 5 criteria 7 and 8, and this task is
+   what makes them checkable.
+
+**Mesh shader hardware is required to check items 4 and 5.** Neither GPU in the current
+development machine has `VK_EXT_mesh_shader`, and the engine's whole geometry path is mesh
+shaders, so this needs different hardware or a long wait on `llvmpipe`.
 
 ---
 
@@ -253,7 +398,10 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
 ## Acceptance criteria
 
 1. Every function in `RHI.h` has a real implementation. **No `EE_UNIMPLEMENTED_FUNCTION()`
-   remains** in `RHI_Vulkan.cpp`.
+   remains** in `RHI_Vulkan.cpp`. **Not met: 3 remain, down from 103, and none is a whole
+   function.** One is the indirect refusal from open question 7. The other two are markers that
+   name a caller if one ever appears: a sampler border colour that needs
+   `VK_EXT_custom_border_color`, and the static-sampler path the binding model does not use.
 2. `RHI.h` is unmodified. `git diff upstream/main -- Code/Base/Render/RHI.h` is empty.
 3. `RHI_Direct3D12.cpp` is unmodified.
 4. ~~Bring-up steps 1 to 8 all pass in the `Tester` harness, and the tests are committed.~~

@@ -130,7 +130,10 @@ configure settings that keep a re-run incremental.
 
 ## Open questions to resolve during implementation
 
-Answer each question in the phase that first needs it, then record the answer here.
+Answer each question in the phase that first needs it, then record the answer here. Questions
+raised later, during implementation, are added to the table in
+[Progress.md](Progress.md#open-questions) instead. Question 7, the indirect draws, is one of
+those, and it is the one open question that blocks work today.
 
 1. **`ctt` Linux support.** *(Phase 3)* Confirm that the texture-compression library builds on
    Linux. If it does not, the options are: find the upstream project and port it, swap in an

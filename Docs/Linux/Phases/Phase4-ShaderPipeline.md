@@ -232,6 +232,26 @@ these up. That is P0.4.
 
 ---
 
+### P4.7 - The indirect draw shader change - **owned by [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**
+
+Phase 5 found that the engine's indirect draws cannot reach Vulkan without a change on the shader
+side, and open question 7 is now answered: the shader reads its own command's root data out of the
+argument buffer, indexed by `DrawIndex`. **The task lives in the Phase 5 document**, because that
+is where the indirect draw acceptance criteria are, but the work is this phase's kind of work.
+
+What it means for Phase 4:
+
+- **`RHI.esh` gains indirect variants of `EE_DECLARE_ROOT_CONSTANTS` and `EE_DECLARE_ROOT_CBV`**
+  (`:124`, `:125`), guarded on `__spirv__` the same way this phase's `HLSL_STATIC_ASSERT` guard is.
+- **All 46 stages recompile and revalidate.** `./CompileShaders.sh` and `spirv-val` are the check,
+  with the validator in `External/DirectXShaderCompiler/bin/x64/`, not the one on `PATH`, and with
+  `--scalar-block-layout`.
+- **Four upstream shader files change**, which is the first time this port edits one. They are on
+  [TouchedFiles.md](../TouchedFiles.md), and every edit sits inside the guard so the DXIL is
+  unchanged.
+
+---
+
 ## Acceptance criteria
 
 1. `libdxcompiler.so` builds, and the Reflector links against it.

@@ -103,7 +103,19 @@ These were decided at planning time. Change one only with a deliberate decision 
 
 ## Status
 
-See [Progress.md](Progress.md). **Phases 0, 1, 2 and 3 are done on Linux.** The resource compiler
-builds, links, and compiles the textures, meshes, physics data and map under `Data/`. Materials
-wait on the shader pipeline. **Phase 4, the shader pipeline, is next**, and it is the gate on both
-the remaining materials and the renderer.
+See [Progress.md](Progress.md). **Phases 0 to 4 are done on Linux.** The resource compiler
+compiles every resource under `Data/`, DXC builds from source, and all 46 shader stages compile
+and validate as SPIR-V.
+
+**Phase 5, the Vulkan RHI, is written and merged.** All sixteen groups are on `main`, and **none
+of them has ever run**: no Linux binary can reach `RHI::CreateContext` until Phase 6 lands. Treat
+the whole backend as compile-verified and run-unverified.
+
+**The frame does not draw yet, and the fix is scheduled.** Every engine command signature sets
+root constants and binds root descriptors per command, and no Vulkan indirect draw can do either.
+Open question 7 is now answered: the shader reads its own command's root data out of the argument
+buffer, indexed by `DrawIndex`. That is
+[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
+and it comes **after** Phase 6, because it cannot be tested until the engine runs.
+
+**Phase 6, windowing and input, is next.**
