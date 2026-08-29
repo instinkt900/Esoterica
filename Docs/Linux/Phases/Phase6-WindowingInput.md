@@ -5,8 +5,18 @@
 **Deliverable:** `./Build/Linux_Release/EsotericaEngine -map data://path_to_map.map` opens a
 window and renders.
 
-**Prerequisites:** Phase 5 through bring-up step 8, with bindless verified. Swapchain present,
-step 9, is finished together with this phase.
+**Prerequisites:** Phase 5, all sixteen groups, which are written and merged. **Bring-up steps 1
+to 8 have not been met and cannot be**, because nothing on Linux can reach `RHI::CreateContext`
+until this phase provides an entry point. **This phase is where the Vulkan backend runs for the
+first time.** Expect to debug it, not just to call it. Read the P5.x entries in
+[Progress.md](../Progress.md) before you start; each one ends with a "Not verified" list.
+
+**A rendered frame also needs [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
+which is deliberately scheduled after this phase.** Every engine render pass draws through
+`CmdExecuteIndirect`, and `CmdExecuteIndirect` refuses the engine's command signatures at the
+line. The window, the input, the swapchain and imgui all come up without it. **Geometry does
+not.** Expect a running engine with a clear window before P5.17 lands, and read acceptance
+criterion 2 with that in mind.
 
 **Rough cost:** 3-4 weeks.
 
@@ -141,18 +151,32 @@ Conventions rule 3.
 
 ### P6.6 - Swapchain surface creation
 
-This finishes Phase 5's bring-up step 9.
+This finishes Phase 5's bring-up step 9. **Phase 5 answered both questions it owed this phase.**
+Both answers are in the P5.3 entry in [Progress.md](../Progress.md), and both differ from what
+this section originally planned.
 
-`RenderWindow::SetNativeWindowHandle( void* )` flows into
-`RHI::SwapchainParameters::m_pNativeWindowHandle`. On Linux, pass the `SDL_Window*`, and have the
-Vulkan backend call `SDL_Vulkan_CreateSurface`.
+**`m_pNativeWindowHandle` is a `VkSurfaceKHR` on Linux, not an `SDL_Window*`, and the application
+owns it.** `Base/Render` depends on no window system library and must not start to, so the
+application calls `SDL_Vulkan_CreateSurface` and hands the result to
+`RenderWindow::SetNativeWindowHandle( void* )`. `RHI_Vulkan.cpp` therefore does **not** link
+against SDL3. `CreateContext` already enables `VK_KHR_surface` and the xlib, xcb and wayland
+extensions the loader reports, so the instance can create a surface. `DestroySwapchain` never
+destroys the surface; the application does.
 
-This makes `RHI_Vulkan.cpp` link against SDL3. That coupling is slightly unfortunate, but it
-matches how `RHI_Direct3D12.cpp` takes an `HWND`. Accept it. The alternative is an extra
-abstraction layer for one call.
+**The application drives swapchain recreation, not the RHI.** `Engine.cpp:754` and
+`ImguiRenderer.cpp:91` already compare the window size against `GetSwapchainSize()` and call
+`Window::ResizeSwapchain`, each waiting the graphics queue idle first. `AcquireNextImage` and
+`QueuePresent` accept `VK_SUBOPTIMAL_KHR` and `VK_ERROR_OUT_OF_DATE_KHR` rather than recreating
+behind the engine's back.
 
 An SDL3 window meant for Vulkan must be created with `SDL_WINDOW_VULKAN`. Coordinate this with
 the window creation in P6.2.
+
+**The first thing that will fail here is the swapchain image count.** `minImageCount` is a
+minimum, so a driver may hand back more images than were asked for. `Swapchain::m_renderTargets`
+is a fixed `TArray` of `MaxPendingFrames`, which is 2, and several Linux drivers want three or
+four. `CreateSwapchain` logs both numbers and halts. The fix is `MaxPendingFrames` in `RHI.h`,
+which is an upstream file, so it is a human decision. Escalate it.
 
 ### P6.7 - `EngineApplication_Linux`
 
@@ -180,7 +204,11 @@ whether that is a problem, and record what you learn.
 ## Acceptance criteria
 
 1. `Build/Linux_Release/EsotericaEngine` builds and links.
-2. It opens a window and renders a map passed with `-map data://...`.
+2. It opens a window and renders a map passed with `-map data://...`. **Split this one.** The
+   window, the swapchain, the frame loop and imgui are this phase's. **Geometry needs
+   [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
+   which is scheduled after this phase, and mesh shader hardware, which the current development
+   machine does not have. Say which half you met.
 3. Keyboard, mouse, and gamepad input all work, for camera control and for every key the engine
    binds.
 4. Window resize recreates the swapchain with no validation errors and no leaks.

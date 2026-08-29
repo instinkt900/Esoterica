@@ -31,7 +31,7 @@ nothing and guarantees conflicts.
 
 | File | Change | Phase | Status |
 |---|---|---|---|
-| `Code/Scripts/NinjaGen/NinjaGen.py` | Large rewrite. A special case, see [01-UpstreamMerges.md](01-UpstreamMerges.md#special-case-codescriptsninjagenninjagenpy). | 0 | planned |
+| `Code/Scripts/NinjaGen/NinjaGen.py` | Large rewrite. A special case, see [01-UpstreamMerges.md](01-UpstreamMerges.md#special-case-codescriptsninjagenninjagenpy). | 0 | **done** |
 | `Code/EngineTools/FileSystem/FileSystemWatcher.h` | Line 15: change `#if _WIN32` to `#if _WIN32 \|\| defined( __linux__ )`. One line modified. **Needed in Phase 2, not Phase 3:** the Reflector parses every project header in one translation unit, so a Windows-gated `Watcher` class breaks reflection for all of EngineTools. | 2 (was planned for 3) | done |
 | `Code/Base/Utils/GlobalRegistryBase.h` | Line 2: `#include "Base\Esoterica.h"` to `#include "Base/Esoterica.h"`. One character. clang does not treat `\` as a path separator in an include, so on Linux the header is simply not found. MSVC accepts `/`, so Windows is unaffected. | 0 | done |
 | `Code/Base/Input/InputDevices/InputDevice_Controller.cpp` | Line 2: `#include "Base\Math\Vector.h"` to `#include "Base/Math/Vector.h"`. Same reason as above. | 0 | done |
@@ -116,6 +116,31 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Base/Render/RHI.esh` | `HLSL_STATIC_ASSERT` becomes a no-op under `__spirv__`. DXC's SPIR-V back end does not implement `_Static_assert`. **The plan predicted no `.esh` file would need edits; that was wrong.** | 4 | done |
 | `Code/Applications/Reflector/ShaderReflection/ComPtr_Linux.h` | **New file.** A minimal `Microsoft::WRL::ComPtr` replacement. DXC's own `CComPtr` lacks `Get`, `GetAddressOf` and `ReleaseAndGetAddressOf`, which is what the eleven call sites use. | 4 | done |
 
+## Phase 5 - Vulkan RHI, the P5.17 indirect draw change
+
+**Planned, and escalated first.** These are the only upstream *shader* files this port edits.
+[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)
+holds the full task, and the human approved the edits on 2026-08-29 as the answer to open question
+7.
+
+**Every edit here sits inside `#ifdef __spirv__`, with the existing declaration in the `#else`.**
+DXC defines that macro only when it targets SPIR-V, so the Direct3D 12 path keeps its command
+signature and compiles to identical DXIL. An edit that changes the Windows side has broken the
+prime directive, not just the build. `RHI.esh` already carries one guard of exactly this shape
+from Phase 4.
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Base/Render/RHI.esh` (2) | Indirect variants of `EE_DECLARE_ROOT_CONSTANTS` and `EE_DECLARE_ROOT_CBV` (`:124`, `:125`). Under `__spirv__` they read the shader's own command out of the argument buffer at `argumentBufferAddress + DrawIndex * stride + rootOffset`, keeping the names `RootConstants` and `RootCBV` so no shader body changes. The `#else` is today's `ConstantBuffer<T>` declaration. | 5 | planned |
+| `Code/Engine/Render/Shaders/Renderer/DefaultMeshShader.esh` | One declaration line each, swapped to the indirect macros. These four are the only shaders an indirect draw reaches. Everything else keeps `CmdSetRootConstants` and is not touched. | 5 | planned |
+| `Code/Engine/Render/Shaders/Debug/DebugDrawMesh.esf` | As above. | 5 | planned |
+| `Code/Engine/Render/Shaders/Debug/DebugDraw.esf` | As above. | 5 | planned |
+| `Code/Engine/Render/Shaders/Renderer/ClusterCulling.esf` | As above, and the hard one: it is the only indirect **compute** dispatch, where `DrawIndex` does not exist. P5.17 lists the two candidate approaches. **The command index arrives as a push constant instead.** | 5 | planned |
+
+**Watch for one more.** If the chosen approach needs the `ClusterCulling` argument buffer cleared
+each frame, that is a change in `Code/Engine/Render/Renderer_ForwardShading.cpp`, which is **not**
+on this registry. Check whether the engine already clears it, and escalate before editing it.
+
 ## Phase 2 - Reflector
 
 | File | Change | Phase | Status |
@@ -170,7 +195,7 @@ Checked during the survey. Recorded so that nobody investigates them again.
 
 | File | Change | Phase | Status |
 |---|---|---|---|
-| `.gitignore` | Add `Build/`. The existing entry is lowercase `build/`. Linux filesystems are case-sensitive, so git currently does **not** ignore `Build/`, the MSBuild and ninja output directory. Confirmed with `git check-ignore`. | 0 | planned |
+| `.gitignore` | Add `Build/`. The existing entry is lowercase `build/`. Linux filesystems are case-sensitive, so git currently does **not** ignore `Build/`, the MSBuild and ninja output directory. Confirmed with `git check-ignore`. | 0 | **done** |
 | `.gitignore` | Add `__pycache__/`. Running the build generator writes bytecode next to it. One line appended, nothing modified. | 0 | done |
 | `.gitignore` | Add `Build/`, `compile_commands.json`, `.ninja_deps`, `.ninja_log`. The ninja build writes all four, and none were ignored. Appended, nothing modified. | 0 | done |
 

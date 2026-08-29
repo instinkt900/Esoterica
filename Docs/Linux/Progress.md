@@ -10,9 +10,16 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 5 (in progress).** The Vulkan dependencies are in place and open question 3 is
-answered: the plain loader, not `volk`. **P5.1 to P5.10 are all written and have never been
-run.**
+**Phase: 5 (written and merged, not complete).** All sixteen groups are on `main`. The
+seventeen stacked PRs, #24 to #41, are merged and nothing is in flight. **Nothing in any of them
+has ever run.**
+
+**Open question 7 is answered, and the work is scheduled as P5.17.** The shader reads its own
+command's root data out of the argument buffer, indexed by `DrawIndex`. **It is deliberately
+sequenced after Phase 6 bring-up**, because nothing here can be tested until the engine runs. Read
+the decision entry and
+[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)
+before starting it. **The frame still cannot draw until it lands.**
 
 **All 16 groups are written. 15 of them are real; P5.13 is the exception and cannot be finished
 here.** Every one is unverified: nothing on Linux has executed a single RHI call. Phase 5's own
@@ -38,14 +45,14 @@ cannot run here. `VK_EXT_mesh_shader` is present only on `llvmpipe`, the softwar
 Intel UHD 620 and the NVIDIA MX250 both lack it, and both would lack it on Direct3D 12 as well, so
 this is the hardware being below the engine's bar rather than a port problem. See the P5.14 entry.
 
-**The frame cannot draw, and closing that needs a decision nobody has made yet.** Every render
+**The frame cannot draw. The decision is made, the work is not done.** Every render
 pass is built on `CmdExecuteIndirect` - `RenderPass_ForwardShading` uses it six times,
 `RenderPass_CascadedShadow` twice, `RenderPass_DebugDraw` six times - and **the engine's command
 signatures cannot be expressed by any Vulkan indirect draw.** A Direct3D 12 command signature sets
 root constants and binds root descriptors per command; Vulkan's indirect draws read draw arguments
 and nothing else, and a compute pre-pass does not help because a pre-pass cannot bind a descriptor
-either. **The answer needs a shader change, which is Phase 4's.** P5.13 landed its mechanical half
-by decision and refuses the rest at the line; see the P5.13 entry and open question 7.
+either. **The answer is a shader change, and it is P5.17.** P5.13 landed its mechanical half by
+decision and refuses the rest at the line; see the P5.13 entry, the decision entry, and P5.17.
 
 **`m_pNativeWindowHandle` is a `VkSurfaceKHR` on Linux, and the application owns it.** That is
 the surface-creation requirement Phase 5 owes Phase 6, and `SDL_Vulkan_CreateSurface` returns
@@ -124,7 +131,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **all 16 groups written, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception and cannot be finished until open question 7 is answered. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
+| 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
 | 6 - Windowing and Input | not started |
 | 7 - Editor and Tools | not started |
 
@@ -137,26 +144,24 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**Phase 5, on `linux/p5.16-raytracing`.** Stacked: `p5.0-vulkan-deps` (PR #24),
-`p5.1-device-context` (#25), `p5.2-queues-sync` (#26), `p5.4-command-buffers` (#27),
-`p5.5-buffers` (#28), `p5.7-pipelines` (#30), `p5.8-draw-commands` (#31),
-`p5.6-textures-samplers` (#32), `p5.9-barriers` (#33), `p5.10-copies-clears` (#34),
-`p5.3-swapchain` (#35), `p5.13-indirect-draws` (#36), `p5.12-debug-utilities` (#37),
-`p5.11-query-pools` (#38), `p5.14-mesh-shaders` (#39), `p5.15-variable-rate-shading` (#40), then
-this. **Seventeen branches, none merged, and nothing has run any of it.**
+**Nothing.** The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
+ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
+it.**
 
 **There is no next group. Every one of the sixteen is written.** What is left in Phase 5 is not
 more code:
 
-1. **Open question 7**, the indirect draws, which needs a shader-side decision and blocks the
-   frame. Nothing else moves past it.
-2. **Merging the stack.** Seventeen stacked PRs is a lot of unreviewed work to carry.
-3. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands.
+1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
+   before it lands. **This is the next thing to do.**
+2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
+   the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
+   after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
+   easier to debug against a live frame.
 
-**Open question 7 blocks the frame and is not scheduled.** It is the indirect-draw decision
-described above and in the P5.13 entry. **No amount of further Phase 5 work moves past it**, so it
-is the thing to settle before Phase 6.
+**P5.17 is written up in full in the phase document**, including the shape of the fix, the four
+shader files it touches, the `__spirv__` guard that keeps Windows untouched, the indirect compute
+case that does not fall out for free, and what "done" means. **Verifying it needs mesh shader
+hardware, which this machine does not have.**
 
 **Still owed to other groups**, each asserted or commented at the line rather than silently
 skipped:
@@ -199,6 +204,27 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-29 - The Phase 5 stack is merged, and one question is left
+
+**All seventeen Phase 5 branches are on `main`.** PRs #24 to #41 went in as merge commits, ending
+with `p5.16-raytracing` at `117d45b`. Nothing is in flight.
+
+**Nothing about the code changed on merge, so nothing above changes.** Every group is still
+compile-verified and run-unverified, 3 `EE_UNIMPLEMENTED_FUNCTION` remain, and Phase 5 acceptance
+criteria 5 to 10 still need a running engine.
+
+**One item in Phase 5 is left, and it is a decision rather than code: open question 7.** The
+engine's command signatures carry root data, no Vulkan indirect draw can bind it, and both
+candidate answers change the shaders. It blocks a rendered frame and nothing else in Phase 5 moves
+past it. Phase 6 can bring up the window, the input and the swapchain without it.
+
+Docs brought in line with the merge: [README.md](README.md) status,
+[Phase5-VulkanRHI.md](Phases/Phase5-VulkanRHI.md) (the indirect note, acceptance criterion 1, and
+the P5.13 group), and [Phase6-WindowingInput.md](Phases/Phase6-WindowingInput.md) (its
+prerequisites, and P6.6, which still planned to pass an `SDL_Window*` into the RHI).
+
+**Upstream files edited: none.**
 
 ### 2026-08-29 - P5.16 Raytracing. The last group, and the least reachable
 
@@ -2389,6 +2415,50 @@ the reasoning, not just the outcome.
 **Alternatives rejected:** ...
 -->
 
+### 2026-08-29 - Open question 7: the shader reads its own indirect arguments
+
+**Context:** Every engine render pass draws through `CmdExecuteIndirect`, and every engine command
+signature sets root constants and binds a root CBV per command. **No Vulkan indirect draw rebinds
+anything per command.** P5.13 landed the mechanical half and refused the rest at the line, which
+left the frame unable to draw.
+
+**Decision:** **Turn the push into a pull.** The shader reads its own command's root data out of
+the argument buffer, indexing with the `DrawIndex` builtin, which is core Vulkan 1.1 through
+`VK_KHR_shader_draw_parameters`. The change hides in the `RHI.esh` macros and is guarded on
+`__spirv__`, so shader bodies and the whole Direct3D 12 path stay as they are. Scheduled as
+**[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
+**after Phase 6 bring-up**, because nothing here can be tested until the engine runs and this
+touches shaders Windows also compiles.
+
+**Rationale:** It needs no extension and no new device requirement, and it is how GPU-driven
+renderers normally solve this. Two things were checked before choosing it, because every engine
+indirect draw is a mesh dispatch rather than a vertex draw: the bundled SPIR-V validator allows
+`DrawIndex` in `MeshEXT` and `TaskEXT` (`validate_builtins.cpp:4009`), and DXC accepts
+`[[vk::builtin( "DrawIndex" )]]` on mesh and amplification inputs
+(`DeclResultIdMapper.cpp:3508`). The Vulkan backend uses no push constants today, so the range
+that carries the argument buffer address is free.
+
+**Alternatives rejected:**
+
+- **`VK_EXT_device_generated_commands`.** It sets push constants per command and binds index and
+  vertex buffers per command, but it **still cannot bind a descriptor set** per command. It
+  therefore needs the same shader change *plus* a device extension the Phase 4 requirement list
+  does not have.
+- **A compute pre-pass.** This is the usual answer when an argument buffer is the wrong shape, and
+  it does not apply. Repacking is not needed - `vkCmdDrawMeshTasksIndirectEXT` takes a stride and
+  already reads the draw block correctly. What is needed is a descriptor binding, and a compute
+  shader cannot bind a descriptor for a later draw either. This also answers the question Phase 4
+  left open when it set `m_indirectRootConstant` to `false`.
+- **A CPU loop, one indirect call per command.** The command count is produced on the GPU, so the
+  CPU does not know how many commands there are and cannot read the GPU-written root data to bind
+  it. It survives only as a fallback for the indirect *compute* case, where the index is known
+  because the CPU wrote the loop.
+
+**Consequences worth stating:** This edits upstream shader files, which the escalation list
+normally forbids. It was escalated and approved. The five files are on
+[TouchedFiles.md](TouchedFiles.md) as `planned`, each edit inside an `#ifdef __spirv__`.
+**Verifying it needs mesh shader hardware**, which this development machine does not have.
+
 ### 2026-08-28 - Phase 5 is written blind, because nothing on Linux can run it
 
 **Decision: implement the Vulkan backend verified by compile and link only, and first execute it
@@ -3443,7 +3513,7 @@ question to "Decisions made" once you answer it.
 | 4 | Do the target distros package SDL3, or must we always build it? | Phase 6 | open |
 | 5 | ~~Does `GameNetworkingSockets` block the first `Base` link?~~ | Phase 1 | **answered: yes, and at compile time, not link** |
 | 6 | ~~Does the `VirtualAlloc` region in `Memory.cpp` have a working non-Windows path?~~ | Phase 1 | **answered: no** |
-| 7 | How do the engine's indirect draws reach Vulkan? Every command signature sets root constants and binds root descriptors per command, and no Vulkan indirect draw can do either. Both candidate answers change the shaders, which is Phase 4's. | Phase 5, and the whole frame | **open, and it blocks the frame.** See the P5.13 entry |
+| 7 | ~~How do the engine's indirect draws reach Vulkan?~~ | Phase 5, and the whole frame | **answered 2026-08-29: the shader reads its own command's root data out of the argument buffer, indexed by `DrawIndex`.** Scheduled as P5.17, after Phase 6 bring-up. See the decision entry |
 
 Answered:
 
