@@ -118,4 +118,6 @@ buffer, indexed by `DrawIndex`. That is
 [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
 and it comes **after** Phase 6, because it cannot be tested until the engine runs.
 
-**Phase 6, windowing and input, is next.**
+**Phase 6, windowing and input, has started.** P6.1 is done: SDL3 `release-3.4.14` builds from
+source into `External/SDL3/` and `Esoterica.Base` links it. Nothing includes an SDL header yet.
+P6.2, `LinuxApplication`, is next.

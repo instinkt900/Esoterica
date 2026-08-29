@@ -296,8 +296,9 @@ SHEETS = {
     #---------------------------------------------------------------------
     # Linux-only. These have no Code/PropertySheets/*.props sibling and never will, because the
     # Windows build has no use for them: Vulkan replaces Direct3D 12, VMA replaces
-    # D3D12MemoryAllocator, and SPIRV-Reflect replaces ID3D12ShaderReflection. They reach a
-    # project through LINUX_ONLY_SHEETS rather than through a .vcxproj import.
+    # D3D12MemoryAllocator, SPIRV-Reflect replaces ID3D12ShaderReflection, and SDL3 replaces the
+    # Win32 window, message loop, raw input and XInput. They reach a project through
+    # LINUX_ONLY_SHEETS rather than through a .vcxproj import.
     #---------------------------------------------------------------------
 
     # The loader and headers come from the distribution, not External/. pkg-config supplies both
@@ -317,16 +318,28 @@ SHEETS = {
                                     libraries = ( 'spirv-reflect', ),
                                     requires_path = 'External/SPIRV-Reflect',
                                     deferred_to_phase = 'Phase 5' ),
+    # Windowing, input and the Vulkan surface. Replaces Application_Win32.cpp's raw Win32 calls,
+    # InputDevice_KeyboardMouse_Win32.cpp's raw input, and XInput.
+    #
+    # From External/ rather than from pkg-config, which is where Phase 6's plan expected it.
+    # Open question 4 answers no: Ubuntu 24.04 LTS packages no SDL3 at all, so
+    # DownloadDependencies.sh builds it and the sheet points at the install prefix. A distro
+    # package would need PKG_CONFIG_PATH set anyway once External/ holds a second copy.
+    'SDL3':                  Sheet( include_directories = ( 'External/SDL3/include', ),
+                                    library_directories = ( 'External/SDL3/lib', ),
+                                    libraries = ( 'SDL3', ),
+                                    requires_path = 'External/SDL3',
+                                    deferred_to_phase = 'Phase 6' ),
 }
 
 # Sheets that attach to a project by name, because no .vcxproj imports them. Everything else in
 # SHEETS arrives through UpstreamProjects.txt, which SyncUpstream.py regenerates from the
 # .vcxproj files, so a hand-written entry there would not survive the next sync.
 #
-# Only Esoterica.Base needs these. It holds RHI_Vulkan.cpp, and every other project reaches the
-# RHI through it.
+# Only Esoterica.Base needs these. It holds RHI_Vulkan.cpp and the _Linux platform layers for
+# windowing, input and imgui, and every other project reaches both through it.
 LINUX_ONLY_SHEETS = {
-    'Esoterica.Base': ( 'Vulkan', 'VMA', 'SPIRVReflect' ),
+    'Esoterica.Base': ( 'Vulkan', 'VMA', 'SPIRVReflect', 'SDL3' ),
 }
 
 def linux_only_sheets( project_name ):
