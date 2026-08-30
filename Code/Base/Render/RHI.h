@@ -28,7 +28,11 @@ namespace EE::Render::RHI
         MaxVendorNameLength = 256,
         MaxEntryPointNameLength = 64,
 
+#if defined( __linux__ )
+        MaxPendingFrames = 3, // Several Linux drivers report a swapchain minImageCount of 3
+#else
         MaxPendingFrames = 2, // Set this value to 2 for double buffering, or 3 for triple buffering.
+#endif
 
         MaxDispatchSize = 65535U,
     };

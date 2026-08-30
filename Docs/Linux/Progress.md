@@ -323,7 +323,7 @@ own check, with the message P5.3 wrote for this exact case:
 `Swapchain::m_renderTargets` is a `TArray<Texture*, MaxPendingFrames>`, and `AcquireNextImage`
 returns an index into it, so there is no way to absorb this in the backend.
 
-**The edit, exactly, at `RHI.h:31`. Three lines added, zero modified:**
+**The edit, exactly, at `RHI.h:31`. Four lines added, zero modified:**
 
 ```cpp
 #if defined( __linux__ )
