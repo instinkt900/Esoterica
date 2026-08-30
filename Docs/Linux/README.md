@@ -123,6 +123,6 @@ builds from source into `External/SDL3/`, and `LinuxApplication` opens a window,
 persists its layout and shuts down cleanly. Nothing derives from it yet; that is P6.7. P6.3, the
 imgui platform backend, is next.
 
-**P6.6 is blocked on a question for a human.** `Platform::SetMainWindowHandle` holds an
-`SDL_Window*`, and `RHI_Vulkan.cpp` expects the same value to be a `VkSurfaceKHR`. See the P6.2
-entry in [Progress.md](Progress.md).
+**The surface question is settled.** `Platform::SetMainWindowHandle` holds an `SDL_Window*`, and
+`RHI_Vulkan.cpp` creates the `VkSurfaceKHR` itself through a Linux-only `Platform` function. P6.6
+writes it. See the decision entry in [Progress.md](Progress.md).
