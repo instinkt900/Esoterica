@@ -2,21 +2,29 @@
 
 **Goal:** the standalone `Engine` application runs a map on Linux.
 
-**Deliverable:** `./Build/Linux_Release/EsotericaEngine -map data://path_to_map.map` opens a
-window and renders.
+**Deliverable:** `./Build/Linux_Release/Esoterica.Applications.Engine -map data://path_to_map.map -packaged`
+opens a window and renders. The binary is named after its project, like the Reflector and the
+ResourceCompiler, and `-packaged` is needed until the ResourceServer builds in Phase 7.
 
-**Prerequisites:** Phase 5, all sixteen groups, which are written and merged. **Bring-up steps 1
-to 8 have not been met and cannot be**, because nothing on Linux can reach `RHI::CreateContext`
-until this phase provides an entry point. **This phase is where the Vulkan backend runs for the
-first time.** Expect to debug it, not just to call it. Read the P5.x entries in
-[Progress.md](../Progress.md) before you start; each one ends with a "Not verified" list.
+> ## Status: P6.1 to P6.7 are done. **P6.8 is next and is all that is left.**
+>
+> The engine binary builds, links and starts, and a scratch application has cleared and presented
+> frames through the Vulkan backend with no validation errors. **What P6.8 inherits is written
+> up in its own section below.** Read the P6.x entries in [Progress.md](../Progress.md) first;
+> they carry every measurement and every decision this phase made.
 
-**A rendered frame also needs [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
+**Prerequisites:** Phase 5, all sixteen groups, which are written and merged. **This phase is
+where the Vulkan backend ran for the first time**, and doing so found four real defects in it.
+Expect more. Read the P5.x entries in [Progress.md](../Progress.md) too; each one ends with a
+"Not verified" list.
+
+**A rendered frame still needs [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
 which is deliberately scheduled after this phase.** Every engine render pass draws through
 `CmdExecuteIndirect`, and `CmdExecuteIndirect` refuses the engine's command signatures at the
 line. The window, the input, the swapchain and imgui all come up without it. **Geometry does
-not.** Expect a running engine with a clear window before P5.17 lands, and read acceptance
-criterion 2 with that in mind.
+not.** Read acceptance criterion 2 with that in mind.
+
+**Two things now sit in front of P5.17**, and P6.8 hits them first. See "P6.8 - First light".
 
 **Rough cost:** 3-4 weeks.
 
@@ -43,9 +51,14 @@ it looks, because **`ImguiPlatform_Win32.cpp` is a vendored copy of upstream Dea
 upstream's naming.
 
 The Linux equivalent is therefore **upstream's `imgui_impl_sdl3.cpp`**, adapted the same way. It
-is a port of the adaptations, not a backend written from scratch. Diff the vendored file against
-the matching upstream release of `imgui_impl_win32.cpp` first, to isolate exactly what Esoterica
-changed. That diff is your real worklist.
+is a port of the adaptations, not a backend written from scratch.
+
+**Correction from P6.3: there is no matching upstream release to diff against.**
+`Code/Base/ThirdParty/imgui/imgui.cpp` is byte-identical to `v1.92.9b-docking`, and
+`ImguiPlatform_Win32.cpp` was last synced from a backend of roughly 1.89.1 in 2022. The Linux
+backend is built from `v1.92.9b-docking`'s `imgui_impl_sdl3.cpp`, which matches the core, with
+Esoterica's *adaptations* ported by hand. See the P6.3 entry in [Progress.md](../Progress.md);
+it lists every one of them.
 
 SDL3 also absorbs keyboard, mouse, gamepad, multi-monitor, DPI, and the X11-against-Wayland
 question. Do not hand-write any of it.
@@ -54,18 +67,28 @@ question. Do not hand-write any of it.
 
 ## Tasks
 
-### P6.1 - Get SDL3
+### P6.1 - Get SDL3 — **done**
 
-This answers [open question 4](../Progress.md#open-questions). Add an `sdl3` target to
-`DownloadDependencies.sh`, and add `pkg-config --libs sdl3` to the generator's dependency
-mapping. Pin the version. SDL3's API was still settling recently.
+`./DownloadDependencies.sh sdl3` builds `release-3.4.14` from source into `External/SDL3/`, and
+`Esoterica.Base` links `-lSDL3`.
+
+**Open question 4 is answered: always build it.** Ubuntu 24.04 LTS, the development target,
+packages no SDL3 at all. **The sheet therefore points at `External/`, not at
+`pkg-config --libs sdl3`** as this task originally planned: there is no `sdl3.pc` to find. X11
+and Wayland are forced on in the CMake configure, because SDL silently drops a video backend
+whose headers are missing.
 
 This is **SDL3**, not SDL2. Dear ImGui's `imgui_impl_sdl3.cpp` targets SDL3, and SDL3's Vulkan
 surface creation (`SDL_Vulkan_CreateSurface`) is what Phase 5's swapchain needs.
 
-### P6.2 - `LinuxApplication`
+### P6.2 - `LinuxApplication` — **done**
 
 **New:** `Code/Base/Application/Platform/Application_Linux.{h,cpp}`
+
+**One difference matters to anyone touching `ProcessEvent`.** `Win32Application` returns early
+when imgui's handler returns non-zero; `LinuxApplication` calls imgui and **ignores the answer**.
+`imgui_impl_sdl3.cpp` returns `true` for every event it recognises, including
+`SDL_EVENT_WINDOW_CLOSE_REQUESTED`, so an early return swallows the application's own exit.
 
 Mirror `Win32Application`. Its virtual interface is *almost* platform-neutral already. These
 carry over unchanged:
@@ -95,7 +118,14 @@ screen from files, or drop them at first. Do not try to parse `.rc` files.
 upstream file for a cosmetic benefit, it conflicts on every future merge, and it saves little
 duplication. The app subclasses are 124 and 127 lines.
 
-### P6.3 - imgui platform backend
+### P6.3 - imgui platform backend — **done**
+
+**Multi-viewport is verified, not assumed:** three imgui windows became three live SDL windows.
+**But it will not work under Wayland at all** - `ImGui_ImplSDL3_Init` sets
+`ImGuiBackendFlags_PlatformHasViewports` only for video drivers on its global-mouse white list,
+and `wayland` is not on it. Phase 7 needs to know. imgui also gates `ViewportsEnable` on *both*
+backend halves, so a missing `ImGuiBackendFlags_RendererHasViewports` silently merges every
+window into the main one.
 
 **New:** `Code/Base/Imgui/Platform/ImguiPlatform_Linux.{h,cpp}`,
 `Code/Base/Imgui/Platform/ImguiX_Linux.cpp`
@@ -119,7 +149,14 @@ The renderer-side imgui backend is separate from the platform side, and it goes 
 engine's own RHI path, so Phase 5 already covers it. Confirm this rather than assuming it. Check
 how `ImguiSystem.cpp` gets its render backend.
 
-### P6.4 - Keyboard and mouse input
+### P6.4 - Keyboard and mouse input — **done**
+
+**105 scancodes map to 105 distinct `InputID`s, one to one**, checked by feeding every scancode
+through the device. **`SDL_SetWindowRelativeMouseMode` is deliberately not called**, though this
+task asks for it: enabling it on any button press would hide and warp the cursor and break every
+imgui drag, and the device cannot tell a camera drag from a slider drag. The cost is that mouse
+deltas stop at the screen edge where raw input does not. **P6.8 should decide it against a live
+camera.**
 
 **New:** `Code/Base/Input/InputDevices/Platform/InputDevice_KeyboardMouse_Linux.cpp`
 
@@ -138,9 +175,14 @@ Read the engine's key enum in `Code/Base/Input/`, and build the mapping table co
 partial table produces keys that silently do nothing, which is a frustrating class of bug to
 chase later.
 
-### P6.5 - Gamepad input
+### P6.5 - Gamepad input — **done**
 
-**New:** `Code/Base/Input/InputDevices/Platform/InputDevice_XboxController_Linux.cpp`
+**SDL's stick Y is inverted relative to XInput** and is negated in the device; without that every
+controller would be inverted on Linux only. Verified end to end with an SDL virtual joystick.
+
+**New:** `Code/Base/Input/InputDevices/Platform/InputDevice_XBoxController_Linux.cpp` - note the
+capital B, which matches the shared header rather than the Win32 sibling. Upstream is
+inconsistent; Conventions rule 3 says not to rename either.
 
 The Win32 version is only 72 lines, using XInput. SDL3's gamepad API replaces it directly, and it
 supports more controllers than XInput does.
@@ -149,80 +191,120 @@ The filename says `XboxController`, which is an upstream naming choice. Keep the
 the files sit as siblings, even though SDL3 handles any gamepad. Do not rename it. See
 Conventions rule 3.
 
-### P6.6 - Swapchain surface creation
+### P6.6 - Swapchain surface creation — **done**
 
-This finishes Phase 5's bring-up step 9. **Phase 5 answered both questions it owed this phase.**
-Both answers are in the P5.3 entry in [Progress.md](../Progress.md), and both differ from what
-this section originally planned.
+**`m_pNativeWindowHandle` is an `SDL_Window*` on Linux, and `RHI_Vulkan.cpp` makes the surface
+from it.** That revises the first half of P5.3's answer, which said the application would create
+the surface and hand it over. There is nowhere for the application to do that:
+`EngineModule::InitializeModule` calls `RenderSystem::Initialize`, which creates the `VkInstance`,
+and `SetNativeWindowHandle` three lines later, with nothing the application owns in between.
 
-**`m_pNativeWindowHandle` is a `VkSurfaceKHR` on Linux, not an `SDL_Window*`, and the application
-owns it.** `Base/Render` depends on no window system library and must not start to, so the
-application calls `SDL_Vulkan_CreateSurface` and hands the result to
-`RenderWindow::SetNativeWindowHandle( void* )`. `RHI_Vulkan.cpp` therefore does **not** link
-against SDL3. `CreateContext` already enables `VK_KHR_surface` and the xlib, xcb and wayland
-extensions the loader reports, so the instance can create a surface. `DestroySwapchain` never
-destroys the surface; the application does.
+`CreateSwapchain` calls `Platform::Linux::CreateVulkanSurface`, in `PlatformUtils_Linux.cpp` -
+**the one file in the engine that knows both SDL3 and Vulkan**. The handles cross as `void*`, so
+`Base/Render` still includes no window system header, which is what P5.3 actually required. See
+the 2026-08-30 decision in [Progress.md](../Progress.md).
 
-**The application drives swapchain recreation, not the RHI.** `Engine.cpp:754` and
-`ImguiRenderer.cpp:91` already compare the window size against `GetSwapchainSize()` and call
+**The application still drives swapchain recreation, not the RHI.** `Engine.cpp:754` and
+`ImguiRenderer.cpp:91` compare the window size against `GetSwapchainSize()` and call
 `Window::ResizeSwapchain`, each waiting the graphics queue idle first. `AcquireNextImage` and
-`QueuePresent` accept `VK_SUBOPTIMAL_KHR` and `VK_ERROR_OUT_OF_DATE_KHR` rather than recreating
-behind the engine's back.
+`QueuePresent` tolerate `VK_SUBOPTIMAL_KHR` and `VK_ERROR_OUT_OF_DATE_KHR`.
 
-An SDL3 window meant for Vulkan must be created with `SDL_WINDOW_VULKAN`. Coordinate this with
-the window creation in P6.2.
+**The swapchain image count did fail first, exactly as predicted.** The Intel UHD 620 and
+llvmpipe both report a `minImageCount` of 3. `RHI::MaxPendingFrames` is now 3 on Linux through a
+four-line `#if defined( __linux__ )` branch that leaves Windows bit for bit unchanged. It was
+escalated, approved and registered in [TouchedFiles.md](../TouchedFiles.md).
 
-**The first thing that will fail here is the swapchain image count.** `minImageCount` is a
-minimum, so a driver may hand back more images than were asked for. `Swapchain::m_renderTargets`
-is a fixed `TArray` of `MaxPendingFrames`, which is 2, and several Linux drivers want three or
-four. `CreateSwapchain` logs both numbers and halts. The fix is `MaxPendingFrames` in `RHI.h`,
-which is an upstream file, so it is a human decision. Escalate it.
+**Two more defects came out of running it**, both fixed in `RHI_Vulkan.cpp`: no surface on this
+machine offers an RGBA format, only BGRA; and `Window::DestroySwapchain` destroys command pools
+before command buffers, which Direct3D 12 allows and Vulkan does not.
 
-### P6.7 - `EngineApplication_Linux`
+### P6.7 - `EngineApplication_Linux` — **done**
 
 **New:** `Code/Applications/Engine/Linux/EngineApplication_Linux.{h,cpp}`
 
-Mirror `EngineApplication_Win32.{h,cpp}`, which is 124 lines. `_tWinMain` becomes
-`int main( int argc, char** argv )`.
+The binary builds, links and starts. **Two build system defects came out of running it**, both
+in the generator: the `External/` rpath was repository relative, and shared libraries had no
+soname, so nothing ran outside the repository root. Both are fixed.
 
-Drop the Live++ hooks. `EE_ENABLE_LPP` stays unset on Linux, so the `#if EE_ENABLE_LPP` blocks
-simply do not appear in the Linux file.
+**A third defect was Phase 5's:** `CreateContext` never enabled the 16-bit shader feature bits,
+which the engine's shaders need. Direct3D 12 has no equivalent step, so P5.1 had nothing to
+mirror.
 
-### P6.8 - First light
+**Run it with `-packaged`** until the ResourceServer builds in Phase 7. Without it the engine
+uses the network resource provider and tries to start `EsotericaResourceServer.exe`.
 
-Run a map. Expect a long tail of issues: window resize and swapchain recreation, DPI scaling,
-input focus, cursor clipping, fullscreen transitions, and imgui viewport behavior under a
-compositor.
+### P6.8 - First light — **next, and all that is left**
 
-Test under **both X11 and Wayland**. SDL3 abstracts them, but they behave differently in
-practice, above all around window positioning, which multi-viewport imgui depends on. Wayland
-does not let a client position its own windows, which can affect imgui viewports. Find out early
-whether that is a problem, and record what you learn.
+**Read this before running anything.**
+
+#### The Ubuntu 24.04 validation layers cannot be used on the mesh shader stages
+
+`vulkan-validationlayers 1.4.309.0` bundles a SPIRV-Tools old enough to carry the bug
+[Phase 4](Phase4-ShaderPipeline.md) already documented, so `vkCreateShaderModule` rejects the
+`DebugDraw` mesh shader on `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036`. **The SPIR-V is
+correct and the driver accepts it** - measured with `VK_LOADER_LAYERS_DISABLE='*'`, where the
+engine walks straight past. This is the second time a stale SPIRV-Tools has misled this port; the
+first cost Phase 4 a session.
+
+**Either disable the layers or install a newer set, and record which.** Losing validation
+entirely is a bad trade for the rest of this task, so a newer layer package is worth the effort.
+
+#### The real wall: `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines`
+
+`InstancePickingResolve`, the first compute shader after the mesh stages, fails to create a
+pipeline. `VK_ERROR_UNKNOWN` from Intel's ANV usually means the driver refused to compile the
+module. **Treat it as a P5.7 defect until shown otherwise** - it is that group's first execution.
+
+#### Also worth knowing
+
+**`Shaders::Initialize` creates every shader module at startup**, mesh shaders included,
+whatever the device supports. Not fatal - the driver accepts the module - but the engine pays
+for shaders it can never dispatch, and a stricter driver would stop there. P5.14 recorded that
+neither real GPU in this machine has `VK_EXT_mesh_shader`.
+
+**Then the long tail this task was always about.** Window resize and swapchain recreation, DPI
+scaling, input focus, cursor clipping, fullscreen transitions, and imgui viewport behaviour under
+a compositor. Also settle `SDL_SetWindowRelativeMouseMode` against a live camera; see P6.4.
+
+**Test under both X11 and Wayland.** This machine runs **i3 on X11** and has no Wayland
+compositor, so nothing so far says how Wayland behaves. Two things are known in advance:
+imgui viewports **will not be enabled at all** under Wayland (see P6.3), and i3 ignores
+`SDL_SetWindowPosition` on the main window while honouring it on the borderless viewport windows.
+A tiling window manager also makes acceptance criterion 7 and the client-driven half of criterion
+4 untestable here; a floating window manager or a second session is needed for those.
 
 ---
 
 ## Acceptance criteria
 
-1. `Build/Linux_Release/EsotericaEngine` builds and links.
-2. It opens a window and renders a map passed with `-map data://...`. **Split this one.** The
-   window, the swapchain, the frame loop and imgui are this phase's. **Geometry needs
-   [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
-   which is scheduled after this phase, and mesh shader hardware, which the current development
-   machine does not have. Say which half you met.
-3. Keyboard, mouse, and gamepad input all work, for camera control and for every key the engine
-   binds.
-4. Window resize recreates the swapchain with no validation errors and no leaks.
-5. imgui renders, and multi-viewport windows can be dragged out of the main window.
-6. It runs under both X11 and Wayland, and any behavior difference is recorded.
-7. DPI scaling works on a HiDPI display.
-8. Shutdown is clean. No Vulkan validation errors, and no leaks from `ReportDeviceMemoryLeaks`.
-9. Frame timing is in a sane range next to the same scene on Windows. This is not a benchmark. It
-   only confirms that nothing is badly wrong, such as an accidental vsync-off busy loop or a
-   per-frame device wait.
-10. **The Windows MSBuild build still succeeds**, and the Windows `Engine` app is unchanged.
-11. Every upstream file you edited is in [TouchedFiles.md](../TouchedFiles.md) with status
+Status as of P6.7. **Anything not marked met is P6.8's.**
+
+1. **Met.** `Build/Linux_Release/Esoterica.Applications.Engine` builds and links.
+2. **Not met.** It opens a window but does not render a map; see P6.8. **This one is split.** The
+   window, the swapchain, the frame loop and imgui are this phase's and are done. **Geometry
+   needs [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
+   and mesh shader hardware, which this machine does not have. Say which half you met.
+3. **Half met.** Keyboard, mouse and gamepad are implemented and each is tested at the device
+   level. "Works for camera control" needs a running engine.
+4. **Met for the RHI, not for the application.** Resize recreates the swapchain with no
+   validation errors and no leaks, proved by a scratch application. The engine has not reached a
+   frame loop yet, and the client-driven half is untestable under a tiling window manager.
+5. **Not met.** imgui multi-viewport is proved on the platform side - three imgui windows became
+   three live SDL windows - but nothing has rendered imgui through the engine's own renderer.
+6. **Not met.** X11 only so far, under i3. **imgui viewports will not be enabled under Wayland
+   at all**; see P6.3.
+7. **Not met and not testable here.** A tiling window manager ignores client sizing, and this
+   machine has no HiDPI display.
+8. **Met for the RHI path.** Shutdown is clean with validation on. `ReportDeviceMemoryLeaks` has
+   not been exercised through the engine.
+9. **Not met.** No frame loop in the engine yet.
+10. **Met throughout.** One upstream file is edited in this whole phase,
+    `Code/Base/Render/RHI.h:31`, and it adds a Linux-only branch that leaves the Windows value
+    verbatim. `Code/Base/Imgui/ImguiSystem.cpp:12` is the only other, and it is criterion 12.
+11. **Met.** Both edited upstream files are in [TouchedFiles.md](../TouchedFiles.md) with status
     `done`.
-12. `git diff --stat upstream/main -- Code/Base/Imgui/ImguiSystem.cpp` shows **1 line changed**.
+12. **Met.** `git diff --stat upstream/main -- Code/Base/Imgui/ImguiSystem.cpp` shows 1 line
+    changed.
 
 ## Do not
 
@@ -235,11 +317,26 @@ whether that is a problem, and record what you learn.
 
 ## Notes for the next agent
 
-Phase 7 needs two things from this phase:
+Phase 7 needs three things from this phase:
 
-- The `LinuxApplication` interface, because `EditorApplication_Linux` and the ResourceServer both
-  derive from it.
-- Whether imgui multi-viewport works under Wayland, because the editor depends on it heavily.
+- **The `LinuxApplication` interface**, because `EditorApplication_Linux` and the ResourceServer
+  both derive from it. It is written and its shape is in the P6.2 entry.
+- **imgui multi-viewport does not work under Wayland.** `ImGui_ImplSDL3_Init` enables it only for
+  video drivers on its global-mouse white list, and `wayland` is not on it. The editor's docking
+  UI depends on viewports. This is not a port defect and not something the port can fix; it is
+  upstream imgui's own gate.
+- **`ImguiPlatform_Linux.cpp` keeps upstream's formatting in its vendored region**, deliberately,
+  so it can be re-synced with a `diff`. That breaks Conventions rule 8 and a banner in the file
+  says why. Do not reformat it, and do not copy the pattern to files that are not vendored.
 
-Record in [Progress.md](../Progress.md) which imgui version you diffed, what Esoterica's
-adaptations to the Win32 backend actually were, and the X11-against-Wayland findings.
+Everything this phase learned is in the P6.x entries in [Progress.md](../Progress.md), with the
+measurements. The short version of what is worth knowing before touching any of it:
+
+- `Platform::SetMainWindowHandle` holds an `SDL_Window*`. `RHI_Vulkan.cpp` makes the
+  `VkSurfaceKHR` from it through `Platform::Linux::CreateVulkanSurface`.
+- An `SDL_Event` reaches the input devices **by pointer**, in `GenericMessage::m_data0`. Nothing
+  may queue that message for later.
+- `LinuxApplication::ProcessEvent` ignores what imgui's handler returns. Read P6.2 before
+  changing it.
+- The vendored `ImguiPlatform_Win32.cpp` is about three years behind the imgui core beside it.
+  Do not treat it as a reference for current imgui behaviour.

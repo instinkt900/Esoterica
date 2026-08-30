@@ -14,6 +14,28 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 [02-Architecture.md, Renderer](../02-Architecture.md#renderer), and
 `Code/Base/Render/RHI_Direct3D12.cpp` in full. All 6,084 lines of it. It is the specification.
 
+> ## Status: all sixteen groups are written and merged, and the backend has now **run**
+>
+> Phase 6 provided the entry point, and P6.6 and P6.7 executed this backend for the first time.
+> **A scratch application cleared and presented twelve frames with no validation errors**, which
+> covers `CreateContext`, queues, command pools and buffers, the swapchain, `CmdBarrier`,
+> `CmdSetRenderTargets`, `CmdSetViewport`, `QueueSubmit`, `AcquireNextImage` and `QueuePresent`.
+>
+> **Running it found four defects in this phase's own code**, all now fixed. They are the best
+> evidence available for how much of the rest is still unverified:
+>
+> | Found | What it was |
+> |---|---|
+> | P6.6 | `CreateSwapchain` asked only for RGBA surface formats. Every surface on Linux offers BGRA. |
+> | P6.6 | `DestroySwapchain` freed command buffers after their pool. P5.4 assumed the other order. |
+> | P6.6 | `MaxPendingFrames` was 2 and Linux drivers report a `minImageCount` of 3. |
+> | P6.7 | `CreateContext` never enabled the 16-bit shader feature bits. Direct3D 12 has nothing to mirror. |
+>
+> **The current wall is `vkCreateComputePipelines` returning `VK_ERROR_UNKNOWN` for
+> `InstancePickingResolve`.** That is P5.7's first execution. P6.8 owns chasing it.
+>
+> **Criteria 5 to 10 are now checkable.** They were not before.
+
 ---
 
 ## The one thing to get right first
@@ -58,6 +80,7 @@ turns out to be unworkable, that is a joint re-decision. Escalate. Do not diverg
 | `CmdExecuteIndirect`, `CommandSignature` | `VK_KHR_draw_indirect_count` (core 1.2). A signature that carries root data needs a shader change, not a pre-pass. See [open question 7](../Progress.md#open-questions) |
 | `SetDebugName` (9 overloads), `Cmd*DebugMarker` | `VK_EXT_debug_utils` |
 | `RootSignature`, `CmdSetRootConstants` | `VkPipelineLayout` and push constants |
+| 16-bit types in the engine's shaders | `shaderInt16`, `shaderFloat16` and the 16-bit storage bits. **Added in P6.7**, after `vkCreateShaderModule` rejected a module for declaring `Int16`. Direct3D 12 has no equivalent step, so nothing here pointed at it |
 | `WaveOpsSupportFlags` | subgroup queries (core 1.1 and 1.2) |
 | `BeginFrameCapture` and `EndFrameCapture` | RenderDoc in-app API, through `dlopen( "librenderdoc.so" )` |
 | `GetTotalAllocatedDeviceMemory`, `ResourceAllocationStatistic`, `ReportDeviceMemoryLeaks` | VMA statistics |
@@ -234,6 +257,10 @@ approach is decided: the shader reads its own command's root data out of the arg
 Read the decision entry in [Progress.md](../Progress.md) before starting; it records why the two
 alternatives were rejected.
 
+**Phase 6 bring-up has now happened, so the door is open.** The engine binary exists and starts.
+It does not reach a frame loop yet - `vkCreateComputePipelines` fails earlier, see P6.8 - so
+**P5.17 is still not testable, and still comes after P6.8.**
+
 **Do this after Phase 6 bring-up, not before.** Nothing here can be tested until the engine runs,
 and this is a change to shaders that Windows also compiles. Bring the window, the input and the
 swapchain up first, then take this on with a live engine and RenderDoc in front of you.
@@ -402,15 +429,23 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    function.** One is the indirect refusal from open question 7. The other two are markers that
    name a caller if one ever appears: a sampler border colour that needs
    `VK_EXT_custom_border_color`, and the static-sampler path the binding model does not use.
-2. `RHI.h` is unmodified. `git diff upstream/main -- Code/Base/Render/RHI.h` is empty.
+2. ~~`RHI.h` is unmodified.~~ **No longer met, deliberately.** `git diff --stat upstream/main --
+   Code/Base/Render/RHI.h` reports `4 ++++`: `MaxPendingFrames` is 3 on Linux, in a
+   `#if defined( __linux__ )` branch that leaves the Windows value verbatim. Linux drivers report
+   a swapchain `minImageCount` of 3 and the backend cannot absorb that. Escalated, approved and
+   registered in [TouchedFiles.md](../TouchedFiles.md) during P6.6. **The spirit of the criterion
+   still holds: no `RHI.h` concept changed, and Windows is bit for bit unchanged.**
 3. `RHI_Direct3D12.cpp` is unmodified.
 4. ~~Bring-up steps 1 to 8 all pass in the `Tester` harness, and the tests are committed.~~
-   **Cannot be met as written.** `Esoterica.Applications.Tester` is an upstream scratchpad, not a
-   test framework, and nothing on Linux can call into the RHI until Phase 6 lands. The backend is
-   being written verified by compile and link only. See the 2026-08-28 decision entry in
-   [Progress.md](../Progress.md). Re-state this criterion against the real engine once Phase 6
-   provides an entry point.
-5. The full engine frame produces no Vulkan validation errors and no warnings.
+   **Cannot be met as written**, and it is now partly met against the real engine instead.
+   `Esoterica.Applications.Tester` is an upstream scratchpad, not a test framework. **P6.6 ran
+   steps 1 to 7 for real**: a scratch application built a context, queues, command pools and
+   buffers, a swapchain with a real surface, and cleared and presented twelve frames with no
+   validation errors. See the 2026-08-28 decision entry and the P6.6 entry in
+   [Progress.md](../Progress.md).
+5. The full engine frame produces no Vulkan validation errors and no warnings. **Blocked on
+   P6.8**, which owns the `VK_ERROR_UNKNOWN` compute pipeline. Note that the Ubuntu 24.04
+   validation layers cannot be used on the mesh shader stages; see the P6.7 entry.
 6. All 26 shaders from Phase 4 load and execute.
 7. The full engine frame renders correctly, checked against Windows Direct3D 12 screenshots of
    the same scene. List any visual difference, with an explanation.

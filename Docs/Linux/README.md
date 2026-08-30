@@ -133,9 +133,12 @@ registered in [TouchedFiles.md](TouchedFiles.md).
 **P6.7 is done too: the engine binary builds, links and starts.**
 `Build/Linux_Release/Esoterica.Applications.Engine -map data://... -packaged` reads its settings,
 loads compiled data, opens a window and creates a Vulkan device. **Criterion 1 is met.** It does
-not render a map yet: DXC emits invalid SPIR-V for `CullPrimitiveEXT` in the `DebugDraw` mesh
-shader, and `Shaders::Initialize` creates every shader module at startup, so that one shader
-blocks any machine without `VK_EXT_mesh_shader`. P6.8, first light, owns both.
+not render a map yet: `vkCreateComputePipelines` returns `VK_ERROR_UNKNOWN` for the
+`InstancePickingResolve` compute shader. P6.8, first light, owns it.
+
+**Do not run the engine with the Ubuntu 24.04 Vulkan validation layers on.** They bundle the same
+stale SPIRV-Tools that Phase 4 documented and reject the `DebugDraw` mesh shader although its
+SPIR-V is correct and the driver accepts it. `VK_LOADER_LAYERS_DISABLE='*'` gets past it.
 
 **imgui viewports will not work under Wayland.** `ImGui_ImplSDL3_Init` enables them only for
 video drivers on its global-mouse white list, which does not include `wayland`. The editor
