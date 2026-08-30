@@ -10,10 +10,20 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 6 (started). P6.1 is done and SDL3 is in the build.** `./DownloadDependencies.sh sdl3`
-builds SDL3 `release-3.4.14` from source into `External/SDL3/`, and `Esoterica.Base` links
-`-lSDL3`. **Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS
-packages none.** No source file includes an SDL header yet. **P6.2, `LinuxApplication`, is next.**
+**Phase: 6 (started). P6.1 and P6.2 are done.** SDL3 `release-3.4.14` builds from source into
+`External/SDL3/`, `Esoterica.Base` links `-lSDL3`, and `LinuxApplication` opens a window, takes
+resizes, persists its layout and shuts down cleanly. **Open question 4 is answered: the port
+always builds SDL3, because Ubuntu 24.04 LTS packages none.** Nothing derives from
+`LinuxApplication` yet; that is P6.7. **P6.3, the imgui platform backend, is next.**
+
+**One thing needs a human before P6.6 can land: Phase 5 and Phase 6 disagree about what
+`Platform::SetMainWindowHandle` holds.** `LinuxApplication` stores the `SDL_Window*`, which is
+what imgui and input need. `EngineModule.cpp:135` hands the same value to
+`RenderWindow::SetNativeWindowHandle`, and `RHI_Vulkan.cpp:2216` casts it to a `VkSurfaceKHR`.
+P5.3 said the application creates the surface, and **the application has no place to do it**:
+`RenderSystem::Initialize` creates the instance and `SetNativeWindowHandle` is called three lines
+later, both inside `EngineModule::InitializeModule`. `EngineModule.cpp` is not in
+[TouchedFiles.md](TouchedFiles.md). See the P6.2 entry for the three candidate answers.
 
 **Phase 5 remains written and merged, not complete.** All sixteen groups are on `main`. The
 seventeen stacked PRs, #24 to #41, are merged and nothing is in flight. **Nothing in any of them
@@ -137,7 +147,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
 | 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 done: SDL3 builds from source into `External/` and `Esoterica.Base` links it. P6.2 onwards not started |
+| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.3 onwards not started. **P6.6 is blocked on the `SetMainWindowHandle` question** |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -149,8 +159,7 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**`linux/p6.1-sdl3`.** SDL3 in `DownloadDependencies.sh` and in the generator's sheet table. PR
-open, not merged.
+**`linux/p6.2-linuxapplication`.** `Application_Linux.{h,cpp}` on SDL3. PR open, not merged.
 
 The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
 ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
@@ -160,7 +169,7 @@ it.**
 more code:
 
 1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands. **Started: P6.1 is done, P6.2 is next.**
+   before it lands. **Started: P6.1 and P6.2 are done, P6.3 is next.**
 2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
    the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
    after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
@@ -212,6 +221,149 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-30 - P6.2 `LinuxApplication`, and a Phase 5 / Phase 6 conflict to settle
+
+**`LinuxApplication` is written and it runs.** `Application_Linux.{h,cpp}` mirror
+`Application_Win32.{h,cpp}` on SDL3. A window opens, resizes, persists its layout and shuts down
+cleanly. **Nothing derives from it yet**: `EngineApplication_Linux` is P6.7.
+
+**Verified by running it, not only by building it.** A scratch subclass linked against
+`libEsoterica.Base.so` opened a window, took a resize, wrote and re-read its layout file, ran the
+borderless hit test and exited 0. Details below. The program is not committed.
+
+#### What carried over unchanged
+
+`Initialize`, `Shutdown`, `ApplicationLoop`, `ResizeMainWindow`, `OnUserExitRequest`,
+`FatalError`, `OnFirstShowMainWindow`, `ProcessWindowDestructionMessage`, `ReadWindowSettings`,
+`WriteWindowSettings`, `RequestApplicationExit`, `GetBorderlessTitleBarInfo`, `Run`,
+`WasInitialized`, and both `InitOptions` flags. A subclass reads the same on both platforms.
+
+#### What changed, and why
+
+| Win32 | Linux |
+|---|---|
+| `Win32Application( HINSTANCE, name, iconResourceID, splashResourceID, options )` | `LinuxApplication( name, iconFilePath, splashScreenFilePath, options )`. Both paths may be null, and both are null today. |
+| `WindowMessageProcessor( HWND, UINT, WPARAM, LPARAM )` | `bool ProcessEvent( SDL_Event const& )` |
+| `ProcessInputMessage( UINT, WPARAM, LPARAM )` | `ProcessInputEvent( SDL_Event const& )` |
+| `HICON GetIcon()` | `SDL_Surface* GetIcon()` |
+| `BorderlessWindowHitTest( POINT )` returning an `HT*` code | Same shape, returning an `SDL_HitTestResult` through `SDL_SetWindowHitTest` |
+| `RECT m_windowRect` | `Int2 m_windowPosition` and `Int2 m_windowSize` |
+| `WM_GETMINMAXINFO` clamps to 320x240 | `SDL_SetWindowMinimumSize` |
+| Live++ agent, hooks and `#if EE_ENABLE_LPP` blocks | Absent. There is no Live++ on Linux. |
+
+**The header forward declares `SDL_Window`, `SDL_Surface` and `SDL_Event` and includes no SDL
+header.** `ImguiPlatform_Win32.h` forward declares `HWND__` for the same reason. This keeps SDL3
+off the include path of everything that derives from `LinuxApplication`, so
+`Esoterica.Applications.Engine` needs the SDL3 sheet only when P6.7 writes a `.cpp` that reads
+event fields.
+
+**`m_windowPosition` and `m_windowSize` are in different units, on purpose.** The position is
+logical desktop coordinates, which is what `SDL_SetWindowPosition` takes. The size is pixels,
+which is what the swapchain needs. They are the same numbers on a non-HiDPI display. The window is
+created with `SDL_WINDOW_HIGH_PIXEL_DENSITY`, and `m_windowSize` is read back with
+`SDL_GetWindowSizeInPixels` after creation and from `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` after
+that. **`SDL_EVENT_WINDOW_RESIZED` is the wrong event here**: it reports logical coordinates.
+
+**The layout file keeps the Win32 key names.** `Left`, `Right`, `Top`, `Bottom`, `WasMaximized`
+under `[WindowSettings]`, so one `.layout.ini` is portable between the two builds.
+
+**`WriteWindowSettings` is called from `Run` before `Shutdown`, not only from an event.** The
+window is destroyed in the destructor, so `SDL_EVENT_WINDOW_DESTROYED` never arrives while the
+loop is running, and `WM_DESTROY`'s job has to be done explicitly.
+
+**Window events are filtered by window id.** imgui multi-viewport creates windows of its own, and
+closing one of those is not a request to close the application.
+
+**`SDL_Init( SDL_INIT_VIDEO )` happens in `Run`, and `SDL_Quit` in the destructor.**
+`Win32Application` has no equivalent step. P6.5 adds `SDL_INIT_GAMEPAD`.
+
+**`FatalError` logs as well as showing `SDL_ShowSimpleMessageBox`.** A dialog needs a desktop, and
+this runs from a terminal often enough that the message has to survive without one.
+
+**The exit code is always 0 on a clean run.** `Win32Application` takes its code from `WM_QUIT`'s
+`wParam`; SDL has no such value.
+
+#### Left for the next tasks, marked in the code
+
+- **P6.3.** `ProcessEvent` has no imgui hook yet. `Win32Application` calls
+  `ImGuiX::Platform::WindowMessageProcessor` first, before anything else; there is no
+  `ImguiPlatform_Linux.h` to call into. A comment marks the spot.
+- **P6.5.** `ProcessEvent` has no `SDL_EVENT_GAMEPAD_*` cases. XInput polls, so the Win32 sibling
+  has nothing to copy, and `SDL_EVENT_GAMEPAD_ADDED` and `_REMOVED` have no polling equivalent.
+  A comment marks the spot.
+
+#### **Escalation: Phase 5 and Phase 6 disagree about `Platform::SetMainWindowHandle`**
+
+**This blocks P6.6 and it is a human decision.** `LinuxApplication::TryCreateMainWindow` stores
+the `SDL_Window*`, exactly as `Win32Application` stores the `HWND`. That is what the imgui and
+input backends need. But:
+
+- `EngineModule.cpp:135` does `m_renderWindow.SetNativeWindowHandle( Platform::GetMainWindowHandle() )`.
+- `RHI_Vulkan.cpp:2216` casts that value straight to a `VkSurfaceKHR`, which is P5.3's recorded
+  decision.
+- **An `SDL_Window*` is not a `VkSurfaceKHR`.**
+
+P5.3's answer was "the application creates the surface and hands it over", and **the application
+has no place to do it.** `EngineModule::InitializeModule` calls `RenderSystem::Initialize`, which
+creates the `VkInstance`, and then calls `SetNativeWindowHandle` three lines later. Nothing the
+application owns runs in between. Before that call there is no instance, so no surface can exist.
+
+**`Code/Engine/_Module/EngineModule.cpp` is not in [TouchedFiles.md](TouchedFiles.md)**, which is
+the escalation trigger. Three candidates, best first:
+
+1. **`RHI_Vulkan.cpp` creates the surface itself, through a Linux-only `Platform` function.**
+   `Platform::CreateVulkanSurface( instance, pNativeWindowHandle )` lives in `Platform_Linux.cpp`,
+   which may link SDL3 because `Esoterica.Base` already does. **No upstream file is edited**, and
+   `Base/Render` still includes no window system header, which is what P5.3 actually required.
+   It does revise P5.3's "the application owns it", so it is a decision, not a detail.
+2. **A two-line `#elif defined( __linux__ )` in `EngineModule.cpp:135`.** The right shape under
+   Conventions rule 2, but it puts SDL3 into `Esoterica.Engine.Runtime` and adds a file to the
+   registry that a full survey did not predict.
+3. **Store the surface in `Platform::SetMainWindowHandle`.** Does not work, for the ordering
+   reason above.
+
+P6.2 does not choose. It stores the `SDL_Window*`, which is right for imgui and input either way.
+
+#### X11 and Wayland findings so far
+
+**The development session runs i3 on X11, and a tiling window manager makes two Phase 6
+acceptance criteria untestable here.** i3 tiled the window to 958x1042 and ignored both
+`SDL_SetWindowPosition` and `SDL_SetWindowSize`. That is correct behaviour, not a defect, and the
+code handles it: the tiling arrives as `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` and
+`ResizeMainWindow` gets the real size. **Criterion 7, DPI scaling, and the parts of criterion 4
+that need a client-driven resize need a floating window manager or a second session.** Wayland is
+not tested yet; P6.8 owns that.
+
+#### Known issue for P6.7, not introduced here
+
+**`External/` shared libraries are on a relative rpath, so a binary only resolves them from the
+repository root.** `ldd Build/Linux_Release/libEsoterica.Base.so` from any other directory reports
+`libSDL3.so.0`, `libdxcompiler.so` and `libGameNetworkingSockets.so` as not found. This predates
+Phase 6: `Toolchain.py:503` emits `-Wl,-rpath,<repo-relative directory>`. The Phase 6 deliverable
+is run from the repository root, so it works, but P6.7 should make that path absolute in one place
+rather than working around it.
+
+#### Verification
+
+- Files added: `Code/Base/Application/Platform/Application_Linux.h`,
+  `Code/Base/Application/Platform/Application_Linux.cpp`.
+- Files edited: `Code/Scripts/NinjaGen/LinuxSources.txt` (adds the new `.cpp`, and drops the stale
+  "still to come in Phase 1" note that listed it).
+- **Upstream files edited: none.**
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before. Both are Phase 7.
+  `libEsoterica.Base.so` builds and links in Debug and Release.
+- Run: a scratch subclass linked against `libEsoterica.Base.so`. `Initialize` saw 640x480 at
+  100,100 on the first run; the window opened; `ResizeMainWindow` got 958x1042 from i3;
+  `SDL_EVENT_WINDOW_CLOSE_REQUESTED` reached `OnUserExitRequest`; `Shutdown` ran and `Run`
+  returned 0. The layout file was written with the real geometry, and a second run read it back
+  and reported 958x1042 at 961,1. With `InitOptions::Borderless` set, the hit test returned
+  `RESIZE_TOPLEFT` at 4,4, `DRAGGABLE` inside the reported title bar, and `NORMAL` in the client
+  area, and input events reached `ProcessInputEvent`.
+- Acceptance criteria: P6.2 has none of its own. Phase 6 criterion 1 is not met, and cannot be
+  until P6.7. Criterion 10, the Windows build, is untouched: the two new files are guarded with
+  `#ifdef __linux__` and no `.vcxproj` lists them.
 
 ### 2026-08-29 - P6.1 SDL3, and open question 4 is answered
 
