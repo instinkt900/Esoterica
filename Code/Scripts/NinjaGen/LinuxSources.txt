@@ -30,8 +30,7 @@ Core/SystemDialogs_Linux.cpp
 FileSystem/FileSystemWatcher_Linux.cpp
 
 [Esoterica.Applications.Engine]
-# Phase 6:
-#   Linux/EngineApplication_Linux.cpp
+Linux/EngineApplication_Linux.cpp
 
 [Esoterica.Applications.Editor]
 # Phase 7:

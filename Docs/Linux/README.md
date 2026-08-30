@@ -130,13 +130,17 @@ Linux, because the Intel UHD 620 and llvmpipe both report a swapchain `minImageC
 lines added, zero modified, and Windows is bit for bit unchanged. It was escalated, approved and
 registered in [TouchedFiles.md](TouchedFiles.md).
 
-P6.7, the engine entry point, is next, and it is the last thing between here and a running
-engine.
+**P6.7 is done too: the engine binary builds, links and starts.**
+`Build/Linux_Release/Esoterica.Applications.Engine -map data://... -packaged` reads its settings,
+loads compiled data, opens a window and creates a Vulkan device. **Criterion 1 is met.** It does
+not render a map yet: DXC emits invalid SPIR-V for `CullPrimitiveEXT` in the `DebugDraw` mesh
+shader, and `Shaders::Initialize` creates every shader module at startup, so that one shader
+blocks any machine without `VK_EXT_mesh_shader`. P6.8, first light, owns both.
 
 **imgui viewports will not work under Wayland.** `ImGui_ImplSDL3_Init` enables them only for
 video drivers on its global-mouse white list, which does not include `wayland`. The editor
 depends on them, so Phase 7 needs to know. See the P6.3 entry in [Progress.md](Progress.md).
 
-**The surface question is settled.** `Platform::SetMainWindowHandle` holds an `SDL_Window*`, and
-`RHI_Vulkan.cpp` creates the `VkSurfaceKHR` itself through a Linux-only `Platform` function. P6.6
-writes it. See the decision entry in [Progress.md](Progress.md).
+**The surface question is settled and written.** `Platform::SetMainWindowHandle` holds an
+`SDL_Window*`, and `RHI_Vulkan.cpp` creates the `VkSurfaceKHR` itself through a Linux-only
+`Platform` function. See the decision entry in [Progress.md](Progress.md).
