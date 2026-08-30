@@ -16,14 +16,12 @@ resizes, persists its layout and shuts down cleanly. **Open question 4 is answer
 always builds SDL3, because Ubuntu 24.04 LTS packages none.** Nothing derives from
 `LinuxApplication` yet; that is P6.7. **P6.3, the imgui platform backend, is next.**
 
-**One thing needs a human before P6.6 can land: Phase 5 and Phase 6 disagree about what
-`Platform::SetMainWindowHandle` holds.** `LinuxApplication` stores the `SDL_Window*`, which is
-what imgui and input need. `EngineModule.cpp:135` hands the same value to
-`RenderWindow::SetNativeWindowHandle`, and `RHI_Vulkan.cpp:2216` casts it to a `VkSurfaceKHR`.
-P5.3 said the application creates the surface, and **the application has no place to do it**:
-`RenderSystem::Initialize` creates the instance and `SetNativeWindowHandle` is called three lines
-later, both inside `EngineModule::InitializeModule`. `EngineModule.cpp` is not in
-[TouchedFiles.md](TouchedFiles.md). See the P6.2 entry for the three candidate answers.
+**The Phase 5 / Phase 6 surface question is answered, and P6.6 implements it.**
+`Platform::SetMainWindowHandle` holds the `SDL_Window*`, and **`RHI_Vulkan.cpp` creates the
+`VkSurfaceKHR` itself**, through a new Linux-only `Platform::CreateVulkanSurface` in
+`Platform_Linux.cpp`. That edits no upstream file, and `Base/Render` still includes no window
+system header. It revises the second half of P5.3's answer, so read the two decision entries
+together. **Not written yet: P6.6 owns it.**
 
 **Phase 5 remains written and merged, not complete.** All sixteen groups are on `main`. The
 seventeen stacked PRs, #24 to #41, are merged and nothing is in flight. **Nothing in any of them
@@ -147,7 +145,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
 | 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.3 onwards not started. **P6.6 is blocked on the `SetMainWindowHandle` question** |
+| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.3 onwards not started. The `SetMainWindowHandle` question is answered; P6.6 writes it |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -323,7 +321,9 @@ the escalation trigger. Three candidates, best first:
 3. **Store the surface in `Platform::SetMainWindowHandle`.** Does not work, for the ordering
    reason above.
 
-P6.2 does not choose. It stores the `SDL_Window*`, which is right for imgui and input either way.
+**Answered the same day: candidate 1.** See the decision entry, "`RHI_Vulkan.cpp` creates the
+Vulkan surface, through `Platform_Linux.cpp`". P6.2 itself does not change: it stores the
+`SDL_Window*`, which is right for imgui and input either way. **P6.6 writes the surface function.**
 
 #### X11 and Wayland findings so far
 
@@ -2623,6 +2623,54 @@ the reasoning, not just the outcome.
 **Rationale:** ...
 **Alternatives rejected:** ...
 -->
+
+### 2026-08-30 - `RHI_Vulkan.cpp` creates the Vulkan surface, through `Platform_Linux.cpp`
+
+**Context:** P6.2 raised it. `Platform::SetMainWindowHandle` holds an `SDL_Window*`, because that
+is what the imgui and input backends need and what `Win32Application` stores. But
+`EngineModule.cpp:135` hands the same value to `RenderWindow::SetNativeWindowHandle`, and
+`RHI_Vulkan.cpp:2216` casts it to a `VkSurfaceKHR`, which is what P5.3 decided. The two do not
+agree.
+
+P5.3's answer was "the application creates the surface and hands it over", and **the application
+has no place to do it**. `EngineModule::InitializeModule` calls `RenderSystem::Initialize`, which
+creates the `VkInstance`, and calls `SetNativeWindowHandle` three lines later. Nothing the
+application owns runs in between, and before that call there is no instance for a surface to come
+from.
+
+**Decision:** the RHI creates the surface. `m_pNativeWindowHandle` stays an `SDL_Window*` on
+Linux, and `CreateSwapchain` calls a new Linux-only `Platform` function to turn it into a
+`VkSurfaceKHR`:
+
+```cpp
+// Platform_Linux.h, in namespace EE::Platform
+EE_BASE_API void* CreateVulkanSurface( void* pVulkanInstance, void* pNativeWindowHandle );
+EE_BASE_API void DestroyVulkanSurface( void* pVulkanInstance, void* pSurface );
+```
+
+`Platform_Linux.cpp` is the only file that includes both SDL3 and Vulkan. `RHI_Vulkan.cpp` calls
+through `void*` and never sees an SDL header.
+
+**Rationale:** it edits no upstream file, which is the prime directive. It also keeps what P5.3
+actually required, which was that **`Base/Render` depends on no window system library** - the
+dependency lands in `Base/Platform`, and `Esoterica.Base` already links SDL3, so no project gains
+a dependency it did not have. What it revises is only the second half of P5.3's sentence, "and the
+application owns it", which turned out not to be reachable.
+
+Surface ownership moves with it: `DestroySwapchain` still never destroys the surface, because
+`ResizeSwapchain` recreates around an unchanged handle, but the RHI now destroys it when the
+swapchain is destroyed for good rather than resized. **P6.6 owns writing this**, including where
+the destroy belongs, and P5.3's entry should be read together with this one.
+
+**Alternatives rejected:**
+
+- **A two-line `#elif defined( __linux__ )` in `EngineModule.cpp:135`.** The right shape under
+  Conventions rule 2, but `Code/Engine/_Module/EngineModule.cpp` is not in
+  [TouchedFiles.md](TouchedFiles.md), and it would put SDL3 into `Esoterica.Engine.Runtime`, which
+  has no other use for it.
+- **Storing the `VkSurfaceKHR` in `Platform::SetMainWindowHandle`.** Does not work: there is no
+  instance when the window is created, and the imgui and input backends need the `SDL_Window*`
+  from that same accessor.
 
 ### 2026-08-29 - Open question 7: the shader reads its own indirect arguments
 
