@@ -9,10 +9,6 @@
 #
 [Esoterica.Base]
 # Phase 1 - the platform layer. One _Linux sibling per excluded _Win32.cpp.
-# Still a Phase 6 stub, so that Base links. It halts; P6.5 replaces it with SDL3.
-Input/InputDevices/Platform/InputDevice_XBoxController_Linux.cpp
-#
-Application/Platform/Application_Linux.cpp
 FileSystem/Platform/FileSystemPath_Linux.cpp
 FileSystem/Platform/FileSystem_Linux.cpp
 Logging/Platform/SystemLog_Linux.cpp
@@ -23,9 +19,11 @@ Threading/Platform/Threading_Linux.cpp
 Types/Platform/Types_Linux.cpp
 #
 # Phase 6 - windowing and input, on SDL3.
+Application/Platform/Application_Linux.cpp
 Imgui/Platform/ImguiPlatform_Linux.cpp
 Imgui/Platform/ImguiX_Linux.cpp
 Input/InputDevices/Platform/InputDevice_KeyboardMouse_Linux.cpp
+Input/InputDevices/Platform/InputDevice_XBoxController_Linux.cpp
 
 [Esoterica.Engine.Tools]
 Core/SystemDialogs_Linux.cpp
