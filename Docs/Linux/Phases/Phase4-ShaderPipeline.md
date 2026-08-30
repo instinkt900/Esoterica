@@ -270,6 +270,12 @@ What it means for Phase 4:
    `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036` and is wrong to. And `--scalar-block-layout` is
    required because the shaders are compiled with `-fvk-use-dx-layout`; without it 18 stages are
    rejected. See the entries in [Progress.md](../Progress.md).
+
+   **This bites a second time, and P6.7 confirmed it.** Ubuntu 24.04's
+   `vulkan-validationlayers 1.4.309.0` bundles the same stale SPIRV-Tools, so
+   `vkCreateShaderModule` rejects the mesh stages at run time on the identical VUID. The driver
+   accepts them; only the layer objects, measured with `VK_LOADER_LAYERS_DISABLE='*'`. **Nothing
+   is wrong with the shaders. Do not go looking for a fourth DXC defect.**
 4. No `.esh` file is edited.
 5. The generated `.cpp` files compile as part of `Esoterica.Base` and
    `Esoterica.Engine.Runtime`. **Done, 2026-08-28.** Re-run `NinjaGen.py` after the first shader

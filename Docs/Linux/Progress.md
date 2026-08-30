@@ -10,14 +10,83 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 6 (started). P6.1 is done and SDL3 is in the build.** `./DownloadDependencies.sh sdl3`
-builds SDL3 `release-3.4.14` from source into `External/SDL3/`, and `Esoterica.Base` links
-`-lSDL3`. **Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS
-packages none.** No source file includes an SDL header yet. **P6.2, `LinuxApplication`, is next.**
+**Phase: 6. P6.1 to P6.7 are done. P6.8, first light, is the only task left in the phase.**
 
-**Phase 5 remains written and merged, not complete.** All sixteen groups are on `main`. The
-seventeen stacked PRs, #24 to #41, are merged and nothing is in flight. **Nothing in any of them
-has ever run.**
+### Start here
+
+```bash
+python3 Code/Scripts/NinjaGen/NinjaGen.py
+ninja -f Build/Linux/Esoterica.ninja Build/Linux_Release/Esoterica.Applications.Engine
+
+VK_LOADER_LAYERS_DISABLE='*' \
+  ./Build/Linux_Release/Esoterica.Applications.Engine \
+  -map data://demo/render/pbr/pbrdemo.map -packaged
+```
+
+**Three things about that command line, each of which cost a session to find:**
+
+- **`-packaged` is required.** Without it the engine uses the network resource provider and tries
+  to start `EsotericaResourceServer.exe`, which is Phase 7. `-packaged` reads
+  `Build/Linux_<configuration>/CompiledData` directly, which is what Phase 3 filled.
+- **`VK_LOADER_LAYERS_DISABLE='*'` is required on Ubuntu 24.04.** Its
+  `vulkan-validationlayers 1.4.309.0` bundles the same stale SPIRV-Tools that Phase 4
+  documented, and rejects the `DebugDraw` mesh shader on
+  `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036`. **The SPIR-V is correct and the driver accepts
+  it**, measured. This is the second time a stale SPIRV-Tools has misled this port. Losing
+  validation is a bad trade, so installing a newer layer package is worth the effort - and
+  recording which version works is worth more.
+- **The binary is `Esoterica.Applications.Engine`**, named after its project like the Reflector
+  and the ResourceCompiler, not `EsotericaEngine` as the phase document originally wrote.
+
+**Where it stops: `vkCreateComputePipelines` returns `VK_ERROR_UNKNOWN` for
+`InstancePickingResolve`.** That is P5.7's first execution, and chasing it is P6.8's first job.
+
+### What is behind that
+
+**Esoterica renders on Linux.** P6.6 made a `VkSurfaceKHR` from the `SDL_Window*` and cleared and
+presented twelve frames with **no Vulkan validation errors**. Every Phase 5 RHI call in that path
+had never executed before. Running the backend for the first time found **four defects in it**,
+all fixed; see the P6.6 and P6.7 entries.
+
+**The engine binary builds, links and starts.** It reads its settings, loads compiled data, opens
+a window and creates a Vulkan device. **Phase 6 acceptance criterion 1 is met.**
+
+**The window, input and imgui layers are all done and each was proved by running it.** SDL3
+`release-3.4.14` builds from source, `LinuxApplication` runs a window and an event loop, the imgui
+platform backend has **multi-viewport verified** - three imgui windows became three live SDL
+windows - and keyboard, mouse and gamepad all work: a **complete scancode table, 105 scancodes to
+105 distinct `InputID`s**, and a full `InputSystem` pass driven by an SDL virtual gamepad.
+**Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS packages
+none.**
+
+**The port now edits one upstream file that is not a pure include switch.**
+`RHI::MaxPendingFrames` is 3 on Linux, because the Intel UHD 620 and llvmpipe both report a
+swapchain `minImageCount` of 3. Four lines added, zero modified, Windows bit for bit unchanged.
+Escalated, approved, made, and registered in [TouchedFiles.md](TouchedFiles.md).
+
+**`EE_UNIMPLEMENTED_FUNCTION` is gone from `Base` outside `RHI_Vulkan.cpp`.** The three there are
+Phase 5's; two more in `Triangle.h` and `Encoding.cpp` are upstream's own.
+
+**Two findings from P6.3 that later phases need.** First, the vendored `ImguiPlatform_Win32.cpp`
+is about three years behind the imgui core beside it: the core is `v1.92.9b-docking`, the backend
+is roughly 1.89.1. The Linux backend is therefore built from `v1.92.9b-docking`'s
+`imgui_impl_sdl3.cpp`, and its vendored region keeps upstream's formatting so it can be
+re-synced. Second, **imgui will not enable viewports on Wayland**: `ImGui_ImplSDL3_Init` sets
+`ImGuiBackendFlags_PlatformHasViewports` only for video drivers on its global-mouse white list,
+and `wayland` is not on it. The editor's docking UI depends on viewports, so Phase 7 needs to
+know.
+
+**The Phase 5 / Phase 6 surface question is answered, and P6.6 implements it.**
+`Platform::SetMainWindowHandle` holds the `SDL_Window*`, and **`RHI_Vulkan.cpp` creates the
+`VkSurfaceKHR` itself**, through a new Linux-only `Platform::CreateVulkanSurface` in
+`Platform_Linux.cpp`. That edits no upstream file, and `Base/Render` still includes no window
+system header. It revises the second half of P5.3's answer, so read the two decision entries
+together. **Not written yet: P6.6 owns it.**
+
+**Phase 5 remains merged and incomplete, but it is no longer unrun.** All sixteen groups are on
+`main`. **The parts P6.6 and P6.7 exercised are verified** - context, queues, command pools and
+buffers, the swapchain, barriers, a render pass, submit and present - and everything else is
+still compile-verified only. Each P5.x entry's "Not verified" list stands apart from those.
 
 **Open question 7 is answered, and the work is scheduled as P5.17.** The shader reads its own
 command's root data out of the argument buffer, indexed by `DrawIndex`. **It is deliberately
@@ -27,8 +96,10 @@ the decision entry and
 before starting it. **The frame still cannot draw until it lands.**
 
 **All 16 groups are written. 15 of them are real; P5.13 is the exception and cannot be finished
-here.** Every one is unverified: nothing on Linux has executed a single RHI call. Phase 5's own
-note says this count is the single most important piece of state, so it leads this section.
+here.** Phase 5's own note says this count is the single most important piece of state.
+**Verification is now partial rather than absent**: the P6.6 and P6.7 bring-up exercised P5.1,
+P5.2, P5.3, P5.4, P5.7's shader creation, P5.8 and P5.9, and found four defects across them. No
+other group has executed.
 
 **3 `EE_UNIMPLEMENTED_FUNCTION` remain, none of them a whole function.** One is the indirect
 refusal from open question 7. The other two are markers that name a caller if it ever appears: a
@@ -59,10 +130,11 @@ and nothing else, and a compute pre-pass does not help because a pre-pass cannot
 either. **The answer is a shader change, and it is P5.17.** P5.13 landed its mechanical half by
 decision and refuses the rest at the line; see the P5.13 entry, the decision entry, and P5.17.
 
-**`m_pNativeWindowHandle` is a `VkSurfaceKHR` on Linux, and the application owns it.** That is
-the surface-creation requirement Phase 5 owes Phase 6, and `SDL_Vulkan_CreateSurface` returns
-exactly it. **The application drives swapchain recreation, not the RHI**, which is the second
-answer Phase 6 was promised. Both are in the P5.3 entry.
+**Superseded: `m_pNativeWindowHandle` is an `SDL_Window*` on Linux, and `RHI_Vulkan.cpp` makes
+the surface from it** through `Platform::Linux::CreateVulkanSurface`. P5.3 said the application
+would create the surface and hand it over, and there turned out to be nowhere for it to do that.
+See the 2026-08-30 decision entry. **The application does still drive swapchain recreation, not
+the RHI**, which is the other answer Phase 6 was promised, and that half of P5.3 stands.
 
 **A Vulkan queue does not execute its submits in order and a Direct3D 12 queue does**, so every
 submit now waits on the value the previous submit on that queue signalled. The engine depends on
@@ -79,20 +151,20 @@ texture, buffer view and pipeline attachment format reads the same function.
 
 **Both Phase 4 decisions are now implemented, each in exactly one place.** Clip-space Y is
 inverted in `CmdSetViewport` with a negative viewport height, and nowhere else. Heap set 1 is
-bound in `CmdSetPipeline`, not in `BeginCommandBuffer`. Neither has been executed.
+bound in `CmdSetPipeline`, not in `BeginCommandBuffer`. `CmdSetViewport` has run; the heap bind
+has not, because nothing has set a pipeline yet.
 
 **The bindless heap now exists in code.** `CreateContext` builds set 1 exactly as the Phase 4
 binding model specifies, and `GetBufferHandle` returns an index into it. **One correction to that
 recorded decision was needed**, on a flag Vulkan does not allow where the entry put it; it is
 written up below and it changes nothing the shaders can see.
 
-**Nothing on Linux can execute an RHI call yet, and that is a deliberate decision.** The engine
-binary does not exist on Linux, and building one is blocked behind all of Phase 6: `BaseModule::
-InitializeModule` halts in `InputSystem::Initialize` and `ImguiSystem::InitializePlatform`, both
-Phase 6 stubs, before `EngineModule::InitializeModule` ever reaches `RHI::CreateContext`. The
-decision was to write Phase 5 against the compiler and link only, and to first execute it when
-Phase 6 lands. See the 2026-08-28 decision entry. **Treat every P5.x entry as compile-verified
-and run-unverified until that changes.**
+**Phase 5 was written against the compiler and link only, on purpose**, because nothing on Linux
+could reach `RHI::CreateContext` until Phase 6 provided an entry point. See the 2026-08-28
+decision entry. **That has now happened**, and the first execution found four defects in four
+different groups. **Treat every P5.x entry as compile-verified and run-unverified except where
+the P6.6 and P6.7 entries say otherwise** - which is context, queues, command pools and buffers,
+the swapchain, barriers, a render pass, submit and present.
 
 Previously: **Phase 4 (done on Linux).** DXC is built from source with three patches that fix its SPIR-V back
 end, and **all 46 shader stages compile and pass `spirv-val`**. `./CompileShaders.sh` exits 0 and
@@ -136,8 +208,8 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 done: SDL3 builds from source into `External/` and `Esoterica.Base` links it. P6.2 onwards not started |
+| 5 - Vulkan RHI | **all 16 groups written and merged to `main`, and the backend has now run.** P6.6 and P6.7 executed it for the first time and found four defects, all fixed. Context, queues, command pools and buffers, the swapchain, barriers, a render pass, submit and present are **verified**; the rest is still compile-verified only. 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function. P5.13 is finished by P5.17, which still comes after P6.8. Criteria 5 to 10 are now checkable |
+| 6 - Windowing and Input | **started.** P6.1 to P6.7 done: SDL3 builds from source, `LinuxApplication` runs a window and an event loop, imgui and all three input devices work, the port renders on Linux, and **the engine binary builds, links and starts**. Criterion 1 is met. P6.8, first light, is next, and it owns the `VK_ERROR_UNKNOWN` compute pipeline that blocks a map |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -149,40 +221,39 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**`linux/p6.1-sdl3`.** SDL3 in `DownloadDependencies.sh` and in the generator's sheet table. PR
-open, not merged.
+> ### **None of Phase 6 is on `main` yet. It is a stack of six open pull requests.**
+>
+> A session that checks out `main` finds Phase 5 and nothing after it. **Work continues on
+> `linux/p6.7-engine-application`, which contains every commit below.**
 
-The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
-ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
-it.**
+| Branch | PR | What |
+|---|---|---|
+| `linux/p6.2-linuxapplication` | [#43](https://github.com/instinkt900/Esoterica/pull/43) | `Application_Linux.{h,cpp}` on SDL3 |
+| `linux/p6.3-imgui-platform` | [#44](https://github.com/instinkt900/Esoterica/pull/44) | The imgui platform backend |
+| `linux/p6.4-keyboard-mouse` | [#45](https://github.com/instinkt900/Esoterica/pull/45) | The keyboard and mouse device |
+| `linux/p6.5-gamepad` | [#46](https://github.com/instinkt900/Esoterica/pull/46) | The gamepad device |
+| `linux/p6.6-swapchain-surface` | [#47](https://github.com/instinkt900/Esoterica/pull/47) | The Vulkan surface, two RHI defects, and the `MaxPendingFrames` edit |
+| `linux/p6.7-engine-application` | [#49](https://github.com/instinkt900/Esoterica/pull/49) | The engine entry point, two build system defects, and the 16-bit feature gap |
 
-**There is no next group. Every one of the sixteen is written.** What is left in Phase 5 is not
-more code:
+Each is based on the one above it, so they merge bottom up. P6.1 is already merged, as
+[#42](https://github.com/instinkt900/Esoterica/pull/42).
 
-1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands. **Started: P6.1 is done, P6.2 is next.**
-2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
-   the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
-   after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
-   easier to debug against a live frame.
+**P6.8 should branch off `linux/p6.7-engine-application`**, not off `main`, unless the stack has
+landed by then.
 
-**P5.17 is written up in full in the phase document**, including the shape of the fix, the four
-shader files it touches, the `__spirv__` guard that keeps Windows untouched, the indirect compute
-case that does not fall out for free, and what "done" means. **Verifying it needs mesh shader
-hardware, which this machine does not have.**
+---
 
-**Still owed to other groups**, each asserted or commented at the line rather than silently
-skipped:
+**Phase 5 is merged and has now run.** All seventeen branches went in through PRs #24 to #41,
+ending with `p5.16-raytracing`. P6.6 and P6.7 executed the backend for the first time and found
+four defects in it, all fixed on the stack above. **What is still unverified is most of it**:
+every group's "Not verified" list stands except for the parts the P6.6 entry names.
 
-| Owed by | What |
-|---|---|
-| P5.14 | `CmdExecuteIndirect` on a `DispatchMesh` signature is `vkCmdDrawMeshTasksIndirectEXT`, which cannot be named until `VK_EXT_mesh_shader` is enabled. It halts at the line today. |
-| P5.16 | The same for a `DispatchRays` signature, which is `vkCmdTraceRaysIndirect2KHR`. |
+**[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)
+is still the last piece of Phase 5, and it still comes after P6.8.** It is the indirect draw
+shader change that makes the frame draw geometry, and it cannot be tested until the engine
+reaches a frame loop - which it does not yet, because `vkCreateComputePipelines` fails first.
 
-**Owed by later groups, recorded so they are not forgotten:**
-
-| Group | What it owes |
-|---|---|
+---
 
 ## `ALL_COMMANDS` sites
 
@@ -212,6 +283,741 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-30 - P6.7 `EngineApplication_Linux`. **The engine binary exists and runs**
+
+**`Build/Linux_Release/Esoterica.Applications.Engine` builds, links and starts.** It reads its
+settings, loads compiled data, opens a window, creates a Vulkan device and gets as far as
+compiling shaders. **Phase 6 acceptance criterion 1 is met.** It does not yet render a map; the
+two things stopping it are named below and neither is P6.7's.
+
+`EngineApplication_Linux.{h,cpp}` mirror `EngineApplication_Win32.{h,cpp}`. `_tWinMain` becomes
+`int main( int argc, char** argv )`, which also drops the `__argc` and `__argv` fetch, and the
+Live++ hooks are absent because `EE_ENABLE_LPP` stays unset on Linux. `ProcessInputEvent` is the
+one line the P6.4 entry specified. The constructor passes no icon and no splash screen: the
+Windows build reaches both through a `.rc` file, and Phase 6 says not to parse those.
+
+#### Two build system defects, both found by running the binary
+
+**1. The `External/` rpath was repository relative, so a binary only ran from the repository
+root.** `-L` is resolved by the linker, which ninja runs from the root, so a relative path is
+fine there. An **rpath is resolved by the loader against the working directory**, so it only
+worked by accident. `Toolchain.py` now emits `-Wl,-rpath,'$ORIGIN/../../<directory>'`; every
+output directory is `Build/Linux_<configuration>/`, two levels below the root. P6.2 predicted
+this and left it for P6.7.
+
+**2. A shared library had no soname, so its dependents recorded a path.** The dependency
+libraries are passed to the linker as repository-relative paths, and with no soname the linker
+copies that path verbatim into the dependent's `DT_NEEDED`. The loader then resolves
+`Build/Linux_Release/libEsoterica.Base.so` against the working directory, and `$ORIGIN` never
+gets a say. `NinjaGen.py` now passes `-Wl,-soname,lib<Project>.so` for every shared library, so
+`DT_NEEDED` carries a bare filename that `$ORIGIN` finds.
+
+Together these are why the engine failed with *"error while loading shared libraries"* from its
+own output directory. `ldd` from `/tmp` now resolves everything.
+
+#### A Phase 5 defect, found by running it: 16-bit shader types were never enabled
+
+**`CreateContext` did not enable the 16-bit feature bits, and the engine's shaders need them.**
+`MeshData.esh`, `CommonPacking.esh`, `XeGTAO.esh`, `RendererTypes.esh` and several `.esf` files
+declare `float16_t` and `uint16_t`; DXC emits the matching SPIR-V capabilities, and
+`vkCreateShaderModule` rejects a module whose capabilities the device did not enable. The first
+shader it saw was `InstancePickingResolve`, and validation said:
+
+```
+vkCreateShaderModule(): SPIR-V Capability Int16 was declared, but one of the following
+requirements is required (VkPhysicalDeviceFeatures::shaderInt16).
+```
+
+**Direct3D 12 has no equivalent step.** `Native16BitShaderOps` is a capability a driver either
+has or does not, with nothing to switch on, so P5.1 had nothing to mirror and the gap was
+invisible until a shader was created.
+
+`shaderInt16`, `shaderFloat16`, `storageBuffer16BitAccess`,
+`uniformAndStorageBuffer16BitAccess` and `storagePushConstant16` are now asked for when the
+device has them, and a warning names any that are missing. Asked for rather than required,
+because a device without them fails at the shader that needs one, which names the shader.
+
+#### **What stops the engine rendering a map, and neither is Phase 6's**
+
+With the above fixed, the engine reaches `Shaders::Initialize` and halts on the **`DebugDraw`
+mesh shader**:
+
+```
+vkCreateShaderModule(): pCreateInfo->pCode (spirv-val produced an error):
+[VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036] According to the Vulkan spec BuiltIn
+CullPrimitiveEXT variable needs to be a boolean value array. ID <10> (OpVariable) is not a
+bool scalar.
+```
+
+**The SPIR-V is not the problem, and the validation layer is.** This is the *same* stale
+SPIRV-Tools that Phase 4 already ran into, now inside the Vulkan validation layer rather than in
+`/usr/bin/spirv-val`. Ubuntu 24.04 ships `vulkan-validationlayers 1.4.309.0`, which carries a
+SPIRV-Tools old enough to have the bug Phase 4 documented: it reads an
+`OpVariable %_ptr_Output__arr_bool_uint_64 Output` - an array of 64 bools, which is exactly what
+the spec asks for - and reports that it "is not a bool scalar".
+
+**Measured, not assumed.** With `VK_LOADER_LAYERS_DISABLE='*'`, `vkCreateShaderModule` accepts
+the `DebugDraw` mesh shader and the engine walks straight past it. The driver has no complaint;
+only the layer does.
+
+**So there is no fourth DXC defect.** Phase 4's conclusion stands, and its rule stands with it:
+*a distribution's SPIRV-Tools is not interchangeable with the one the compiler validates
+against.* This is the second time that has cost a session, so it is worth stating in the form it
+now takes: **the Vulkan validation layers on Ubuntu 24.04 cannot be used on the mesh shader
+stages.** P6.8 must either disable them, or install a newer set, and record which.
+
+#### What actually blocks the engine, then
+
+Two things, and neither is what the paragraph above looked like:
+
+1. **`vkCreateComputePipelines` returns `VK_ERROR_UNKNOWN` for `InstancePickingResolve`.** That
+   is the first shader after the mesh stages, and it is the real wall. `VK_ERROR_UNKNOWN` from
+   Intel's ANV usually means the driver refused to compile the module, so the next step is to
+   run that one shader through the driver with `VK_LOADER_LAYERS_DISABLE` unset and a newer
+   validation layer, or through `spirv-val` and the driver's own shader cache diagnostics. This
+   is a Phase 5 group's first execution, so treat it as a P5.7 defect until shown otherwise.
+2. **`Shaders::Initialize` creates every shader module at startup**, mesh shaders included,
+   whatever the device supports. That is not fatal by itself - the driver accepts the module -
+   but it means the engine pays for shaders it can never dispatch, and any future driver that is
+   stricter about an unsupported stage would stop here. Worth knowing; not urgent.
+
+**Both belong to P6.8 and Phase 5's completion, not to P6.7.** P6.7's deliverable is the binary,
+and the binary exists.
+
+#### Verification
+
+- Files added: `Code/Applications/Engine/Linux/EngineApplication_Linux.{h,cpp}`.
+- Files edited: `Code/Scripts/NinjaGen/LinuxSources.txt` (the new source),
+  `Code/Scripts/NinjaGen/Toolchain.py` (the `$ORIGIN` rpath, and the SDL3 sheet for
+  `Esoterica.Applications.Engine`, whose `.cpp` reads `SDL_Event` fields),
+  `Code/Scripts/NinjaGen/NinjaGen.py` (the soname), `Code/Base/Render/RHI_Vulkan.cpp` (the
+  16-bit features).
+- **Upstream files edited: none.**
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before. **A third
+  executable now builds**, next to the Reflector and the ResourceCompiler.
+- Run: `./Build/Linux_Release/Esoterica.Applications.Engine -map
+  data://demo/render/pbr/pbrdemo.map -packaged`, **from any directory**, reads its settings,
+  loads compiled data, opens a window, selects the Intel UHD 620 and builds both descriptor
+  pools before halting at the `DebugDraw` mesh shader.
+- Acceptance criteria: **criterion 1 is met.** Criterion 2 is not; see above. Criterion 10 is
+  untouched: both new files are guarded with `#ifdef __linux__`, they live in a directory no
+  `.vcxproj` references, and the two generator changes are Linux-only tooling.
+
+#### The `-packaged` flag is needed, and that is not a defect
+
+Without it the engine uses the **network** resource provider, which tries to start
+`EsotericaResourceServer.exe`. The ResourceServer is Phase 7 and does not build on Linux yet.
+`-packaged` selects `PackagedResourceProvider`, which reads
+`Build/Linux_<configuration>/CompiledData` directly - the data Phase 3 compiled. Nothing needs
+changing; P6.8 and Phase 7 should simply expect the flag until the ResourceServer exists.
+
+**A related upstream observation, not fixed here.** When `Engine::Initialize` fails, the
+following `Engine::Shutdown` segfaults in `RenderSystem::WaitAllQueuesIdle`, because it tears
+down systems that were never initialized. That is upstream behaviour on both platforms and it
+only shows up on a failed start; it is recorded under "Upstream issues observed".
+
+### 2026-08-30 - P6.6 The Vulkan surface. **Esoterica renders on Linux**
+
+**The port drew its first frame.** A window opens, `RHI::CreateContext` picks a device, a
+`VkSurfaceKHR` is made from the `SDL_Window*`, a swapchain is created, and twelve frames are
+cleared and presented to the screen with **no Vulkan validation errors**. The swapchain recreates
+on resize and tears down clean. Every Phase 5 RHI call in that path had never executed before
+today.
+
+**It needed one change to an upstream file that was not on the registry.** That was escalated,
+approved and made: `RHI::MaxPendingFrames` is 3 on Linux. See below, and
+[TouchedFiles.md](TouchedFiles.md).
+
+#### Bring-up order, and what each step found
+
+Phase 5 wrote all of this against the compiler. Running it turned up three real defects and one
+measured limit. In the order they appeared:
+
+1. **`RHI::CreateContext` worked first time.** It skipped the NVIDIA MX250 for a missing
+   `VK_EXT_mutable_descriptor_type`, chose the Intel UHD 620, warned about the absent
+   `VK_EXT_mesh_shader` exactly as P5.14 said it would, and built both descriptor pools. Nothing
+   needed fixing.
+
+2. **Defect: the surface offers no RGBA format.** `CreateSwapchain` asked for `RGBA8_sRGB` then
+   `RGBA8_UNorm`, which is what DXGI hands out, and asserted. **Every surface on this machine
+   offers only `VK_FORMAT_B8G8R8A8_SRGB` and `VK_FORMAT_B8G8R8A8_UNORM`** - measured on the Intel
+   UHD 620, the NVIDIA MX250 and llvmpipe alike. So `BGRA8_sRGB` and `BGRA8_UNorm` are now
+   candidates after the two the caller asked for. **The swap costs nothing and needs no shader
+   change**: a Vulkan format names its components in memory order, and a shader's red output
+   lands in the format's red component wherever that byte sits. The sRGB preference is kept, and
+   `DataFormat` already had both spellings.
+
+3. **Measured limit: `minImageCount` is 3, and `MaxPendingFrames` is 2.** See the escalation.
+
+4. **Defect: `Window::DestroySwapchain` destroys command pools before command buffers.** That is
+   fine on Direct3D 12, where an allocator and a command list are independent objects, and it is
+   a validation error on Vulkan, where destroying a `VkCommandPool` frees its buffers and a later
+   `vkFreeCommandBuffers` on the dead pool is invalid. `RenderWindow.cpp:53` does exactly this.
+   **P5.4 assumed the other order** - its comment said "the engine destroys buffers first; see
+   `RenderSystem::Shutdown`" - and that is true of `RenderSystem` and false of `Window`.
+
+   Fixed in `RHI_Vulkan.cpp`, not upstream: `VulkanCommandPool` now knows the buffers it
+   allocated and nulls their handles as it is destroyed, so `DestroyCommandBuffer` skips a free
+   that already happened and never reads a pool it no longer owns. Either order now works.
+
+#### `RHI::MaxPendingFrames` is 3 on Linux. **Escalated, approved, and made**
+
+**This is the one thing Phase 6 predicted by name, and it is real.** `RHI.h:31` set
+`MaxPendingFrames = 2`. Measured on this machine:
+
+| Surface | `minImageCount` | `maxImageCount` |
+|---|---|---|
+| Intel UHD Graphics 620 | **3** | unlimited |
+| NVIDIA GeForce MX250 | 2 | 8 |
+| llvmpipe | **3** | unlimited |
+
+`minImageCount` is a hard minimum, so `CreateSwapchain` gets three images back and halts on its
+own check, with the message P5.3 wrote for this exact case:
+
+```
+[Error][Rendering][RHI/CreateSwapchain] The surface needs 3 swapchain images and RHI::MaxPendingFrames is 2.
+```
+
+`Swapchain::m_renderTargets` is a `TArray<Texture*, MaxPendingFrames>`, and `AcquireNextImage`
+returns an index into it, so there is no way to absorb this in the backend.
+
+**The edit, exactly, at `RHI.h:31`. Four lines added, zero modified:**
+
+```cpp
+#if defined( __linux__ )
+        MaxPendingFrames = 3, // Several Linux drivers report a minImageCount of 3
+#else
+        MaxPendingFrames = 2, // Set this value to 2 for double buffering, or 3 for triple buffering.
+#endif
+```
+
+The existing line survives verbatim inside the `#else`, so **the Windows build is bit for bit
+unchanged** and stays double buffered. `git diff --stat upstream/main -- Code/Base/Render/RHI.h`
+reports `4 ++++` with no deletions. That is the shape Conventions rule 2 asks for. What made it an
+escalation is only that `Code/Base/Render/RHI.h` was not in
+[TouchedFiles.md](TouchedFiles.md); **it was escalated, approved, made, and is registered there
+now.**
+
+**With it, everything above passes.** Without it, nothing after `CreateContext` runs at all.
+
+The one alternative that touches no upstream file was to give the backend three real swapchain
+images, render into two of its own, and blit into the acquired image at present time. That is a
+full screen copy every frame to avoid four lines, and it was not taken.
+
+#### What actually ran
+
+Recorded here because Phase 5 could never state it. `CmdBarrier` on a swapchain image in both
+directions, `CmdSetRenderTargets` opening and closing a dynamic render pass with a clear load
+action, `CmdSetViewport`, `EndCommandBuffer`, `QueueSubmit`, `AcquireNextImage`, `QueuePresent`,
+`WaitQueueIdle`, and the whole create and destroy path for the context, queues, command pools,
+command buffers, swapchain and its render targets. **The Vulkan validation layers were on
+throughout and said nothing.**
+
+Also confirmed incidentally: Phase 1's crash handler works. A null dereference during bring-up
+printed a symbolised backtrace and re-raised, which is what it was written to do.
+
+#### Verification
+
+- Files edited: `Code/Base/Platform/PlatformUtils_Linux.{h,cpp}` (the two surface functions),
+  `Code/Base/Render/RHI_Vulkan.cpp` (the surface call, the BGRA candidates, the command pool
+  teardown fix).
+- **Upstream files edited: one.** `Code/Base/Render/RHI.h:31`, 4 added and 0 modified,
+  registered in [TouchedFiles.md](TouchedFiles.md). Escalated and approved before the edit.
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before.
+- Run: a scratch application deriving from `LinuxApplication` (not committed) reported every
+  check passing, including that all three swapchain images were acquired across twelve frames and
+  that the swapchain survived a resize.
+- Acceptance criteria: **criterion 4 is met** - resize recreates the swapchain with no validation
+  errors. **Criterion 8 is met for this path** - shutdown is clean with validation on. Criterion 1
+  is not: there was still no engine binary when this was written, which is P6.7. Criterion 10
+  is untouched.
+
+#### For P6.7
+
+- `EngineApplication_Linux::ProcessInputEvent` is one line; see the P6.4 entry for the exact
+  `GenericMessage`.
+- The `Esoterica.Applications.Engine` project needs the SDL3 sheet in `LINUX_ONLY_SHEETS` as soon
+  as its `.cpp` reads an SDL event field.
+- The engine paces frames on `RenderSystem`'s frame semaphores. A harness without them reuses the
+  swapchain's acquire semaphores while they are still pending, and validation says so. That is
+  not a defect; it is a reminder that `AcquireNextImage` is only sound inside the engine's own
+  frame pacing.
+
+### 2026-08-30 - P6.5 Gamepads. The last Phase 6 stub in `Base` is gone
+
+**`InputDevice_XBoxController_Linux.cpp` is a real device, on SDL3's gamepad API.** It replaces
+the Phase 1 stub, and with it **`Base` has no `EE_UNIMPLEMENTED_FUNCTION` left outside
+`RHI_Vulkan.cpp`.** The three that remain there are Phase 5's, and two more are upstream's own in
+`Triangle.h` and `Encoding.cpp`.
+
+**`InputSystem::Initialize()` works now.** It constructs two `XBoxControllerInputDevice`s and
+calls `Initialize` on each, and that used to halt, which meant nothing could touch `InputSystem`
+at all. P6.4 had to drive its device directly for that reason. That obstacle is gone.
+
+**The name stays `InputDevice_XBoxController_Linux.cpp`**, per Conventions rule 3 and the phase
+document, even though SDL3 handles any gamepad.
+
+#### Three things that differ from XInput, all of them real
+
+1. **The vertical axes are negated.** SDL follows the joystick convention, where pushing the
+   stick down gives a positive Y. XInput's `sThumbLY` is positive upwards, and the engine is
+   written against XInput. **Without the negation every controller would be inverted on Linux
+   only**, which is the sort of defect that survives a long time because it looks like a user
+   setting. Proved in both directions, on both sticks.
+2. **Triggers use a different raw range.** XInput reports a byte, 0 to 255; SDL reports 0 to
+   `SDL_JOYSTICK_AXIS_MAX`. Both normalize to 0..1, so only the divisor changes and
+   `GetDefaultTriggerThreshold` keeps XInput's 30/255. All three dead zone values are unchanged
+   from the Win32 device.
+3. **Face buttons are named by position, not by letter.** `SDL_GAMEPAD_BUTTON_SOUTH` is the
+   XInput A button, and "south" is exactly what `Controller_FaceButtonDown` means, so the mapping
+   is more direct than XInput's.
+
+#### Where the `SDL_Gamepad*` lives, and why it is not a member
+
+**In a file-static array, indexed by hardware controller index.** `XBoxControllerInputDevice` has
+no member to hold one and `InputDevice_XBoxController.h` is an upstream file, so adding one would
+be an unregistered edit to a shared header - an escalation trigger. XInput needs no such storage:
+it polls a slot number and the OS owns the connection.
+
+The array holds four entries; `InputSystem` creates `s_maxControllers`, which is 2. An index
+outside the array is treated as permanently disconnected rather than as an error.
+
+**Hot plug is handled by re-reading the slot every frame.** `SDL_GetGamepads` returns a list, and
+a device unplugged earlier in that list shifts the rest down, so the joystick ID at a slot is not
+stable and cannot be cached. When it changes, the old handle is closed and the new one opened.
+
+#### The gamepad subsystem initializes itself
+
+`SDL_InitSubSystem( SDL_INIT_GAMEPAD )` is called from `XBoxControllerInputDevice::Initialize`
+rather than from `LinuxApplication::Run`, so anything holding an `InputSystem` gets working
+gamepads without knowing about SDL. SDL reference counts subsystems, so both devices doing it is
+correct. **This replaces P6.2's note that P6.5 would add `SDL_INIT_GAMEPAD` to `Run`**; that
+comment is updated in place.
+
+**There are no `SDL_EVENT_GAMEPAD_*` cases in `LinuxApplication::ProcessEvent` either.** The
+device polls, the way the XInput sibling does, and `SDL_UpdateGamepads` picks up plug and unplug
+on its own. P6.3's placeholder comment is updated to say so.
+
+#### Verification
+
+- Files replaced: `Code/Base/Input/InputDevices/Platform/InputDevice_XBoxController_Linux.cpp`,
+  which was a Phase 1 stub.
+- Files edited: `Code/Base/Application/Platform/Application_Linux.cpp` (two stale comments),
+  `Code/Scripts/NinjaGen/LinuxSources.txt` (the file moves out of the stub group, and
+  `Application_Linux.cpp` moves to the Phase 6 group where it belongs).
+- **Upstream files edited: none.**
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before.
+- **Run, end to end through `InputSystem`, with a scratch harness (not committed). All checks
+  pass.** No gamepad is plugged into this machine, so the harness attaches an
+  **SDL virtual joystick** (`SDL_AttachVirtualJoystick`) and drives it with
+  `SDL_SetJoystickVirtualButton` and `SDL_SetJoystickVirtualAxis`. What it covers:
+  - `InputSystem::Initialize` returns true and reports one connected controller.
+  - All 14 buttons, one at a time, each checked to raise its own `InputID` **and nothing else**.
+  - Stick Y inverted correctly in both directions, on both sticks: SDL -32768 becomes engine
+    +1.000, SDL +32767 becomes engine -1.000.
+  - Stick X passes through unchanged, and the two sticks are independent.
+  - Triggers press and release independently.
+  - Dead zones read 0.2395, 0.2652 and 0.1176, which are XInput's 7849, 8689 and 30 normalized.
+  - Unplugging the virtual pad disconnects the device and drops the controller count to zero.
+- **A note for anyone writing a similar harness.** SDL generates the mapping `lefttrigger:a4`
+  for a virtual pad, which maps the full joystick range onto the trigger's 0..32767. A released
+  trigger is therefore joystick axis **-32768**, not 0; setting 0 reads back as a half-pulled
+  trigger. That cost a failing check before it was understood, and it is the harness rather than
+  the device.
+- Acceptance criteria: criterion 3 is met at the device level for keyboard, mouse and gamepad.
+  "Works for camera control" still needs a running engine, which is P6.7 and P6.8. Criterion 10
+  is untouched.
+
+#### Not done, and not needed
+
+Rumble, LEDs, gyro, touchpads and battery. The engine's `ControllerDevice` has no concept of any
+of them, and XInput's device exposes none either. SDL3 offers them all; adding them would be a
+feature this port does not owe.
+
+### 2026-08-30 - P6.4 Keyboard and mouse. The mapping table is complete and proved complete
+
+**`InputDevice_KeyboardMouse_Linux.cpp` is a real device.** It replaces the Phase 1 stub of four
+halting functions. **The scancode table is complete: 105 scancodes map to 105 distinct
+`InputID`s, one to one, with none missing and none duplicated.** That is checked by running it,
+not by reading it.
+
+**Scancodes, not keycodes**, as the phase document requires. A scancode names the physical key and
+does not move with the layout, which is what the Win32 sibling gets from raw input. `SDL_SCANCODE_W`
+is `Keyboard_W` on AZERTY too.
+
+#### How an `SDL_Event` reaches the device
+
+**By pointer, in `GenericMessage::m_data0`.** `GenericMessage` is four `uint64_t` and an
+`SDL_Event` is 128 bytes, so it cannot be copied in. This is safe because
+`InputSystem::ForwardInputMessageToInputDevices` dispatches synchronously, from inside
+`LinuxApplication`'s event loop, while the event is still on the stack. The Win32 sibling passes
+an `HRAWINPUT` handle through the same field, so the shape is not new.
+
+**This is the contract P6.7 has to honour.** `EngineApplication_Linux::ProcessInputEvent` is one
+line:
+
+```cpp
+m_engine.GetInputSystem()->ForwardInputMessageToInputDevices( { (uint64_t) &event, 0, 0, 0 } );
+```
+
+Nothing may queue that message for later.
+
+#### What got simpler, and what got harder
+
+**Simpler.** The Win32 device spends 60 lines in `ConvertKeyMessageToInputID` fixing up
+`VK_SHIFT`, `VK_CONTROL`, `VK_MENU` and every numpad key from the message's scan code and
+extended bit, because a Windows virtual key does not distinguish left from right, or numpad from
+cursor block. Scancodes already do. That whole function is a hash lookup here.
+
+Wheel deltas arrive in notches, so there is no `WHEEL_DELTA` to divide by. A "natural scrolling"
+setting arrives as `SDL_MOUSEWHEEL_FLIPPED` rather than negated values, and is undone, so the
+engine sees what Windows reports.
+
+**Auto-repeat is dropped.** `SDL_EVENT_KEY_DOWN` repeats while a key is held and raw input does
+not, so the Win32 sibling never sees one. `Press` on an already held key would restart its state.
+
+#### Two behaviour gaps, both recorded rather than guessed at
+
+1. **Mouse deltas stop at the screen edge; on Windows they do not.** The Win32 device reads raw
+   input, which has no cursor and no bounds. `SDL_EVENT_MOUSE_MOTION`'s `xrel` and `yrel` follow
+   the pointer. X11 takes an implicit pointer grab on button press, so a camera drag keeps
+   receiving motion outside the *window*, but the *screen* edge still stops it.
+
+   **`SDL_SetWindowRelativeMouseMode` is the fix, and P6.4 deliberately does not call it.**
+   Turning it on for any button press would hide and warp the cursor and break every imgui drag,
+   and the device cannot tell a camera drag from a slider drag. imgui's own backend already calls
+   `SDL_CaptureMouse`, so a second owner of capture would fight it. **P6.8 should decide this
+   against a live camera**, which is the first time anyone can see whether it matters.
+
+2. **`m_charKeyPressed` only fills while text input is active.** SDL3 delivers
+   `SDL_EVENT_TEXT_INPUT` only after `SDL_StartTextInput`, and the only caller of that is imgui's
+   backend, when a text field has focus. `WM_CHAR` always arrives on Windows. **Nothing in the
+   engine reads `GetCharKeyPressed()`** - the grep is empty - so this blocks nothing today.
+
+   Non-ASCII is dropped rather than truncated. The field is one byte and `SDL_EVENT_TEXT_INPUT`
+   is UTF-8; the Win32 sibling truncates a `WM_CHAR` code point to a `char`, which is the same
+   loss written differently. imgui does its own text input and is unaffected.
+
+#### Verification
+
+- Files replaced: `Code/Base/Input/InputDevices/Platform/InputDevice_KeyboardMouse_Linux.cpp`,
+  which was a Phase 1 stub.
+- Files edited: `Code/Scripts/NinjaGen/LinuxSources.txt`, which now lists the file under Phase 6
+  rather than under the stubs.
+- **Upstream files edited: none.**
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before.
+- **Run, with a scratch harness (not committed). 20 checks, all passing.** It drives the device
+  through an `InputDevice*`, because `InputDevice` declares the overrides public and access is
+  checked on the static type:
+  - Every scancode from 1 to `SDL_SCANCODE_COUNT` is fed in and the resulting `InputID`s
+    collected. **105 scancodes produce 105 distinct IDs**; every ID from `Keyboard_A` to
+    `Keyboard_RAlt` is produced by exactly one scancode.
+  - Left and right Shift are distinct, and `Numpad4` is not the Left arrow. Those are the two
+    cases the Win32 fix-up code exists for.
+  - Press, hold, release; auto-repeat ignored.
+  - All five mouse buttons; the vertical and horizontal wheel; `SDL_MOUSEWHEEL_FLIPPED` undone.
+  - Two motion events in one frame accumulate, and the delta resets on the next.
+  - Char input; non-ASCII dropped; focus loss clears held keys.
+- **`InputSystem` cannot be used end to end yet.** `InputSystem::Initialize` constructs two
+  `XBoxControllerInputDevice`s and calls `Initialize` on each, and that is still the P6.5 stub,
+  which halts. The harness drives the keyboard and mouse device directly for that reason. P6.5
+  removes the obstacle.
+- Acceptance criteria: criterion 3 is half met. Keyboard and mouse are implemented and tested at
+  the device level; gamepad is P6.5, and "works for camera control" needs a running engine, which
+  is P6.7 and P6.8. Criterion 10 is untouched: the file is guarded with `#ifdef __linux__` and no
+  `.vcxproj` lists it.
+
+### 2026-08-30 - P6.3 imgui platform backend. Multi-viewport works, and the Win32 copy is stale
+
+**The imgui platform backend runs on SDL3, and multi-viewport is verified rather than assumed.**
+`ImguiPlatform_Linux.{h,cpp}` replace the Phase 1 stub, `ImguiX_Linux.cpp` is the sibling of
+`ImguiX_Win32.cpp`, and `LinuxApplication::ProcessEvent` now calls imgui first.
+
+**Proved by running it.** Three imgui windows became three real SDL windows, each with a live
+`SDL_Window*` found from its viewport, one of them at 1100,200 which is outside the main window.
+Shutdown destroyed all three. Under i3 on X11.
+
+#### The vendored Win32 backend is three years behind the imgui core it sits next to
+
+**This changes the plan for this task.** [Phase6-WindowingInput.md](Phases/Phase6-WindowingInput.md)
+says to diff `ImguiPlatform_Win32.cpp` against "the matching upstream release" of
+`imgui_impl_win32.cpp` and treat that as the worklist. There is no matching release:
+
+- `Code/Base/ThirdParty/imgui/imgui.cpp` is **byte-identical to `v1.92.9b-docking`**, bumped
+  upstream on 2026-08-06.
+- `ImguiPlatform_Win32.cpp` was last touched on 2026-07-19 and last named a version in
+  "Upgrade to DearImgui 1.89.1", 2022-11-29. Its functions still match roughly 1.89: it has
+  `ImGui_ImplWin32_VirtualKeyToImGuiKey`, which upstream renamed to `KeyEventToImGuiKey`, and
+  lacks `WndProcHandlerEx` and `AdjustWindowRect`.
+
+So this task starts from **`v1.92.9b-docking`'s `imgui_impl_sdl3.cpp`**, which matches the
+vendored core, and ports Esoterica's *adaptations* rather than mirroring a stale file. A
+1.89-era backend against a 1.92 core would be wrong: 1.92 changed the font and texture contract
+(`ImGuiBackendFlags_RendererHasTextures`).
+
+#### Esoterica's adaptations, and what each became on SDL3
+
+| Win32 adaptation | Linux |
+|---|---|
+| Wrapped in `EE::ImGuiX::Platform`, guarded, reformatted into house style | Same wrapper and guards. **Not reformatted**; see below |
+| `Init`/`Shutdown`/`NewFrame` folded into `ImguiSystem::InitializePlatform`/`ShutdownPlatform`/`PlatformNewFrame` | Same, but as thin calls into the vendored functions rather than an inlined copy |
+| Window read from `Platform::GetMainWindowHandle()`, not passed to `Init` | Same |
+| Gamepad and XInput removed; the engine owns gamepads | Same. `ImGui_ImplSDL3_UpdateGamepads` and friends are gone |
+| DPI awareness left to `Win32Application` | Left to `LinuxApplication`, which sets `SDL_WINDOW_HIGH_PIXEL_DENSITY` |
+| Backend data through `EE::New` / `EE::Delete` | Same |
+| A child wnd proc forwards input to `InputSystem`, so viewport windows keep feeding the engine | **Not needed.** SDL has one event queue, and `LinuxApplication::ProcessEvent` already forwards every input event whatever window it came from |
+| A window class registered for viewport windows, with the app icon | Not needed. SDL has no window classes |
+| `EE_BASE_API intptr_t WindowMessageProcessor(...)` | `EE_BASE_API bool ProcessEvent( SDL_Event const& )` |
+
+**Two adaptations are new, and neither has a Win32 counterpart:**
+
+1. **The `NewFrame` time step is removed.** Upstream's `ImGui_ImplSDL3_NewFrame` sets
+   `io.DeltaTime` from `SDL_GetPerformanceCounter`. `ImguiSystem::StartFrame` sets it from the
+   engine clock and then calls `PlatformNewFrame`, so upstream's version would overwrite it every
+   frame. Verified: the engine's 0.01667 survives.
+2. **`ProcessEvent`'s return value is ignored by the caller**, and it guards against a null
+   context. Both matter, and the second is written up under P6.2's file below.
+
+#### **The return value of the two backends does not mean the same thing**
+
+`Win32Application::WindowMessageProcessor` returns early when
+`ImGuiX::Platform::WindowMessageProcessor` returns non-zero. **Copying that would break the
+application.** A wnd proc returns non-zero only for a message it truly consumed, and
+`imgui_impl_win32.cpp` returns 0 for nearly everything. `imgui_impl_sdl3.cpp` returns `true` for
+every event it recognises, including `SDL_EVENT_WINDOW_CLOSE_REQUESTED` and both focus events. An
+early return there swallows the application's own close and stops input reaching the engine.
+`LinuxApplication::ProcessEvent` therefore calls imgui and ignores the answer, which is what
+upstream's own SDL3 examples do.
+
+`ProcessEvent` also returns false when there is no imgui context or backend.
+`ImGui_ImplSDL3_ProcessEvent` asserts in that case, and `LinuxApplication` pumps events for any
+subclass, including one that never starts imgui.
+
+#### The vendored region keeps upstream's formatting, and that is deliberate
+
+**This breaks Conventions rule 8, knowingly.** The vendored region of `ImguiPlatform_Linux.cpp`
+is left at upstream's indentation, at column zero rather than indented into the namespace, so
+that
+
+```
+diff <upstream imgui_impl_sdl3.cpp> <the vendored region>
+```
+
+still works. Every deliberate change carries an `EE:` comment for exactly that reason. The
+argument is the finding above: `ImguiPlatform_Win32.cpp` was reformatted into house style and is
+now three years behind the core it sits beside. Rule 8's own rationale is consistency with the
+neighbour; here the neighbour's approach is what produced the drift. A banner at the top of the
+file says all of this, so nobody has to rediscover it.
+
+Everything Esoterica wrote in that file, and all of `ImguiPlatform_Linux.h` and
+`ImguiX_Linux.cpp`, is in house style.
+
+#### `PlatformHandleRaw` is null on Linux
+
+`ImGui_ImplSDL3_SetupPlatformHandles` fills `PlatformHandleRaw` only on Windows and macOS, and
+puts the `SDL_WindowID` in `PlatformHandle`. So `ImguiX_Linux.cpp`'s window controls look the
+window up with `SDL_GetWindowFromID` where the Win32 sibling casts `PlatformHandleRaw` to an
+`HWND`. Minimize, maximize, restore and close map to `SDL_MinimizeWindow`, `SDL_MaximizeWindow`,
+`SDL_RestoreWindow` and a pushed `SDL_EVENT_WINDOW_CLOSE_REQUESTED`; there is no SDL equivalent
+of `SendMessage( hwnd, WM_CLOSE )`.
+
+#### The renderer half is confirmed separate, and it gates viewports
+
+The phase document asked for this to be confirmed rather than assumed. It is separate:
+`ImguiRenderer` goes through the RHI, and nothing in `ImguiPlatform_Linux.cpp` touches it.
+
+**But imgui gates `ImGuiConfigFlags_ViewportsEnable` on both halves** (`imgui.cpp:11791`): the
+platform backend must set `ImGuiBackendFlags_PlatformHasViewports` *and* the renderer must set
+`ImGuiBackendFlags_RendererHasViewports`. With only the platform half, imgui silently disables
+viewports for the frame and every window merges into the main one. That cost an hour here, and
+it is the first thing to check if the editor's windows will not detach in Phase 7.
+
+#### Verification
+
+- Files added: `Code/Base/Imgui/Platform/ImguiPlatform_Linux.h`,
+  `Code/Base/Imgui/Platform/ImguiX_Linux.cpp`.
+- Files replaced: `Code/Base/Imgui/Platform/ImguiPlatform_Linux.cpp`, which was a Phase 1 stub of
+  three halting functions.
+- Files edited: `Code/Base/Application/Platform/Application_Linux.cpp` (the imgui hook),
+  `Code/Scripts/NinjaGen/LinuxSources.txt`.
+- **Upstream files edited: one.** `Code/Base/Imgui/ImguiSystem.cpp:12`, `#if _WIN32` to
+  `#if _WIN32 || defined( __linux__ )`. `git diff --stat upstream/main` shows **1 line changed**,
+  which is Phase 6 acceptance criterion 12. Registered in [TouchedFiles.md](TouchedFiles.md).
+  **It turns out to be cosmetic**: `imconfig.h` defines `IMGUI_ENABLE_FREETYPE` unconditionally,
+  so `imgui_freetype.cpp` was already compiled into `libEsoterica.Base.so` before this change.
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before. Both are Phase 7.
+- Run, with a scratch subclass (not committed): the backend reports itself as
+  `imgui_impl_sdl3 (3.4.14; 3.4.14) (x11)`; `ImGuiBackendFlags_PlatformHasViewports` and
+  `HasMouseCursors` are set and `HasGamepad` is not, which is the intended removal; one monitor is
+  enumerated at 1920x1080, DPI scale 1.0; `io.DisplaySize` is 958x1042 with framebuffer scale
+  1.0; `io.DeltaTime` keeps the engine's value; draw data is produced; and three imgui windows
+  became three live SDL windows at the positions imgui asked for, destroyed cleanly on shutdown.
+  The harness fakes the two renderer flags, because it has no renderer.
+- Acceptance criteria: **criterion 12 is met.** Criterion 5 needs the renderer and a running
+  engine, so it is P6.7 and P6.8. Criterion 10, the Windows build, is untouched: the one upstream
+  edit adds a Linux branch to an existing `#if` and changes nothing Windows compiles.
+
+#### Still open
+
+- **Wayland is untested.** This machine runs i3 on X11 and has no Wayland compositor, so nothing
+  here says how viewports behave under one. P6.8 owns it. Note that
+  `ImGui_ImplSDL3_Init` sets `bd->IsWayland` and the mouse capture and global state white list
+  excludes wayland, so `ImGuiBackendFlags_PlatformHasViewports` **will not be set on Wayland at
+  all**. Read `ImGui_ImplSDL3_Init` before assuming the editor's docking UI works there.
+- **i3 honoured the viewport positions**, which was the worry Phase 6 recorded about tiling and
+  Wayland window placement. It ignores `SDL_SetWindowPosition` on the main window and honours it
+  on the viewport windows, which are borderless utility windows.
+
+### 2026-08-30 - P6.2 `LinuxApplication`, and a Phase 5 / Phase 6 conflict to settle
+
+**`LinuxApplication` is written and it runs.** `Application_Linux.{h,cpp}` mirror
+`Application_Win32.{h,cpp}` on SDL3. A window opens, resizes, persists its layout and shuts down
+cleanly. **Nothing derives from it yet**: `EngineApplication_Linux` is P6.7.
+
+**Verified by running it, not only by building it.** A scratch subclass linked against
+`libEsoterica.Base.so` opened a window, took a resize, wrote and re-read its layout file, ran the
+borderless hit test and exited 0. Details below. The program is not committed.
+
+#### What carried over unchanged
+
+`Initialize`, `Shutdown`, `ApplicationLoop`, `ResizeMainWindow`, `OnUserExitRequest`,
+`FatalError`, `OnFirstShowMainWindow`, `ProcessWindowDestructionMessage`, `ReadWindowSettings`,
+`WriteWindowSettings`, `RequestApplicationExit`, `GetBorderlessTitleBarInfo`, `Run`,
+`WasInitialized`, and both `InitOptions` flags. A subclass reads the same on both platforms.
+
+#### What changed, and why
+
+| Win32 | Linux |
+|---|---|
+| `Win32Application( HINSTANCE, name, iconResourceID, splashResourceID, options )` | `LinuxApplication( name, iconFilePath, splashScreenFilePath, options )`. Both paths may be null, and both are null today. |
+| `WindowMessageProcessor( HWND, UINT, WPARAM, LPARAM )` | `bool ProcessEvent( SDL_Event const& )` |
+| `ProcessInputMessage( UINT, WPARAM, LPARAM )` | `ProcessInputEvent( SDL_Event const& )` |
+| `HICON GetIcon()` | `SDL_Surface* GetIcon()` |
+| `BorderlessWindowHitTest( POINT )` returning an `HT*` code | Same shape, returning an `SDL_HitTestResult` through `SDL_SetWindowHitTest` |
+| `RECT m_windowRect` | `Int2 m_windowPosition` and `Int2 m_windowSize` |
+| `WM_GETMINMAXINFO` clamps to 320x240 | `SDL_SetWindowMinimumSize` |
+| Live++ agent, hooks and `#if EE_ENABLE_LPP` blocks | Absent. There is no Live++ on Linux. |
+
+**The header forward declares `SDL_Window`, `SDL_Surface` and `SDL_Event` and includes no SDL
+header.** `ImguiPlatform_Win32.h` forward declares `HWND__` for the same reason. This keeps SDL3
+off the include path of everything that derives from `LinuxApplication`, so
+`Esoterica.Applications.Engine` needs the SDL3 sheet only when P6.7 writes a `.cpp` that reads
+event fields.
+
+**`m_windowPosition` and `m_windowSize` are in different units, on purpose.** The position is
+logical desktop coordinates, which is what `SDL_SetWindowPosition` takes. The size is pixels,
+which is what the swapchain needs. They are the same numbers on a non-HiDPI display. The window is
+created with `SDL_WINDOW_HIGH_PIXEL_DENSITY`, and `m_windowSize` is read back with
+`SDL_GetWindowSizeInPixels` after creation and from `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` after
+that. **`SDL_EVENT_WINDOW_RESIZED` is the wrong event here**: it reports logical coordinates.
+
+**The layout file keeps the Win32 key names.** `Left`, `Right`, `Top`, `Bottom`, `WasMaximized`
+under `[WindowSettings]`, so one `.layout.ini` is portable between the two builds.
+
+**`WriteWindowSettings` is called from `Run` before `Shutdown`, not only from an event.** The
+window is destroyed in the destructor, so `SDL_EVENT_WINDOW_DESTROYED` never arrives while the
+loop is running, and `WM_DESTROY`'s job has to be done explicitly.
+
+**Window events are filtered by window id.** imgui multi-viewport creates windows of its own, and
+closing one of those is not a request to close the application.
+
+**`SDL_Init( SDL_INIT_VIDEO )` happens in `Run`, and `SDL_Quit` in the destructor.**
+`Win32Application` has no equivalent step. P6.5 adds `SDL_INIT_GAMEPAD`.
+
+**`FatalError` logs as well as showing `SDL_ShowSimpleMessageBox`.** A dialog needs a desktop, and
+this runs from a terminal often enough that the message has to survive without one.
+
+**The exit code is always 0 on a clean run.** `Win32Application` takes its code from `WM_QUIT`'s
+`wParam`; SDL has no such value.
+
+#### Left for the next tasks, marked in the code
+
+- **P6.3.** `ProcessEvent` has no imgui hook yet. `Win32Application` calls
+  `ImGuiX::Platform::WindowMessageProcessor` first, before anything else; there is no
+  `ImguiPlatform_Linux.h` to call into. A comment marks the spot.
+- **P6.5.** `ProcessEvent` has no `SDL_EVENT_GAMEPAD_*` cases. XInput polls, so the Win32 sibling
+  has nothing to copy, and `SDL_EVENT_GAMEPAD_ADDED` and `_REMOVED` have no polling equivalent.
+  A comment marks the spot.
+
+#### **Escalation: Phase 5 and Phase 6 disagree about `Platform::SetMainWindowHandle`**
+
+**This blocks P6.6 and it is a human decision.** `LinuxApplication::TryCreateMainWindow` stores
+the `SDL_Window*`, exactly as `Win32Application` stores the `HWND`. That is what the imgui and
+input backends need. But:
+
+- `EngineModule.cpp:135` does `m_renderWindow.SetNativeWindowHandle( Platform::GetMainWindowHandle() )`.
+- `RHI_Vulkan.cpp:2216` casts that value straight to a `VkSurfaceKHR`, which is P5.3's recorded
+  decision.
+- **An `SDL_Window*` is not a `VkSurfaceKHR`.**
+
+P5.3's answer was "the application creates the surface and hands it over", and **the application
+has no place to do it.** `EngineModule::InitializeModule` calls `RenderSystem::Initialize`, which
+creates the `VkInstance`, and then calls `SetNativeWindowHandle` three lines later. Nothing the
+application owns runs in between. Before that call there is no instance, so no surface can exist.
+
+**`Code/Engine/_Module/EngineModule.cpp` is not in [TouchedFiles.md](TouchedFiles.md)**, which is
+the escalation trigger. Three candidates, best first:
+
+1. **`RHI_Vulkan.cpp` creates the surface itself, through a Linux-only `Platform` function.**
+   `Platform::CreateVulkanSurface( instance, pNativeWindowHandle )` lives in `Platform_Linux.cpp`,
+   which may link SDL3 because `Esoterica.Base` already does. **No upstream file is edited**, and
+   `Base/Render` still includes no window system header, which is what P5.3 actually required.
+   It does revise P5.3's "the application owns it", so it is a decision, not a detail.
+2. **A two-line `#elif defined( __linux__ )` in `EngineModule.cpp:135`.** The right shape under
+   Conventions rule 2, but it puts SDL3 into `Esoterica.Engine.Runtime` and adds a file to the
+   registry that a full survey did not predict.
+3. **Store the surface in `Platform::SetMainWindowHandle`.** Does not work, for the ordering
+   reason above.
+
+**Answered the same day: candidate 1.** See the decision entry, "`RHI_Vulkan.cpp` creates the
+Vulkan surface, through `Platform_Linux.cpp`". P6.2 itself does not change: it stores the
+`SDL_Window*`, which is right for imgui and input either way. **P6.6 writes the surface function.**
+
+#### X11 and Wayland findings so far
+
+**The development session runs i3 on X11, and a tiling window manager makes two Phase 6
+acceptance criteria untestable here.** i3 tiled the window to 958x1042 and ignored both
+`SDL_SetWindowPosition` and `SDL_SetWindowSize`. That is correct behaviour, not a defect, and the
+code handles it: the tiling arrives as `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` and
+`ResizeMainWindow` gets the real size. **Criterion 7, DPI scaling, and the parts of criterion 4
+that need a client-driven resize need a floating window manager or a second session.** Wayland is
+not tested yet; P6.8 owns that.
+
+#### Known issue for P6.7, not introduced here
+
+**`External/` shared libraries are on a relative rpath, so a binary only resolves them from the
+repository root.** `ldd Build/Linux_Release/libEsoterica.Base.so` from any other directory reports
+`libSDL3.so.0`, `libdxcompiler.so` and `libGameNetworkingSockets.so` as not found. This predates
+Phase 6: `Toolchain.py:503` emits `-Wl,-rpath,<repo-relative directory>`. The Phase 6 deliverable
+is run from the repository root, so it works, but P6.7 should make that path absolute in one place
+rather than working around it.
+
+#### Verification
+
+- Files added: `Code/Base/Application/Platform/Application_Linux.h`,
+  `Code/Base/Application/Platform/Application_Linux.cpp`.
+- Files edited: `Code/Scripts/NinjaGen/LinuxSources.txt` (adds the new `.cpp`, and drops the stale
+  "still to come in Phase 1" note that listed it).
+- **Upstream files edited: none.**
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before. Both are Phase 7.
+  `libEsoterica.Base.so` builds and links in Debug and Release.
+- Run: a scratch subclass linked against `libEsoterica.Base.so`. `Initialize` saw 640x480 at
+  100,100 on the first run; the window opened; `ResizeMainWindow` got 958x1042 from i3;
+  `SDL_EVENT_WINDOW_CLOSE_REQUESTED` reached `OnUserExitRequest`; `Shutdown` ran and `Run`
+  returned 0. The layout file was written with the real geometry, and a second run read it back
+  and reported 958x1042 at 961,1. With `InitOptions::Borderless` set, the hit test returned
+  `RESIZE_TOPLEFT` at 4,4, `DRAGGABLE` inside the reported title bar, and `NORMAL` in the client
+  area, and input events reached `ProcessInputEvent`.
+- Acceptance criteria: P6.2 has none of its own. Phase 6 criterion 1 is not met, and cannot be
+  until P6.7. Criterion 10, the Windows build, is untouched: the two new files are guarded with
+  `#ifdef __linux__` and no `.vcxproj` lists them.
 
 ### 2026-08-29 - P6.1 SDL3, and open question 4 is answered
 
@@ -2472,6 +3278,54 @@ the reasoning, not just the outcome.
 **Alternatives rejected:** ...
 -->
 
+### 2026-08-30 - `RHI_Vulkan.cpp` creates the Vulkan surface, through `Platform_Linux.cpp`
+
+**Context:** P6.2 raised it. `Platform::SetMainWindowHandle` holds an `SDL_Window*`, because that
+is what the imgui and input backends need and what `Win32Application` stores. But
+`EngineModule.cpp:135` hands the same value to `RenderWindow::SetNativeWindowHandle`, and
+`RHI_Vulkan.cpp:2216` casts it to a `VkSurfaceKHR`, which is what P5.3 decided. The two do not
+agree.
+
+P5.3's answer was "the application creates the surface and hands it over", and **the application
+has no place to do it**. `EngineModule::InitializeModule` calls `RenderSystem::Initialize`, which
+creates the `VkInstance`, and calls `SetNativeWindowHandle` three lines later. Nothing the
+application owns runs in between, and before that call there is no instance for a surface to come
+from.
+
+**Decision:** the RHI creates the surface. `m_pNativeWindowHandle` stays an `SDL_Window*` on
+Linux, and `CreateSwapchain` calls a new Linux-only `Platform` function to turn it into a
+`VkSurfaceKHR`:
+
+```cpp
+// Platform_Linux.h, in namespace EE::Platform
+EE_BASE_API void* CreateVulkanSurface( void* pVulkanInstance, void* pNativeWindowHandle );
+EE_BASE_API void DestroyVulkanSurface( void* pVulkanInstance, void* pSurface );
+```
+
+`Platform_Linux.cpp` is the only file that includes both SDL3 and Vulkan. `RHI_Vulkan.cpp` calls
+through `void*` and never sees an SDL header.
+
+**Rationale:** it edits no upstream file, which is the prime directive. It also keeps what P5.3
+actually required, which was that **`Base/Render` depends on no window system library** - the
+dependency lands in `Base/Platform`, and `Esoterica.Base` already links SDL3, so no project gains
+a dependency it did not have. What it revises is only the second half of P5.3's sentence, "and the
+application owns it", which turned out not to be reachable.
+
+Surface ownership moves with it: `DestroySwapchain` still never destroys the surface, because
+`ResizeSwapchain` recreates around an unchanged handle, but the RHI now destroys it when the
+swapchain is destroyed for good rather than resized. **P6.6 owns writing this**, including where
+the destroy belongs, and P5.3's entry should be read together with this one.
+
+**Alternatives rejected:**
+
+- **A two-line `#elif defined( __linux__ )` in `EngineModule.cpp:135`.** The right shape under
+  Conventions rule 2, but `Code/Engine/_Module/EngineModule.cpp` is not in
+  [TouchedFiles.md](TouchedFiles.md), and it would put SDL3 into `Esoterica.Engine.Runtime`, which
+  has no other use for it.
+- **Storing the `VkSurfaceKHR` in `Platform::SetMainWindowHandle`.** Does not work: there is no
+  instance when the window is created, and the imgui and input backends need the `SDL_Window*`
+  from that same accessor.
+
 ### 2026-08-29 - Open question 7: the shader reads its own indirect arguments
 
 **Context:** Every engine render pass draws through `CmdExecuteIndirect`, and every engine command
@@ -3607,6 +4461,14 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `Engine::Shutdown` crashes when `Engine::Initialize` failed
+
+Found during the P6.7 bring-up, and true on both platforms by inspection. A failed `Initialize`
+leaves `RenderSystem` unconstructed, and `Shutdown` calls `RenderSystem::WaitAllQueuesIdle`
+anyway, which dereferences a null queue. It only shows on a failed start, so it hides the real
+error behind a segfault. `Engine::m_initializationStageReached` already records how far the start
+got, and `Shutdown` could tear down only what that stage covers.
 
 ### `RHI.h:1044` - `LoadAction` defaults to discarding every attachment
 

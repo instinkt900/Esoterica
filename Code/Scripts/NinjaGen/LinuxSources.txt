@@ -9,11 +9,6 @@
 #
 [Esoterica.Base]
 # Phase 1 - the platform layer. One _Linux sibling per excluded _Win32.cpp.
-# Phase 6 stubs, so that Base links now. They halt; Phase 6 replaces them with SDL3.
-Imgui/Platform/ImguiPlatform_Linux.cpp
-Input/InputDevices/Platform/InputDevice_KeyboardMouse_Linux.cpp
-Input/InputDevices/Platform/InputDevice_XBoxController_Linux.cpp
-#
 FileSystem/Platform/FileSystemPath_Linux.cpp
 FileSystem/Platform/FileSystem_Linux.cpp
 Logging/Platform/SystemLog_Linux.cpp
@@ -23,22 +18,19 @@ Render/RHI_Vulkan.cpp
 Threading/Platform/Threading_Linux.cpp
 Types/Platform/Types_Linux.cpp
 #
-# Still to come in Phase 1:
-#   Application/Platform/Application_Linux.cpp
-#
-# Phase 5 - the Vulkan backend, sibling to the excluded RHI_Direct3D12.cpp:
-#   Render/RHI_Vulkan.cpp
-#
-# Phase 6 - windowing and input, on SDL3:
-#   Imgui/Platform/ImguiX_Linux.cpp
+# Phase 6 - windowing and input, on SDL3.
+Application/Platform/Application_Linux.cpp
+Imgui/Platform/ImguiPlatform_Linux.cpp
+Imgui/Platform/ImguiX_Linux.cpp
+Input/InputDevices/Platform/InputDevice_KeyboardMouse_Linux.cpp
+Input/InputDevices/Platform/InputDevice_XBoxController_Linux.cpp
 
 [Esoterica.Engine.Tools]
 Core/SystemDialogs_Linux.cpp
 FileSystem/FileSystemWatcher_Linux.cpp
 
 [Esoterica.Applications.Engine]
-# Phase 6:
-#   Linux/EngineApplication_Linux.cpp
+Linux/EngineApplication_Linux.cpp
 
 [Esoterica.Applications.Editor]
 # Phase 7:
