@@ -35,6 +35,24 @@ namespace EE::Platform::Linux
 
     // Open a path in explorer
     EE_BASE_API void OpenInExplorer( char const* path );
+
+    // Vulkan surface
+    //-------------------------------------------------------------------------
+    // This is the one place in the engine that knows both SDL3 and Vulkan.
+    //
+    // Direct3D 12 hands DXGI an HWND. Vulkan needs a VkSurfaceKHR, and creating one needs a
+    // window system library. Base/Render must not depend on one, so RHI_Vulkan.cpp calls through
+    // here instead and never sees an SDL header. The handles cross as void*, so this header
+    // needs neither SDL nor Vulkan either.
+    //
+    // pNativeWindowHandle is the SDL_Window* that Platform::SetMainWindowHandle holds. See the
+    // 2026-08-30 decision in Docs/Linux/Progress.md.
+
+    // Returns a VkSurfaceKHR, or nullptr on failure. The caller owns it.
+    EE_BASE_API void* CreateVulkanSurface( void* pVulkanInstance, void* pNativeWindowHandle );
+
+    // Safe to call with a null surface.
+    EE_BASE_API void DestroyVulkanSurface( void* pVulkanInstance, void* pSurface );
 }
 
 //-------------------------------------------------------------------------

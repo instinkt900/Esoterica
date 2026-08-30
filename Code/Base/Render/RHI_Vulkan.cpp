@@ -7,6 +7,7 @@
 #include "Base/Types/HashMap.h"
 #include "Base/Render/HandleAllocator.h"
 #include "Base/Encoding/Embed.h"
+#include "Base/Platform/PlatformUtils_Linux.h"
 
 #include "EASTL/algorithm.h"
 
@@ -1617,6 +1618,18 @@ namespace EE::Render::RHI
     struct VulkanCommandPool final : CommandPool
     {
         VkCommandPool                                       m_commandPool = VK_NULL_HANDLE;
+
+        // **Destroying a VkCommandPool frees every buffer allocated from it**, and a later
+        // vkFreeCommandBuffers on the dead pool is a validation error. Direct3D 12 has no such
+        // rule: an allocator and a command list are independent objects that can go in any
+        // order, so upstream feels free to destroy them in any order, and one caller does.
+        // Window::DestroySwapchain (RenderWindow.cpp:53) destroys the pools first and the
+        // buffers immediately after. Found by running it during the P6.6 bring-up.
+        //
+        // So the pool knows its buffers, and clears their handles on the way out. The buffer
+        // objects still get destroyed by their own caller; they just no longer try to free a
+        // Vulkan handle that is already gone.
+        TInlineVector<VulkanCommandBuffer*, 8>              m_allocatedCommandBuffers;
     };
 
     struct VulkanQueryPool final : QueryPool
@@ -2066,16 +2079,23 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Swapchain and presentation
     //-------------------------------------------------------------------------
-    // **SwapchainParameters::m_pNativeWindowHandle is a VkSurfaceKHR on Linux, and the
-    // application owns it.** Direct3D 12 receives an HWND and asks DXGI for a swapchain. Vulkan
-    // needs a VkSurfaceKHR, and creating one needs a window system library. Base/Render depends
-    // on no such library and must not start to, so the application creates the surface from the
-    // instance and hands it over. SDL3's SDL_Vulkan_CreateSurface returns exactly this, which is
-    // the answer Phase 5 owes Phase 6. CreateContext enables the surface instance extensions so
-    // that call can succeed; DestroySwapchain never destroys the surface.
+    // **SwapchainParameters::m_pNativeWindowHandle is an SDL_Window* on Linux, and this file
+    // makes the VkSurfaceKHR from it.** Direct3D 12 receives an HWND and asks DXGI for a
+    // swapchain. Vulkan needs a VkSurfaceKHR, and creating one needs a window system library.
+    // Base/Render depends on no such library and must not start to, so the call goes through
+    // Platform::Linux::CreateVulkanSurface, which is the only place that knows both SDL3 and
+    // Vulkan. Nothing here includes an SDL header, and the handle crosses as a void*.
+    // CreateContext enables the surface instance extensions so that call can succeed.
     //
-    // **A null handle means headless**, which is the state of the whole of Phase 5: there is no
-    // window until Phase 6. The swapchain is then a ring of ordinary offscreen render targets
+    // **This revises the first half of P5.3's answer.** P5.3 said the application would create
+    // the surface and hand it over, and there turned out to be nowhere for it to do that:
+    // EngineModule::InitializeModule calls RenderSystem::Initialize, which creates the
+    // VkInstance, and then SetNativeWindowHandle three lines later, with nothing the application
+    // owns in between. Editing EngineModule.cpp would have meant an unregistered edit to an
+    // upstream file. See the 2026-08-30 decision in Docs/Linux/Progress.md.
+    //
+    // **A null handle means headless.** Nothing with no window has a surface, and the swapchain
+    // still works. The swapchain is then a ring of ordinary offscreen render targets
     // with no VkSwapchainKHR, AcquireNextImage cycles the index, and QueuePresent signals its
     // timeline value and presents nothing. That is the phase document's bring-up order - render
     // offscreen first, wire the real surface later - and it is what lets steps 6 and 7 of the
@@ -2093,8 +2113,9 @@ namespace EE::Render::RHI
     {
         VkDevice                                            m_device = VK_NULL_HANDLE;
 
-        // Borrowed, never destroyed. The application created it and Window::ResizeSwapchain
-        // hands the same one back after a DestroySwapchain.
+        // Created by CreateSwapchain from the window handle, and destroyed by DestroySwapchain.
+        // Window::ResizeSwapchain destroys and recreates around an unchanged window, so the
+        // surface is remade with it; SDL_Vulkan_CreateSurface is cheap.
         VkSurfaceKHR                                        m_surface = VK_NULL_HANDLE;
         VkSwapchainKHR                                      m_swapchain = VK_NULL_HANDLE;
 
@@ -2213,7 +2234,7 @@ namespace EE::Render::RHI
 
         pVulkanSwapchain->m_device = pVulkanContext->m_device;
         pVulkanSwapchain->m_pPresentQueue = static_cast<VulkanQueue*>( parameters.m_presentQueues[0] );
-        pVulkanSwapchain->m_surface = static_cast<VkSurfaceKHR>( parameters.m_pNativeWindowHandle );
+        pVulkanSwapchain->m_surface = static_cast<VkSurfaceKHR>( Platform::Linux::CreateVulkanSurface( pVulkanContext->m_instance, parameters.m_pNativeWindowHandle ) );
         pVulkanSwapchain->m_isHeadless = pVulkanSwapchain->m_surface == VK_NULL_HANDLE;
         pVulkanSwapchain->m_numImages = parameters.m_numImages;
 
@@ -2247,7 +2268,17 @@ namespace EE::Render::RHI
         DataFormat         renderTargetFormat = parameters.m_renderTargetFormat;
         VkSurfaceFormatKHR chosenSurfaceFormat = {};
 
-        for ( DataFormat const candidate : { parameters.m_renderTargetFormat, parameters.m_colorFormat } )
+        // **The BGRA spellings are candidates too, and on X11 they are the only ones.** The
+        // engine asks for RGBA8_sRGB then RGBA8_UNorm, which is what DXGI hands out; every
+        // surface measured on this machine - Intel UHD 620, NVIDIA MX250 and llvmpipe - offers
+        // only VK_FORMAT_B8G8R8A8_SRGB and VK_FORMAT_B8G8R8A8_UNORM. Without these two extra
+        // candidates the assert below fires on every Linux machine.
+        //
+        // The swap costs nothing and needs no shader change. A Vulkan format names its
+        // components in memory order, and a shader's red output always lands in the format's red
+        // component wherever that byte sits, so a BGRA swapchain displays exactly as an RGBA one
+        // does. The sRGB preference is preserved: the sRGB spelling of each pair comes first.
+        for ( DataFormat const candidate : { parameters.m_renderTargetFormat, parameters.m_colorFormat, DataFormat::BGRA8_sRGB, DataFormat::BGRA8_UNorm } )
         {
             VkFormat const candidateVulkanFormat = VulkanFormat( candidate );
 
@@ -2405,9 +2436,10 @@ namespace EE::Render::RHI
             vkDestroySwapchainKHR( pVulkanContext->m_device, pVulkanSwapchain->m_swapchain, nullptr );
         }
 
-        // **The surface is not destroyed here.** The application created it and hands the same
-        // one back to the next CreateSwapchain; Window::ResizeSwapchain destroys and recreates
-        // around an unchanged m_pNativeWindowHandle.
+        // The surface belongs to the swapchain, so it goes with it. It has to be destroyed
+        // after the VkSwapchainKHR that was created from it, not before.
+        Platform::Linux::DestroyVulkanSurface( pVulkanContext->m_instance, pVulkanSwapchain->m_surface );
+        pVulkanSwapchain->m_surface = VK_NULL_HANDLE;
 
         pVulkanContext->DestroyObject( eastl::move( pVulkanSwapchain ) );
         pSwapchain = nullptr;
@@ -2530,13 +2562,20 @@ namespace EE::Render::RHI
             VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
             VulkanCommandPool* pVulkanCommandPool = static_cast<VulkanCommandPool*>( pCommandPool );
 
-            // Destroying the pool frees every command buffer allocated from it, so a buffer
-            // that outlives its pool is already a use-after-free. The engine destroys buffers
-            // first; see RenderSystem::Shutdown.
             if ( pVulkanCommandPool->m_commandPool != VK_NULL_HANDLE )
             {
+                // Every buffer this pool allocated is freed with it, so mark them as already
+                // freed. DestroyCommandBuffer then skips its vkFreeCommandBuffers and never
+                // reads the pool it no longer owns. See the note on m_allocatedCommandBuffers.
+                for ( VulkanCommandBuffer* pAllocatedCommandBuffer : pVulkanCommandPool->m_allocatedCommandBuffers )
+                {
+                    pAllocatedCommandBuffer->m_commandBuffer = VK_NULL_HANDLE;
+                }
+
                 vkDestroyCommandPool( pVulkanContext->m_device, pVulkanCommandPool->m_commandPool, nullptr );
             }
+
+            pVulkanCommandPool->m_allocatedCommandBuffers.clear();
 
             pVulkanContext->DestroyObject( eastl::move( pVulkanCommandPool ) );
             pCommandPool = nullptr;
@@ -2568,6 +2607,8 @@ namespace EE::Render::RHI
 
         VkResult const result = vkAllocateCommandBuffers( pVulkanContext->m_device, &allocateInfo, &pVulkanCommandBuffer->m_commandBuffer );
         EE_ASSERT( result == VK_SUCCESS );
+
+        pVulkanCommandPool->m_allocatedCommandBuffers.emplace_back( pVulkanCommandBuffer );
 
         pVulkanCommandBuffer->m_device = pVulkanContext->m_device;
         pVulkanCommandBuffer->m_vkCmdPushDescriptorSet = pVulkanContext->m_vkCmdPushDescriptorSet;
@@ -2621,8 +2662,10 @@ namespace EE::Render::RHI
             VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
             VulkanCommandPool* pVulkanCommandPool = static_cast<VulkanCommandPool*>( pVulkanCommandBuffer->m_pCommandPool );
 
+            // Null when the pool was destroyed first, which frees its buffers for us.
             if ( pVulkanCommandBuffer->m_commandBuffer != VK_NULL_HANDLE )
             {
+                pVulkanCommandPool->m_allocatedCommandBuffers.erase_first_unsorted( pVulkanCommandBuffer );
                 vkFreeCommandBuffers( pVulkanContext->m_device, pVulkanCommandPool->m_commandPool, 1, &pVulkanCommandBuffer->m_commandBuffer );
             }
 
