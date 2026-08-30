@@ -10,14 +10,20 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 6 (started). P6.1 to P6.4 are done.** SDL3 `release-3.4.14` builds from source into
-`External/SDL3/`, `LinuxApplication` opens a window and runs an event loop, the imgui platform
-backend runs on SDL3 with **multi-viewport verified**, and keyboard and mouse input work with a
-**complete scancode table: 105 scancodes to 105 distinct `InputID`s, proved by running it**.
-**Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS packages
-none.** Nothing derives from `LinuxApplication` yet; that is P6.7. **P6.5, gamepads, is next**,
-and it is also what unblocks using `InputSystem` at all: `InputSystem::Initialize` still calls the
-halting controller stub.
+**Phase: 6 (started). P6.1 to P6.5 are done, and `Base` has no Phase 6 stubs left.** SDL3
+`release-3.4.14` builds from source into `External/SDL3/`, `LinuxApplication` opens a window and
+runs an event loop, the imgui platform backend runs on SDL3 with **multi-viewport verified**,
+and keyboard, mouse and gamepad all work, each proved by running it: a **complete scancode table,
+105 scancodes to 105 distinct `InputID`s**, and a full `InputSystem` pass driven by an SDL virtual
+gamepad. **Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS
+packages none.**
+
+**Nothing derives from `LinuxApplication` yet, and that is now the only thing in the way.**
+**P6.6, the swapchain surface, and P6.7, `EngineApplication_Linux`, are next**, and together they
+are what finally runs a Vulkan call on Linux.
+
+**`EE_UNIMPLEMENTED_FUNCTION` is gone from `Base` outside `RHI_Vulkan.cpp`.** The three there are
+Phase 5's; two more in `Triangle.h` and `Encoding.cpp` are upstream's own.
 
 **Two findings from P6.3 that later phases need.** First, the vendored `ImguiPlatform_Win32.cpp`
 is about three years behind the imgui core beside it: the core is `v1.92.9b-docking`, the backend
@@ -157,7 +163,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
 | 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.5 onwards not started. imgui multi-viewport is verified on X11 and will not work on Wayland. The `SetMainWindowHandle` question is answered; P6.6 writes it |
+| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.6 onwards not started. imgui multi-viewport is verified on X11 and will not work on Wayland. The `SetMainWindowHandle` question is answered; P6.6 writes it |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -174,8 +180,10 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 **`linux/p6.3-imgui-platform`**, stacked on it. The imgui platform backend on SDL3. PR #44 open,
 not merged.
 
-**`linux/p6.4-keyboard-mouse`**, stacked on that. The keyboard and mouse device on SDL3. PR open,
-not merged.
+**`linux/p6.4-keyboard-mouse`**, stacked on that. The keyboard and mouse device on SDL3. PR #45
+open, not merged.
+
+**`linux/p6.5-gamepad`**, stacked on that. The gamepad device on SDL3. PR open, not merged.
 
 The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
 ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
@@ -185,7 +193,7 @@ it.**
 more code:
 
 1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands. **Started: P6.1 to P6.4 are done, P6.5 is next.**
+   before it lands. **Started: P6.1 to P6.5 are done, P6.6 is next.**
 2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
    the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
    after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
@@ -237,6 +245,98 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-30 - P6.5 Gamepads. The last Phase 6 stub in `Base` is gone
+
+**`InputDevice_XBoxController_Linux.cpp` is a real device, on SDL3's gamepad API.** It replaces
+the Phase 1 stub, and with it **`Base` has no `EE_UNIMPLEMENTED_FUNCTION` left outside
+`RHI_Vulkan.cpp`.** The three that remain there are Phase 5's, and two more are upstream's own in
+`Triangle.h` and `Encoding.cpp`.
+
+**`InputSystem::Initialize()` works now.** It constructs two `XBoxControllerInputDevice`s and
+calls `Initialize` on each, and that used to halt, which meant nothing could touch `InputSystem`
+at all. P6.4 had to drive its device directly for that reason. That obstacle is gone.
+
+**The name stays `InputDevice_XBoxController_Linux.cpp`**, per Conventions rule 3 and the phase
+document, even though SDL3 handles any gamepad.
+
+#### Three things that differ from XInput, all of them real
+
+1. **The vertical axes are negated.** SDL follows the joystick convention, where pushing the
+   stick down gives a positive Y. XInput's `sThumbLY` is positive upwards, and the engine is
+   written against XInput. **Without the negation every controller would be inverted on Linux
+   only**, which is the sort of defect that survives a long time because it looks like a user
+   setting. Proved in both directions, on both sticks.
+2. **Triggers use a different raw range.** XInput reports a byte, 0 to 255; SDL reports 0 to
+   `SDL_JOYSTICK_AXIS_MAX`. Both normalize to 0..1, so only the divisor changes and
+   `GetDefaultTriggerThreshold` keeps XInput's 30/255. All three dead zone values are unchanged
+   from the Win32 device.
+3. **Face buttons are named by position, not by letter.** `SDL_GAMEPAD_BUTTON_SOUTH` is the
+   XInput A button, and "south" is exactly what `Controller_FaceButtonDown` means, so the mapping
+   is more direct than XInput's.
+
+#### Where the `SDL_Gamepad*` lives, and why it is not a member
+
+**In a file-static array, indexed by hardware controller index.** `XBoxControllerInputDevice` has
+no member to hold one and `InputDevice_XBoxController.h` is an upstream file, so adding one would
+be an unregistered edit to a shared header - an escalation trigger. XInput needs no such storage:
+it polls a slot number and the OS owns the connection.
+
+The array holds four entries; `InputSystem` creates `s_maxControllers`, which is 2. An index
+outside the array is treated as permanently disconnected rather than as an error.
+
+**Hot plug is handled by re-reading the slot every frame.** `SDL_GetGamepads` returns a list, and
+a device unplugged earlier in that list shifts the rest down, so the joystick ID at a slot is not
+stable and cannot be cached. When it changes, the old handle is closed and the new one opened.
+
+#### The gamepad subsystem initializes itself
+
+`SDL_InitSubSystem( SDL_INIT_GAMEPAD )` is called from `XBoxControllerInputDevice::Initialize`
+rather than from `LinuxApplication::Run`, so anything holding an `InputSystem` gets working
+gamepads without knowing about SDL. SDL reference counts subsystems, so both devices doing it is
+correct. **This replaces P6.2's note that P6.5 would add `SDL_INIT_GAMEPAD` to `Run`**; that
+comment is updated in place.
+
+**There are no `SDL_EVENT_GAMEPAD_*` cases in `LinuxApplication::ProcessEvent` either.** The
+device polls, the way the XInput sibling does, and `SDL_UpdateGamepads` picks up plug and unplug
+on its own. P6.3's placeholder comment is updated to say so.
+
+#### Verification
+
+- Files replaced: `Code/Base/Input/InputDevices/Platform/InputDevice_XBoxController_Linux.cpp`,
+  which was a Phase 1 stub.
+- Files edited: `Code/Base/Application/Platform/Application_Linux.cpp` (two stale comments),
+  `Code/Scripts/NinjaGen/LinuxSources.txt` (the file moves out of the stub group, and
+  `Application_Linux.cpp` moves to the Phase 6 group where it belongs).
+- **Upstream files edited: none.**
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before.
+- **Run, end to end through `InputSystem`, with a scratch harness (not committed). All checks
+  pass.** No gamepad is plugged into this machine, so the harness attaches an
+  **SDL virtual joystick** (`SDL_AttachVirtualJoystick`) and drives it with
+  `SDL_SetJoystickVirtualButton` and `SDL_SetJoystickVirtualAxis`. What it covers:
+  - `InputSystem::Initialize` returns true and reports one connected controller.
+  - All 14 buttons, one at a time, each checked to raise its own `InputID` **and nothing else**.
+  - Stick Y inverted correctly in both directions, on both sticks: SDL -32768 becomes engine
+    +1.000, SDL +32767 becomes engine -1.000.
+  - Stick X passes through unchanged, and the two sticks are independent.
+  - Triggers press and release independently.
+  - Dead zones read 0.2395, 0.2652 and 0.1176, which are XInput's 7849, 8689 and 30 normalized.
+  - Unplugging the virtual pad disconnects the device and drops the controller count to zero.
+- **A note for anyone writing a similar harness.** SDL generates the mapping `lefttrigger:a4`
+  for a virtual pad, which maps the full joystick range onto the trigger's 0..32767. A released
+  trigger is therefore joystick axis **-32768**, not 0; setting 0 reads back as a half-pulled
+  trigger. That cost a failing check before it was understood, and it is the harness rather than
+  the device.
+- Acceptance criteria: criterion 3 is met at the device level for keyboard, mouse and gamepad.
+  "Works for camera control" still needs a running engine, which is P6.7 and P6.8. Criterion 10
+  is untouched.
+
+#### Not done, and not needed
+
+Rumble, LEDs, gyro, touchpads and battery. The engine's `ControllerDevice` has no concept of any
+of them, and XInput's device exposes none either. SDL3 offers them all; adding them would be a
+feature this port does not owe.
 
 ### 2026-08-30 - P6.4 Keyboard and mouse. The mapping table is complete and proved complete
 

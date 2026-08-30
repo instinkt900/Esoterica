@@ -283,8 +283,9 @@ namespace EE
             case SDL_EVENT_MOUSE_BUTTON_UP:
             case SDL_EVENT_MOUSE_WHEEL:
             {
-                // P6.5 adds the SDL_EVENT_GAMEPAD_* cases here. XInput polls, so the Win32
-                // sibling has no equivalent to copy.
+                // There are deliberately no SDL_EVENT_GAMEPAD_* cases.
+                // XBoxControllerInputDevice polls, the way the XInput sibling does, and
+                // SDL_UpdateGamepads picks up hot plug and unplug on its own.
                 if ( WasInitialized() )
                 {
                     ProcessInputEvent( event );
@@ -469,7 +470,9 @@ namespace EE
         //-------------------------------------------------------------------------
 
         // Win32Application has no equivalent step: the Win32 window API needs no initialization.
-        // Video only. P6.5 adds SDL_INIT_GAMEPAD.
+        // Video only. The gamepad subsystem is not initialized here: XBoxControllerInputDevice
+        // calls SDL_InitSubSystem itself, so anything holding an InputSystem gets working
+        // gamepads without the application having to know about SDL.
         if ( !SDL_Init( SDL_INIT_VIDEO ) )
         {
             return FatalError( String( "SDL failed to initialize: " ) + SDL_GetError() );
