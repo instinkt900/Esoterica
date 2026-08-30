@@ -1,6 +1,10 @@
 #ifdef __linux__
 #include "PlatformUtils_Linux.h"
 #include "Base/FileSystem/FileSystemPath.h"
+#include "Base/Logging/Log.h"
+#include <vulkan/vulkan.h>
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
@@ -184,6 +188,43 @@ namespace EE::Platform::Linux
             execvp( "xdg-open", arguments );
             _exit( 127 );
         }
+    }
+
+    // Vulkan surface
+    //-------------------------------------------------------------------------
+
+    void* CreateVulkanSurface( void* pVulkanInstance, void* pNativeWindowHandle )
+    {
+        EE_ASSERT( pVulkanInstance != nullptr );
+
+        // Headless. Phase 5 built the swapchain to run with no surface at all, and that path is
+        // still how anything without a window renders.
+        if ( pNativeWindowHandle == nullptr )
+        {
+            return nullptr;
+        }
+
+        // SDL loaded the Vulkan library when the window was created with SDL_WINDOW_VULKAN, so
+        // there is no SDL_Vulkan_LoadLibrary call here.
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        if ( !SDL_Vulkan_CreateSurface( reinterpret_cast<SDL_Window*>( pNativeWindowHandle ), reinterpret_cast<VkInstance>( pVulkanInstance ), nullptr, &surface ) )
+        {
+            EE_LOG_ERROR( LogCategory::Render, "Platform", "SDL_Vulkan_CreateSurface failed: %s", SDL_GetError() );
+            return nullptr;
+        }
+
+        return surface;
+    }
+
+    void DestroyVulkanSurface( void* pVulkanInstance, void* pSurface )
+    {
+        if ( pSurface == nullptr )
+        {
+            return;
+        }
+
+        EE_ASSERT( pVulkanInstance != nullptr );
+        SDL_Vulkan_DestroySurface( reinterpret_cast<VkInstance>( pVulkanInstance ), reinterpret_cast<VkSurfaceKHR>( pSurface ), nullptr );
     }
 }
 #endif

@@ -18,9 +18,17 @@ and keyboard, mouse and gamepad all work, each proved by running it: a **complet
 gamepad. **Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS
 packages none.**
 
-**Nothing derives from `LinuxApplication` yet, and that is now the only thing in the way.**
-**P6.6, the swapchain surface, and P6.7, `EngineApplication_Linux`, are next**, and together they
-are what finally runs a Vulkan call on Linux.
+**P6.6 is done, and Esoterica has rendered on Linux.** A window, a `VkSurfaceKHR` made from the
+`SDL_Window*`, a swapchain, and twelve frames cleared and presented with **no Vulkan validation
+errors**. Every Phase 5 RHI call in that path had never executed before.
+
+**One line is escalated and blocks it from working as committed: `RHI::MaxPendingFrames` has to
+be 3 on Linux.** The Intel UHD 620 and llvmpipe both report a `minImageCount` of 3, and `RHI.h`
+is not in [TouchedFiles.md](TouchedFiles.md). The exact three-line edit, which leaves Windows bit
+for bit unchanged, is in the P6.6 entry. It was verified locally and reverted.
+
+**P6.7, `EngineApplication_Linux`, is next**, and it is the last thing between here and a
+running engine.
 
 **`EE_UNIMPLEMENTED_FUNCTION` is gone from `Base` outside `RHI_Vulkan.cpp`.** The three there are
 Phase 5's; two more in `Triangle.h` and `Encoding.cpp` are upstream's own.
@@ -163,7 +171,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
 | 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.6 onwards not started. imgui multi-viewport is verified on X11 and will not work on Wayland. The `SetMainWindowHandle` question is answered; P6.6 writes it |
+| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.7 onwards not started. **The port renders on Linux**, blocked only on the escalated `MaxPendingFrames` line. imgui multi-viewport is verified on X11 and will not work on Wayland |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -183,7 +191,11 @@ not merged.
 **`linux/p6.4-keyboard-mouse`**, stacked on that. The keyboard and mouse device on SDL3. PR #45
 open, not merged.
 
-**`linux/p6.5-gamepad`**, stacked on that. The gamepad device on SDL3. PR open, not merged.
+**`linux/p6.5-gamepad`**, stacked on that. The gamepad device on SDL3. PR #46 open, not merged.
+
+**`linux/p6.6-swapchain-surface`**, stacked on that. The Vulkan surface, plus two defects found
+by running it. PR open, not merged, and **it needs the escalated `MaxPendingFrames` decision
+before the swapchain works**.
 
 The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
 ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
@@ -193,7 +205,8 @@ it.**
 more code:
 
 1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands. **Started: P6.1 to P6.5 are done, P6.6 is next.**
+   before it lands. **Started: P6.1 to P6.6 are done, P6.7 is next. Criteria 5 to 7 of Phase 5
+   are now checkable, and the first frame has run.**
 2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
    the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
    after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
@@ -245,6 +258,131 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-30 - P6.6 The Vulkan surface. **Esoterica renders on Linux**, and one line is escalated
+
+**The port drew its first frame.** A window opens, `RHI::CreateContext` picks a device, a
+`VkSurfaceKHR` is made from the `SDL_Window*`, a swapchain is created, and twelve frames are
+cleared and presented to the screen with **no Vulkan validation errors**. The swapchain recreates
+on resize and tears down clean. Every Phase 5 RHI call in that path had never executed before
+today.
+
+**It needs one change to an upstream file that is not on the registry, and that is escalated
+below rather than made.** Everything else in this entry is done and committed.
+
+#### Bring-up order, and what each step found
+
+Phase 5 wrote all of this against the compiler. Running it turned up three real defects and one
+measured limit. In the order they appeared:
+
+1. **`RHI::CreateContext` worked first time.** It skipped the NVIDIA MX250 for a missing
+   `VK_EXT_mutable_descriptor_type`, chose the Intel UHD 620, warned about the absent
+   `VK_EXT_mesh_shader` exactly as P5.14 said it would, and built both descriptor pools. Nothing
+   needed fixing.
+
+2. **Defect: the surface offers no RGBA format.** `CreateSwapchain` asked for `RGBA8_sRGB` then
+   `RGBA8_UNorm`, which is what DXGI hands out, and asserted. **Every surface on this machine
+   offers only `VK_FORMAT_B8G8R8A8_SRGB` and `VK_FORMAT_B8G8R8A8_UNORM`** - measured on the Intel
+   UHD 620, the NVIDIA MX250 and llvmpipe alike. So `BGRA8_sRGB` and `BGRA8_UNorm` are now
+   candidates after the two the caller asked for. **The swap costs nothing and needs no shader
+   change**: a Vulkan format names its components in memory order, and a shader's red output
+   lands in the format's red component wherever that byte sits. The sRGB preference is kept, and
+   `DataFormat` already had both spellings.
+
+3. **Measured limit: `minImageCount` is 3, and `MaxPendingFrames` is 2.** See the escalation.
+
+4. **Defect: `Window::DestroySwapchain` destroys command pools before command buffers.** That is
+   fine on Direct3D 12, where an allocator and a command list are independent objects, and it is
+   a validation error on Vulkan, where destroying a `VkCommandPool` frees its buffers and a later
+   `vkFreeCommandBuffers` on the dead pool is invalid. `RenderWindow.cpp:53` does exactly this.
+   **P5.4 assumed the other order** - its comment said "the engine destroys buffers first; see
+   `RenderSystem::Shutdown`" - and that is true of `RenderSystem` and false of `Window`.
+
+   Fixed in `RHI_Vulkan.cpp`, not upstream: `VulkanCommandPool` now knows the buffers it
+   allocated and nulls their handles as it is destroyed, so `DestroyCommandBuffer` skips a free
+   that already happened and never reads a pool it no longer owns. Either order now works.
+
+#### **Escalation: `RHI::MaxPendingFrames` has to be 3 on Linux**
+
+**This is the one thing Phase 6 predicted by name, and it is real.** `RHI.h:31` sets
+`MaxPendingFrames = 2`. Measured on this machine:
+
+| Surface | `minImageCount` | `maxImageCount` |
+|---|---|---|
+| Intel UHD Graphics 620 | **3** | unlimited |
+| NVIDIA GeForce MX250 | 2 | 8 |
+| llvmpipe | **3** | unlimited |
+
+`minImageCount` is a hard minimum, so `CreateSwapchain` gets three images back and halts on its
+own check, with the message P5.3 wrote for this exact case:
+
+```
+[Error][Rendering][RHI/CreateSwapchain] The surface needs 3 swapchain images and RHI::MaxPendingFrames is 2.
+```
+
+`Swapchain::m_renderTargets` is a `TArray<Texture*, MaxPendingFrames>`, and `AcquireNextImage`
+returns an index into it, so there is no way to absorb this in the backend.
+
+**The edit, exactly, at `RHI.h:31`. Three lines added, zero modified:**
+
+```cpp
+#if defined( __linux__ )
+        MaxPendingFrames = 3, // Several Linux drivers report a minImageCount of 3
+#else
+        MaxPendingFrames = 2, // Set this value to 2 for double buffering, or 3 for triple buffering.
+#endif
+```
+
+The existing line survives verbatim inside the `#else`, so **the Windows build is bit for bit
+unchanged** and stays double buffered. That is the shape Conventions rule 2 asks for. What makes
+it an escalation is only that `Code/Base/Render/RHI.h` is not in
+[TouchedFiles.md](TouchedFiles.md).
+
+**Verified by making the change locally and running it: with it, everything above passes.**
+Without it, nothing after `CreateContext` runs at all. The change is reverted and not committed.
+
+The one alternative that touches no upstream file is to give the backend three real swapchain
+images, render into two of its own, and blit into the acquired image at present time. That is a
+full screen copy every frame to avoid three lines, and it is not recommended.
+
+#### What actually ran
+
+Recorded here because Phase 5 could never state it. `CmdBarrier` on a swapchain image in both
+directions, `CmdSetRenderTargets` opening and closing a dynamic render pass with a clear load
+action, `CmdSetViewport`, `EndCommandBuffer`, `QueueSubmit`, `AcquireNextImage`, `QueuePresent`,
+`WaitQueueIdle`, and the whole create and destroy path for the context, queues, command pools,
+command buffers, swapchain and its render targets. **The Vulkan validation layers were on
+throughout and said nothing.**
+
+Also confirmed incidentally: Phase 1's crash handler works. A null dereference during bring-up
+printed a symbolised backtrace and re-raised, which is what it was written to do.
+
+#### Verification
+
+- Files edited: `Code/Base/Platform/PlatformUtils_Linux.{h,cpp}` (the two surface functions),
+  `Code/Base/Render/RHI_Vulkan.cpp` (the surface call, the BGRA candidates, the command pool
+  teardown fix).
+- **Upstream files edited: none.** The one that is needed is escalated above.
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before.
+- Run: with the `MaxPendingFrames` change applied locally, a scratch application deriving from
+  `LinuxApplication` (not committed) reported every check passing, including that all three
+  swapchain images were acquired across twelve frames and that the swapchain survived a resize.
+  Without the change it halts in `CreateSwapchain`.
+- Acceptance criteria: **criterion 4 is met** - resize recreates the swapchain with no validation
+  errors. **Criterion 8 is met for this path** - shutdown is clean with validation on. Criterion 1
+  is not: there is still no `EsotericaEngine` binary, which is P6.7. Criterion 10 is untouched.
+
+#### For P6.7
+
+- `EngineApplication_Linux::ProcessInputEvent` is one line; see the P6.4 entry for the exact
+  `GenericMessage`.
+- The `Esoterica.Applications.Engine` project needs the SDL3 sheet in `LINUX_ONLY_SHEETS` as soon
+  as its `.cpp` reads an SDL event field.
+- The engine paces frames on `RenderSystem`'s frame semaphores. A harness without them reuses the
+  swapchain's acquire semaphores while they are still pending, and validation says so. That is
+  not a defect; it is a reminder that `AcquireNextImage` is only sound inside the engine's own
+  frame pacing.
 
 ### 2026-08-30 - P6.5 Gamepads. The last Phase 6 stub in `Base` is gone
 
