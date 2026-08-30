@@ -10,11 +10,21 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 6 (started). P6.1 and P6.2 are done.** SDL3 `release-3.4.14` builds from source into
-`External/SDL3/`, `Esoterica.Base` links `-lSDL3`, and `LinuxApplication` opens a window, takes
-resizes, persists its layout and shuts down cleanly. **Open question 4 is answered: the port
-always builds SDL3, because Ubuntu 24.04 LTS packages none.** Nothing derives from
-`LinuxApplication` yet; that is P6.7. **P6.3, the imgui platform backend, is next.**
+**Phase: 6 (started). P6.1, P6.2 and P6.3 are done.** SDL3 `release-3.4.14` builds from source
+into `External/SDL3/`, `LinuxApplication` opens a window and runs an event loop, and the imgui
+platform backend runs on SDL3 with **multi-viewport verified**: three imgui windows became three
+live SDL windows. **Open question 4 is answered: the port always builds SDL3, because Ubuntu
+24.04 LTS packages none.** Nothing derives from `LinuxApplication` yet; that is P6.7.
+**P6.4, keyboard and mouse input, is next.**
+
+**Two findings from P6.3 that later phases need.** First, the vendored `ImguiPlatform_Win32.cpp`
+is about three years behind the imgui core beside it: the core is `v1.92.9b-docking`, the backend
+is roughly 1.89.1. The Linux backend is therefore built from `v1.92.9b-docking`'s
+`imgui_impl_sdl3.cpp`, and its vendored region keeps upstream's formatting so it can be
+re-synced. Second, **imgui will not enable viewports on Wayland**: `ImGui_ImplSDL3_Init` sets
+`ImGuiBackendFlags_PlatformHasViewports` only for video drivers on its global-mouse white list,
+and `wayland` is not on it. The editor's docking UI depends on viewports, so Phase 7 needs to
+know.
 
 **The Phase 5 / Phase 6 surface question is answered, and P6.6 implements it.**
 `Platform::SetMainWindowHandle` holds the `SDL_Window*`, and **`RHI_Vulkan.cpp` creates the
@@ -145,7 +155,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
 | 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.3 onwards not started. The `SetMainWindowHandle` question is answered; P6.6 writes it |
+| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.4 onwards not started. imgui multi-viewport is verified on X11 and will not work on Wayland. The `SetMainWindowHandle` question is answered; P6.6 writes it |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -157,7 +167,10 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**`linux/p6.2-linuxapplication`.** `Application_Linux.{h,cpp}` on SDL3. PR open, not merged.
+**`linux/p6.2-linuxapplication`.** `Application_Linux.{h,cpp}` on SDL3. PR #43 open, not merged.
+
+**`linux/p6.3-imgui-platform`**, stacked on it. The imgui platform backend on SDL3. PR open, not
+merged.
 
 The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
 ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
@@ -167,7 +180,7 @@ it.**
 more code:
 
 1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands. **Started: P6.1 and P6.2 are done, P6.3 is next.**
+   before it lands. **Started: P6.1 to P6.3 are done, P6.4 is next.**
 2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
    the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
    after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
@@ -219,6 +232,148 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-30 - P6.3 imgui platform backend. Multi-viewport works, and the Win32 copy is stale
+
+**The imgui platform backend runs on SDL3, and multi-viewport is verified rather than assumed.**
+`ImguiPlatform_Linux.{h,cpp}` replace the Phase 1 stub, `ImguiX_Linux.cpp` is the sibling of
+`ImguiX_Win32.cpp`, and `LinuxApplication::ProcessEvent` now calls imgui first.
+
+**Proved by running it.** Three imgui windows became three real SDL windows, each with a live
+`SDL_Window*` found from its viewport, one of them at 1100,200 which is outside the main window.
+Shutdown destroyed all three. Under i3 on X11.
+
+#### The vendored Win32 backend is three years behind the imgui core it sits next to
+
+**This changes the plan for this task.** [Phase6-WindowingInput.md](Phases/Phase6-WindowingInput.md)
+says to diff `ImguiPlatform_Win32.cpp` against "the matching upstream release" of
+`imgui_impl_win32.cpp` and treat that as the worklist. There is no matching release:
+
+- `Code/Base/ThirdParty/imgui/imgui.cpp` is **byte-identical to `v1.92.9b-docking`**, bumped
+  upstream on 2026-08-06.
+- `ImguiPlatform_Win32.cpp` was last touched on 2026-07-19 and last named a version in
+  "Upgrade to DearImgui 1.89.1", 2022-11-29. Its functions still match roughly 1.89: it has
+  `ImGui_ImplWin32_VirtualKeyToImGuiKey`, which upstream renamed to `KeyEventToImGuiKey`, and
+  lacks `WndProcHandlerEx` and `AdjustWindowRect`.
+
+So this task starts from **`v1.92.9b-docking`'s `imgui_impl_sdl3.cpp`**, which matches the
+vendored core, and ports Esoterica's *adaptations* rather than mirroring a stale file. A
+1.89-era backend against a 1.92 core would be wrong: 1.92 changed the font and texture contract
+(`ImGuiBackendFlags_RendererHasTextures`).
+
+#### Esoterica's adaptations, and what each became on SDL3
+
+| Win32 adaptation | Linux |
+|---|---|
+| Wrapped in `EE::ImGuiX::Platform`, guarded, reformatted into house style | Same wrapper and guards. **Not reformatted**; see below |
+| `Init`/`Shutdown`/`NewFrame` folded into `ImguiSystem::InitializePlatform`/`ShutdownPlatform`/`PlatformNewFrame` | Same, but as thin calls into the vendored functions rather than an inlined copy |
+| Window read from `Platform::GetMainWindowHandle()`, not passed to `Init` | Same |
+| Gamepad and XInput removed; the engine owns gamepads | Same. `ImGui_ImplSDL3_UpdateGamepads` and friends are gone |
+| DPI awareness left to `Win32Application` | Left to `LinuxApplication`, which sets `SDL_WINDOW_HIGH_PIXEL_DENSITY` |
+| Backend data through `EE::New` / `EE::Delete` | Same |
+| A child wnd proc forwards input to `InputSystem`, so viewport windows keep feeding the engine | **Not needed.** SDL has one event queue, and `LinuxApplication::ProcessEvent` already forwards every input event whatever window it came from |
+| A window class registered for viewport windows, with the app icon | Not needed. SDL has no window classes |
+| `EE_BASE_API intptr_t WindowMessageProcessor(...)` | `EE_BASE_API bool ProcessEvent( SDL_Event const& )` |
+
+**Two adaptations are new, and neither has a Win32 counterpart:**
+
+1. **The `NewFrame` time step is removed.** Upstream's `ImGui_ImplSDL3_NewFrame` sets
+   `io.DeltaTime` from `SDL_GetPerformanceCounter`. `ImguiSystem::StartFrame` sets it from the
+   engine clock and then calls `PlatformNewFrame`, so upstream's version would overwrite it every
+   frame. Verified: the engine's 0.01667 survives.
+2. **`ProcessEvent`'s return value is ignored by the caller**, and it guards against a null
+   context. Both matter, and the second is written up under P6.2's file below.
+
+#### **The return value of the two backends does not mean the same thing**
+
+`Win32Application::WindowMessageProcessor` returns early when
+`ImGuiX::Platform::WindowMessageProcessor` returns non-zero. **Copying that would break the
+application.** A wnd proc returns non-zero only for a message it truly consumed, and
+`imgui_impl_win32.cpp` returns 0 for nearly everything. `imgui_impl_sdl3.cpp` returns `true` for
+every event it recognises, including `SDL_EVENT_WINDOW_CLOSE_REQUESTED` and both focus events. An
+early return there swallows the application's own close and stops input reaching the engine.
+`LinuxApplication::ProcessEvent` therefore calls imgui and ignores the answer, which is what
+upstream's own SDL3 examples do.
+
+`ProcessEvent` also returns false when there is no imgui context or backend.
+`ImGui_ImplSDL3_ProcessEvent` asserts in that case, and `LinuxApplication` pumps events for any
+subclass, including one that never starts imgui.
+
+#### The vendored region keeps upstream's formatting, and that is deliberate
+
+**This breaks Conventions rule 8, knowingly.** The vendored region of `ImguiPlatform_Linux.cpp`
+is left at upstream's indentation, at column zero rather than indented into the namespace, so
+that
+
+```
+diff <upstream imgui_impl_sdl3.cpp> <the vendored region>
+```
+
+still works. Every deliberate change carries an `EE:` comment for exactly that reason. The
+argument is the finding above: `ImguiPlatform_Win32.cpp` was reformatted into house style and is
+now three years behind the core it sits beside. Rule 8's own rationale is consistency with the
+neighbour; here the neighbour's approach is what produced the drift. A banner at the top of the
+file says all of this, so nobody has to rediscover it.
+
+Everything Esoterica wrote in that file, and all of `ImguiPlatform_Linux.h` and
+`ImguiX_Linux.cpp`, is in house style.
+
+#### `PlatformHandleRaw` is null on Linux
+
+`ImGui_ImplSDL3_SetupPlatformHandles` fills `PlatformHandleRaw` only on Windows and macOS, and
+puts the `SDL_WindowID` in `PlatformHandle`. So `ImguiX_Linux.cpp`'s window controls look the
+window up with `SDL_GetWindowFromID` where the Win32 sibling casts `PlatformHandleRaw` to an
+`HWND`. Minimize, maximize, restore and close map to `SDL_MinimizeWindow`, `SDL_MaximizeWindow`,
+`SDL_RestoreWindow` and a pushed `SDL_EVENT_WINDOW_CLOSE_REQUESTED`; there is no SDL equivalent
+of `SendMessage( hwnd, WM_CLOSE )`.
+
+#### The renderer half is confirmed separate, and it gates viewports
+
+The phase document asked for this to be confirmed rather than assumed. It is separate:
+`ImguiRenderer` goes through the RHI, and nothing in `ImguiPlatform_Linux.cpp` touches it.
+
+**But imgui gates `ImGuiConfigFlags_ViewportsEnable` on both halves** (`imgui.cpp:11791`): the
+platform backend must set `ImGuiBackendFlags_PlatformHasViewports` *and* the renderer must set
+`ImGuiBackendFlags_RendererHasViewports`. With only the platform half, imgui silently disables
+viewports for the frame and every window merges into the main one. That cost an hour here, and
+it is the first thing to check if the editor's windows will not detach in Phase 7.
+
+#### Verification
+
+- Files added: `Code/Base/Imgui/Platform/ImguiPlatform_Linux.h`,
+  `Code/Base/Imgui/Platform/ImguiX_Linux.cpp`.
+- Files replaced: `Code/Base/Imgui/Platform/ImguiPlatform_Linux.cpp`, which was a Phase 1 stub of
+  three halting functions.
+- Files edited: `Code/Base/Application/Platform/Application_Linux.cpp` (the imgui hook),
+  `Code/Scripts/NinjaGen/LinuxSources.txt`.
+- **Upstream files edited: one.** `Code/Base/Imgui/ImguiSystem.cpp:12`, `#if _WIN32` to
+  `#if _WIN32 || defined( __linux__ )`. `git diff --stat upstream/main` shows **1 line changed**,
+  which is Phase 6 acceptance criterion 12. Registered in [TouchedFiles.md](TouchedFiles.md).
+  **It turns out to be cosmetic**: `imconfig.h` defines `IMGUI_ENABLE_FREETYPE` unconditionally,
+  so `imgui_freetype.cpp` was already compiled into `libEsoterica.Base.so` before this change.
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before. Both are Phase 7.
+- Run, with a scratch subclass (not committed): the backend reports itself as
+  `imgui_impl_sdl3 (3.4.14; 3.4.14) (x11)`; `ImGuiBackendFlags_PlatformHasViewports` and
+  `HasMouseCursors` are set and `HasGamepad` is not, which is the intended removal; one monitor is
+  enumerated at 1920x1080, DPI scale 1.0; `io.DisplaySize` is 958x1042 with framebuffer scale
+  1.0; `io.DeltaTime` keeps the engine's value; draw data is produced; and three imgui windows
+  became three live SDL windows at the positions imgui asked for, destroyed cleanly on shutdown.
+  The harness fakes the two renderer flags, because it has no renderer.
+- Acceptance criteria: **criterion 12 is met.** Criterion 5 needs the renderer and a running
+  engine, so it is P6.7 and P6.8. Criterion 10, the Windows build, is untouched: the one upstream
+  edit adds a Linux branch to an existing `#if` and changes nothing Windows compiles.
+
+#### Still open
+
+- **Wayland is untested.** This machine runs i3 on X11 and has no Wayland compositor, so nothing
+  here says how viewports behave under one. P6.8 owns it. Note that
+  `ImGui_ImplSDL3_Init` sets `bd->IsWayland` and the mouse capture and global state white list
+  excludes wayland, so `ImGuiBackendFlags_PlatformHasViewports` **will not be set on Wayland at
+  all**. Read `ImGui_ImplSDL3_Init` before assuming the editor's docking UI works there.
+- **i3 honoured the viewport positions**, which was the worry Phase 6 recorded about tiling and
+  Wayland window placement. It ignores `SDL_SetWindowPosition` on the main window and honours it
+  on the viewport windows, which are borderless utility windows.
 
 ### 2026-08-30 - P6.2 `LinuxApplication`, and a Phase 5 / Phase 6 conflict to settle
 

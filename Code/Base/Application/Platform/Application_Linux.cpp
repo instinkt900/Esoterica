@@ -1,6 +1,7 @@
 #ifdef __linux__
 #include "Application_Linux.h"
 #include "Base/Settings/IniFile.h"
+#include "Base/Imgui/Platform/ImguiPlatform_Linux.h"
 #include "Base/FileSystem/FileSystemPath.h"
 #include "Base/FileSystem/FileSystemUtils.h"
 #include "Base/Logging/SystemLog.h"
@@ -225,9 +226,22 @@ namespace EE
 
     bool LinuxApplication::ProcessEvent( SDL_Event const& event )
     {
-        // P6.3 adds the imgui hook here, ahead of everything else, which is where
-        // Win32Application calls ImGuiX::Platform::WindowMessageProcessor. There is no
-        // ImguiPlatform_Linux.h to call into yet.
+        // imgui sees the event first, the way Win32Application calls
+        // ImGuiX::Platform::WindowMessageProcessor first.
+        //
+        // **The return value is deliberately ignored**, unlike the Win32 sibling, which returns
+        // early when the message is handled. The two backends do not mean the same thing by it.
+        // A wnd proc returns non-zero only for a message it truly consumed, and
+        // imgui_impl_win32.cpp returns 0 for nearly everything. imgui_impl_sdl3.cpp returns true
+        // for every event it recognises, including SDL_EVENT_WINDOW_CLOSE_REQUESTED and the
+        // focus events, so returning early here would swallow the application's own close and
+        // stop input reaching the engine. Upstream's own SDL3 examples ignore it too.
+        #if EE_DEVELOPMENT_TOOLS
+        if ( WasInitialized() )
+        {
+            ImGuiX::Platform::ProcessEvent( event );
+        }
+        #endif
 
         //-------------------------------------------------------------------------
 
