@@ -377,6 +377,18 @@ def emit( repo_root, solution, configurations ):
                 rule_name = ( f'so_{identifier}' if shared else f'exe_{identifier}' )
                 shared_flag = '-shared ' if shared else ''
 
+                # **A shared library needs an soname, or its dependents record a path.** The
+                # dependency libraries are passed to the linker as repository-relative paths, and
+                # without an soname the linker copies that path verbatim into the dependent's
+                # DT_NEEDED. The loader then resolves it against the *working directory*, so the
+                # binary only runs from the repository root and $ORIGIN never gets a say. Naming
+                # the library gives DT_NEEDED a bare filename, which $ORIGIN then finds.
+                #
+                # Found by running the engine for the first time in P6.7: it failed with
+                # "cannot open shared object file" for its own libraries, from its own directory.
+                if shared:
+                    shared_flag += f'-Wl,-soname,{Path( output_path ).name} '
+
                 writer.rule( rule_name,
                              command = f'$ld {shared_flag}-o $out $in {" ".join( link_flags )}',
                              description = f'LINK {configuration.name} $out' )

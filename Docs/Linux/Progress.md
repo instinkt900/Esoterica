@@ -27,8 +27,18 @@ errors**. Every Phase 5 RHI call in that path had never executed before.
 swapchain `minImageCount` of 3. Four lines added, zero modified, Windows bit for bit unchanged.
 Escalated, approved, made, and registered in [TouchedFiles.md](TouchedFiles.md).
 
-**P6.7, `EngineApplication_Linux`, is next**, and it is the last thing between here and a
-running engine.
+**P6.7 is done: `Build/Linux_Release/Esoterica.Applications.Engine` builds, links and starts.**
+It reads its settings, loads compiled data, opens a window and creates a Vulkan device.
+**Criterion 1 is met.**
+
+**It does not render a map yet, and the two things stopping it are not Phase 6's.** DXC emits
+invalid SPIR-V for `CullPrimitiveEXT` in the `DebugDraw` mesh shader - a fourth defect in its
+SPIR-V back end - and `Shaders::Initialize` creates every shader module at startup, so that one
+mesh shader blocks the engine on **any** machine without `VK_EXT_mesh_shader`. **P6.8 owns both.**
+
+**Run it with `-packaged`.** Without it the engine wants the network resource provider, which
+starts `EsotericaResourceServer.exe`; the ResourceServer is Phase 7. `-packaged` reads
+`Build/Linux_<configuration>/CompiledData` directly.
 
 **`EE_UNIMPLEMENTED_FUNCTION` is gone from `Base` outside `RHI_Vulkan.cpp`.** The three there are
 Phase 5's; two more in `Triangle.h` and `Encoding.cpp` are upstream's own.
@@ -171,7 +181,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
 | 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 to P6.6 done: SDL3 builds from source, `LinuxApplication` runs a window and an event loop, imgui and all three input devices work, and **the port renders on Linux** - twelve frames cleared and presented with no validation errors. P6.7 onwards not started. imgui multi-viewport is verified on X11 and will not work on Wayland |
+| 6 - Windowing and Input | **started.** P6.1 to P6.7 done: SDL3 builds from source, `LinuxApplication` runs a window and an event loop, imgui and all three input devices work, the port renders on Linux, and **the engine binary builds, links and starts**. Criterion 1 is met. P6.8, first light, is next, and it owns the `DebugDraw` mesh shader that blocks a map |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -196,6 +206,9 @@ open, not merged.
 **`linux/p6.6-swapchain-surface`**, stacked on that. The Vulkan surface, plus two defects found
 by running it, and the approved `MaxPendingFrames` edit. PR #47 open, not merged.
 
+**`linux/p6.7-engine-application`**, stacked on that. The engine entry point, two build system
+defects and a Phase 5 device feature gap. PR open, not merged.
+
 The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
 ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
 it.**
@@ -204,8 +217,8 @@ it.**
 more code:
 
 1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands. **Started: P6.1 to P6.6 are done, P6.7 is next. Criteria 5 to 7 of Phase 5
-   are now checkable, and the first frame has run.**
+   before it lands. **Started: P6.1 to P6.7 are done, P6.8 is next. The engine binary exists,
+   and the first frame has run.**
 2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
    the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
    after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
@@ -257,6 +270,119 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-30 - P6.7 `EngineApplication_Linux`. **The engine binary exists and runs**
+
+**`Build/Linux_Release/Esoterica.Applications.Engine` builds, links and starts.** It reads its
+settings, loads compiled data, opens a window, creates a Vulkan device and gets as far as
+compiling shaders. **Phase 6 acceptance criterion 1 is met.** It does not yet render a map; the
+two things stopping it are named below and neither is P6.7's.
+
+`EngineApplication_Linux.{h,cpp}` mirror `EngineApplication_Win32.{h,cpp}`. `_tWinMain` becomes
+`int main( int argc, char** argv )`, which also drops the `__argc` and `__argv` fetch, and the
+Live++ hooks are absent because `EE_ENABLE_LPP` stays unset on Linux. `ProcessInputEvent` is the
+one line the P6.4 entry specified. The constructor passes no icon and no splash screen: the
+Windows build reaches both through a `.rc` file, and Phase 6 says not to parse those.
+
+#### Two build system defects, both found by running the binary
+
+**1. The `External/` rpath was repository relative, so a binary only ran from the repository
+root.** `-L` is resolved by the linker, which ninja runs from the root, so a relative path is
+fine there. An **rpath is resolved by the loader against the working directory**, so it only
+worked by accident. `Toolchain.py` now emits `-Wl,-rpath,'$ORIGIN/../../<directory>'`; every
+output directory is `Build/Linux_<configuration>/`, two levels below the root. P6.2 predicted
+this and left it for P6.7.
+
+**2. A shared library had no soname, so its dependents recorded a path.** The dependency
+libraries are passed to the linker as repository-relative paths, and with no soname the linker
+copies that path verbatim into the dependent's `DT_NEEDED`. The loader then resolves
+`Build/Linux_Release/libEsoterica.Base.so` against the working directory, and `$ORIGIN` never
+gets a say. `NinjaGen.py` now passes `-Wl,-soname,lib<Project>.so` for every shared library, so
+`DT_NEEDED` carries a bare filename that `$ORIGIN` finds.
+
+Together these are why the engine failed with *"error while loading shared libraries"* from its
+own output directory. `ldd` from `/tmp` now resolves everything.
+
+#### A Phase 5 defect, found by running it: 16-bit shader types were never enabled
+
+**`CreateContext` did not enable the 16-bit feature bits, and the engine's shaders need them.**
+`MeshData.esh`, `CommonPacking.esh`, `XeGTAO.esh`, `RendererTypes.esh` and several `.esf` files
+declare `float16_t` and `uint16_t`; DXC emits the matching SPIR-V capabilities, and
+`vkCreateShaderModule` rejects a module whose capabilities the device did not enable. The first
+shader it saw was `InstancePickingResolve`, and validation said:
+
+```
+vkCreateShaderModule(): SPIR-V Capability Int16 was declared, but one of the following
+requirements is required (VkPhysicalDeviceFeatures::shaderInt16).
+```
+
+**Direct3D 12 has no equivalent step.** `Native16BitShaderOps` is a capability a driver either
+has or does not, with nothing to switch on, so P5.1 had nothing to mirror and the gap was
+invisible until a shader was created.
+
+`shaderInt16`, `shaderFloat16`, `storageBuffer16BitAccess`,
+`uniformAndStorageBuffer16BitAccess` and `storagePushConstant16` are now asked for when the
+device has them, and a warning names any that are missing. Asked for rather than required,
+because a device without them fails at the shader that needs one, which names the shader.
+
+#### **What stops the engine rendering a map, and neither is Phase 6's**
+
+With the above fixed, the engine reaches `Shaders::Initialize` and halts on the **`DebugDraw`
+mesh shader**:
+
+```
+vkCreateShaderModule(): pCreateInfo->pCode (spirv-val produced an error):
+[VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036] According to the Vulkan spec BuiltIn
+CullPrimitiveEXT variable needs to be a boolean value array. ID <10> (OpVariable) is not a
+bool scalar.
+```
+
+Two separate problems, and **the second is structural**:
+
+1. **DXC emits invalid SPIR-V for `CullPrimitiveEXT`.** That is a fourth defect in DXC's SPIR-V
+   back end, alongside the three Phase 4 already patches, and it is a Phase 4 fix or a shader
+   change. `spirv-val` catches it, so Phase 4's own validation step should have; worth checking
+   whether the mesh shader stages are actually being validated.
+2. **`Shaders::Initialize` creates every shader module at startup**, mesh shaders included,
+   whatever the device supports. So the `DebugDraw` mesh shader blocks the engine on **any**
+   machine without `VK_EXT_mesh_shader`, not merely the debug draw pass. P5.14 recorded that
+   neither real GPU here has the extension; this makes that fatal rather than degraded.
+
+**Both belong to P6.8 and Phase 5's completion, not to P6.7.** P6.7's deliverable is the binary,
+and the binary exists.
+
+#### Verification
+
+- Files added: `Code/Applications/Engine/Linux/EngineApplication_Linux.{h,cpp}`.
+- Files edited: `Code/Scripts/NinjaGen/LinuxSources.txt` (the new source),
+  `Code/Scripts/NinjaGen/Toolchain.py` (the `$ORIGIN` rpath, and the SDL3 sheet for
+  `Esoterica.Applications.Engine`, whose `.cpp` reads `SDL_Event` fields),
+  `Code/Scripts/NinjaGen/NinjaGen.py` (the soname), `Code/Base/Render/RHI_Vulkan.cpp` (the
+  16-bit features).
+- **Upstream files edited: none.**
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before. **A third
+  executable now builds**, next to the Reflector and the ResourceCompiler.
+- Run: `./Build/Linux_Release/Esoterica.Applications.Engine -map
+  data://demo/render/pbr/pbrdemo.map -packaged`, **from any directory**, reads its settings,
+  loads compiled data, opens a window, selects the Intel UHD 620 and builds both descriptor
+  pools before halting at the `DebugDraw` mesh shader.
+- Acceptance criteria: **criterion 1 is met.** Criterion 2 is not; see above. Criterion 10 is
+  untouched: both new files are guarded with `#ifdef __linux__`, they live in a directory no
+  `.vcxproj` references, and the two generator changes are Linux-only tooling.
+
+#### The `-packaged` flag is needed, and that is not a defect
+
+Without it the engine uses the **network** resource provider, which tries to start
+`EsotericaResourceServer.exe`. The ResourceServer is Phase 7 and does not build on Linux yet.
+`-packaged` selects `PackagedResourceProvider`, which reads
+`Build/Linux_<configuration>/CompiledData` directly - the data Phase 3 compiled. Nothing needs
+changing; P6.8 and Phase 7 should simply expect the flag until the ResourceServer exists.
+
+**A related upstream observation, not fixed here.** When `Engine::Initialize` fails, the
+following `Engine::Shutdown` segfaults in `RenderSystem::WaitAllQueuesIdle`, because it tears
+down systems that were never initialized. That is upstream behaviour on both platforms and it
+only shows up on a failed start; it is recorded under "Upstream issues observed".
 
 ### 2026-08-30 - P6.6 The Vulkan surface. **Esoterica renders on Linux**
 
@@ -4300,6 +4426,14 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `Engine::Shutdown` crashes when `Engine::Initialize` failed
+
+Found during the P6.7 bring-up, and true on both platforms by inspection. A failed `Initialize`
+leaves `RenderSystem` unconstructed, and `Shutdown` calls `RenderSystem::WaitAllQueuesIdle`
+anyway, which dereferences a null queue. It only shows on a failed start, so it hides the real
+error behind a segfault. `Engine::m_initializationStageReached` already records how far the start
+got, and `Shutdown` could tear down only what that stage covers.
 
 ### `RHI.h:1044` - `LoadAction` defaults to discarding every attachment
 

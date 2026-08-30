@@ -985,6 +985,36 @@ namespace EE::Render::RHI
         pVulkanContext->m_pipelineStatisticsQuery = availableFeatures.m_features2.features.pipelineStatisticsQuery == VK_TRUE;
         enabledFeatures.m_features2.features.pipelineStatisticsQuery = availableFeatures.m_features2.features.pipelineStatisticsQuery;
 
+        // 16-bit types
+        //-------------------------------------------------------------------------
+        // **The engine's shaders use them, so these are not optional.** MeshData.esh,
+        // CommonPacking.esh, XeGTAO.esh, RendererTypes.esh and several .esf files declare
+        // float16_t and uint16_t, DXC emits the matching SPIR-V capabilities, and
+        // vkCreateShaderModule rejects a module whose capabilities the device did not enable.
+        // Direct3D 12 has no equivalent step: Native16BitShaderOps is a capability the driver
+        // either has or does not, with nothing to switch on.
+        //
+        // Found by running the engine for the first time in P6.7. The first shader
+        // vkCreateShaderModule saw was InstancePickingResolve, and validation said "SPIR-V
+        // Capability Int16 was declared, but one of the following requirements is required
+        // (VkPhysicalDeviceFeatures::shaderInt16)".
+        //
+        // Asked for rather than required, and logged when absent, because a device without them
+        // fails at the shader that needs one rather than at device creation, and that names the
+        // shader.
+        enabledFeatures.m_features2.features.shaderInt16 = availableFeatures.m_features2.features.shaderInt16;
+        enabledFeatures.m_vulkan12.shaderFloat16 = availableFeatures.m_vulkan12.shaderFloat16;
+        enabledFeatures.m_vulkan11.storageBuffer16BitAccess = availableFeatures.m_vulkan11.storageBuffer16BitAccess;
+        enabledFeatures.m_vulkan11.uniformAndStorageBuffer16BitAccess = availableFeatures.m_vulkan11.uniformAndStorageBuffer16BitAccess;
+        enabledFeatures.m_vulkan11.storagePushConstant16 = availableFeatures.m_vulkan11.storagePushConstant16;
+
+        if ( availableFeatures.m_features2.features.shaderInt16 != VK_TRUE || availableFeatures.m_vulkan12.shaderFloat16 != VK_TRUE )
+        {
+            EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "This device is missing 16-bit shader types (shaderInt16 %s, shaderFloat16 %s). Shaders that use them will fail to create.",
+                            availableFeatures.m_features2.features.shaderInt16 ? "yes" : "no",
+                            availableFeatures.m_vulkan12.shaderFloat16 ? "yes" : "no" );
+        }
+
         // Optional device extensions
         //-------------------------------------------------------------------------
         // The required list is the binding model's and a device missing any of it is refused.
