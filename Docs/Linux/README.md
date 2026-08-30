@@ -118,10 +118,11 @@ buffer, indexed by `DrawIndex`. That is
 [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
 and it comes **after** Phase 6, because it cannot be tested until the engine runs.
 
-**Phase 6, windowing and input, has started.** P6.1 to P6.3 are done: SDL3 `release-3.4.14`
+**Phase 6, windowing and input, has started.** P6.1 to P6.4 are done: SDL3 `release-3.4.14`
 builds from source into `External/SDL3/`, `LinuxApplication` opens a window and runs an event
-loop, and the imgui platform backend runs on SDL3 with multi-viewport verified on X11. Nothing
-derives from `LinuxApplication` yet; that is P6.7. P6.4, keyboard and mouse input, is next.
+loop, the imgui platform backend runs on SDL3 with multi-viewport verified on X11, and keyboard
+and mouse input work with a complete scancode table. Nothing derives from `LinuxApplication` yet;
+that is P6.7. P6.5, gamepads, is next.
 
 **imgui viewports will not work under Wayland.** `ImGui_ImplSDL3_Init` enables them only for
 video drivers on its global-mouse white list, which does not include `wayland`. The editor
