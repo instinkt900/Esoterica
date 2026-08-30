@@ -2,8 +2,10 @@
 
 **Goal:** the full editor runs on Linux.
 
-**Deliverable:** `./Build/Linux_Release/EsotericaEditor` launches, the Resource Server runs, and
-resource hot-reloading works end to end.
+**Deliverable:** `./Build/Linux_Release/Esoterica.Applications.Editor` launches, the Resource
+Server runs, and resource hot-reloading works end to end. **The binaries are named after their
+projects on Linux**, as the Reflector, the ResourceCompiler and now the Engine are; this document
+originally wrote `EsotericaEditor`.
 
 **Prerequisites:** Phase 6 complete.
 
@@ -11,6 +13,25 @@ resource hot-reloading works end to end.
 
 **Read first:** [00-Conventions.md](../00-Conventions.md),
 [TouchedFiles.md](../TouchedFiles.md).
+
+
+> ## What Phase 6 hands you, and how it shapes this phase
+>
+> **imgui multi-viewport does not work under Wayland, and cannot be made to.**
+> `ImGui_ImplSDL3_Init` enables `ImGuiBackendFlags_PlatformHasViewports` only for video drivers
+> on its global-mouse white list, and `wayland` is not on it. **The editor's docking UI depends
+> on viewports**, so an editor session on Wayland gets everything merged into one window. That is
+> upstream imgui's own gate, not a port defect. Verified working on X11: three imgui windows
+> became three live SDL windows. See the P6.3 entry in [Progress.md](../Progress.md).
+>
+> **`LinuxApplication` is written and its interface is settled.** `EditorApplication_Linux` and
+> the ResourceServer both derive from it. Read the P6.2 entry before you subclass it; in
+> particular, `ProcessEvent` deliberately ignores what imgui's handler returns, and the window
+> size it reports is in pixels while the position is in logical coordinates.
+>
+> **The ResourceServer is what the engine is waiting on too.** Until it builds, the engine has to
+> be run with `-packaged`, which reads `Build/Linux_<configuration>/CompiledData` directly instead
+> of going through the network resource provider.
 
 ---
 
@@ -157,7 +178,7 @@ platform-neutral upstream bugs. See Conventions rule 3.
 
 ## Acceptance criteria
 
-1. `Build/Linux_Release/EsotericaEditor` builds, links, and launches.
+1. `Build/Linux_Release/Esoterica.Applications.Editor` builds, links, and launches.
 2. `Build/Linux_Release/EsotericaResourceServer` builds, links, and runs.
 3. The editor's borderless window works: drag, resize from all edges, maximize, restore, and
    minimize.

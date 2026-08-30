@@ -306,6 +306,10 @@ sits only in `ShaderReflection_ShaderCompiler.{h,cpp}`. See
 
 ## Application and entry points
 
+> **Written in Phase 6.** `LinuxApplication` and `EngineApplication_Linux` both exist, so this
+> section is now a description of what was built rather than a survey. The P6.2 and P6.7 entries
+> in [Progress.md](Progress.md) carry the details that differ from what is sketched here.
+
 `Win32Application` (`Application_Win32.h`) is a base class whose virtual interface is *almost*
 platform-neutral. `Initialize`, `Shutdown`, `ApplicationLoop`, `ResizeMainWindow`,
 `OnUserExitRequest`, `ReadWindowSettings`, and `WriteWindowSettings` are all fine. But it leaks

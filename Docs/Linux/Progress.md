@@ -10,35 +10,59 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 6 (started). P6.1 to P6.5 are done, and `Base` has no Phase 6 stubs left.** SDL3
-`release-3.4.14` builds from source into `External/SDL3/`, `LinuxApplication` opens a window and
-runs an event loop, the imgui platform backend runs on SDL3 with **multi-viewport verified**,
-and keyboard, mouse and gamepad all work, each proved by running it: a **complete scancode table,
-105 scancodes to 105 distinct `InputID`s**, and a full `InputSystem` pass driven by an SDL virtual
-gamepad. **Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS
-packages none.**
+**Phase: 6. P6.1 to P6.7 are done. P6.8, first light, is the only task left in the phase.**
 
-**P6.6 is done, and Esoterica has rendered on Linux.** A window, a `VkSurfaceKHR` made from the
-`SDL_Window*`, a swapchain, and twelve frames cleared and presented with **no Vulkan validation
-errors**. Every Phase 5 RHI call in that path had never executed before.
+### Start here
 
-**It carries the port's first edit to an upstream file that is not a pure include switch.**
+```bash
+python3 Code/Scripts/NinjaGen/NinjaGen.py
+ninja -f Build/Linux/Esoterica.ninja Build/Linux_Release/Esoterica.Applications.Engine
+
+VK_LOADER_LAYERS_DISABLE='*' \
+  ./Build/Linux_Release/Esoterica.Applications.Engine \
+  -map data://demo/render/pbr/pbrdemo.map -packaged
+```
+
+**Three things about that command line, each of which cost a session to find:**
+
+- **`-packaged` is required.** Without it the engine uses the network resource provider and tries
+  to start `EsotericaResourceServer.exe`, which is Phase 7. `-packaged` reads
+  `Build/Linux_<configuration>/CompiledData` directly, which is what Phase 3 filled.
+- **`VK_LOADER_LAYERS_DISABLE='*'` is required on Ubuntu 24.04.** Its
+  `vulkan-validationlayers 1.4.309.0` bundles the same stale SPIRV-Tools that Phase 4
+  documented, and rejects the `DebugDraw` mesh shader on
+  `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036`. **The SPIR-V is correct and the driver accepts
+  it**, measured. This is the second time a stale SPIRV-Tools has misled this port. Losing
+  validation is a bad trade, so installing a newer layer package is worth the effort - and
+  recording which version works is worth more.
+- **The binary is `Esoterica.Applications.Engine`**, named after its project like the Reflector
+  and the ResourceCompiler, not `EsotericaEngine` as the phase document originally wrote.
+
+**Where it stops: `vkCreateComputePipelines` returns `VK_ERROR_UNKNOWN` for
+`InstancePickingResolve`.** That is P5.7's first execution, and chasing it is P6.8's first job.
+
+### What is behind that
+
+**Esoterica renders on Linux.** P6.6 made a `VkSurfaceKHR` from the `SDL_Window*` and cleared and
+presented twelve frames with **no Vulkan validation errors**. Every Phase 5 RHI call in that path
+had never executed before. Running the backend for the first time found **four defects in it**,
+all fixed; see the P6.6 and P6.7 entries.
+
+**The engine binary builds, links and starts.** It reads its settings, loads compiled data, opens
+a window and creates a Vulkan device. **Phase 6 acceptance criterion 1 is met.**
+
+**The window, input and imgui layers are all done and each was proved by running it.** SDL3
+`release-3.4.14` builds from source, `LinuxApplication` runs a window and an event loop, the imgui
+platform backend has **multi-viewport verified** - three imgui windows became three live SDL
+windows - and keyboard, mouse and gamepad all work: a **complete scancode table, 105 scancodes to
+105 distinct `InputID`s**, and a full `InputSystem` pass driven by an SDL virtual gamepad.
+**Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS packages
+none.**
+
+**The port now edits one upstream file that is not a pure include switch.**
 `RHI::MaxPendingFrames` is 3 on Linux, because the Intel UHD 620 and llvmpipe both report a
 swapchain `minImageCount` of 3. Four lines added, zero modified, Windows bit for bit unchanged.
 Escalated, approved, made, and registered in [TouchedFiles.md](TouchedFiles.md).
-
-**P6.7 is done: `Build/Linux_Release/Esoterica.Applications.Engine` builds, links and starts.**
-It reads its settings, loads compiled data, opens a window and creates a Vulkan device.
-**Criterion 1 is met.**
-
-**It does not render a map yet, and the two things stopping it are not Phase 6's.** DXC emits
-invalid SPIR-V for `CullPrimitiveEXT` in the `DebugDraw` mesh shader - a fourth defect in its
-SPIR-V back end - and `Shaders::Initialize` creates every shader module at startup, so that one
-mesh shader blocks the engine on **any** machine without `VK_EXT_mesh_shader`. **P6.8 owns both.**
-
-**Run it with `-packaged`.** Without it the engine wants the network resource provider, which
-starts `EsotericaResourceServer.exe`; the ResourceServer is Phase 7. `-packaged` reads
-`Build/Linux_<configuration>/CompiledData` directly.
 
 **`EE_UNIMPLEMENTED_FUNCTION` is gone from `Base` outside `RHI_Vulkan.cpp`.** The three there are
 Phase 5's; two more in `Triangle.h` and `Encoding.cpp` are upstream's own.
@@ -59,9 +83,10 @@ know.
 system header. It revises the second half of P5.3's answer, so read the two decision entries
 together. **Not written yet: P6.6 owns it.**
 
-**Phase 5 remains written and merged, not complete.** All sixteen groups are on `main`. The
-seventeen stacked PRs, #24 to #41, are merged and nothing is in flight. **Nothing in any of them
-has ever run.**
+**Phase 5 remains merged and incomplete, but it is no longer unrun.** All sixteen groups are on
+`main`. **The parts P6.6 and P6.7 exercised are verified** - context, queues, command pools and
+buffers, the swapchain, barriers, a render pass, submit and present - and everything else is
+still compile-verified only. Each P5.x entry's "Not verified" list stands apart from those.
 
 **Open question 7 is answered, and the work is scheduled as P5.17.** The shader reads its own
 command's root data out of the argument buffer, indexed by `DrawIndex`. **It is deliberately
@@ -71,8 +96,10 @@ the decision entry and
 before starting it. **The frame still cannot draw until it lands.**
 
 **All 16 groups are written. 15 of them are real; P5.13 is the exception and cannot be finished
-here.** Every one is unverified: nothing on Linux has executed a single RHI call. Phase 5's own
-note says this count is the single most important piece of state, so it leads this section.
+here.** Phase 5's own note says this count is the single most important piece of state.
+**Verification is now partial rather than absent**: the P6.6 and P6.7 bring-up exercised P5.1,
+P5.2, P5.3, P5.4, P5.7's shader creation, P5.8 and P5.9, and found four defects across them. No
+other group has executed.
 
 **3 `EE_UNIMPLEMENTED_FUNCTION` remain, none of them a whole function.** One is the indirect
 refusal from open question 7. The other two are markers that name a caller if it ever appears: a
@@ -103,10 +130,11 @@ and nothing else, and a compute pre-pass does not help because a pre-pass cannot
 either. **The answer is a shader change, and it is P5.17.** P5.13 landed its mechanical half by
 decision and refuses the rest at the line; see the P5.13 entry, the decision entry, and P5.17.
 
-**`m_pNativeWindowHandle` is a `VkSurfaceKHR` on Linux, and the application owns it.** That is
-the surface-creation requirement Phase 5 owes Phase 6, and `SDL_Vulkan_CreateSurface` returns
-exactly it. **The application drives swapchain recreation, not the RHI**, which is the second
-answer Phase 6 was promised. Both are in the P5.3 entry.
+**Superseded: `m_pNativeWindowHandle` is an `SDL_Window*` on Linux, and `RHI_Vulkan.cpp` makes
+the surface from it** through `Platform::Linux::CreateVulkanSurface`. P5.3 said the application
+would create the surface and hand it over, and there turned out to be nowhere for it to do that.
+See the 2026-08-30 decision entry. **The application does still drive swapchain recreation, not
+the RHI**, which is the other answer Phase 6 was promised, and that half of P5.3 stands.
 
 **A Vulkan queue does not execute its submits in order and a Direct3D 12 queue does**, so every
 submit now waits on the value the previous submit on that queue signalled. The engine depends on
@@ -123,20 +151,20 @@ texture, buffer view and pipeline attachment format reads the same function.
 
 **Both Phase 4 decisions are now implemented, each in exactly one place.** Clip-space Y is
 inverted in `CmdSetViewport` with a negative viewport height, and nowhere else. Heap set 1 is
-bound in `CmdSetPipeline`, not in `BeginCommandBuffer`. Neither has been executed.
+bound in `CmdSetPipeline`, not in `BeginCommandBuffer`. `CmdSetViewport` has run; the heap bind
+has not, because nothing has set a pipeline yet.
 
 **The bindless heap now exists in code.** `CreateContext` builds set 1 exactly as the Phase 4
 binding model specifies, and `GetBufferHandle` returns an index into it. **One correction to that
 recorded decision was needed**, on a flag Vulkan does not allow where the entry put it; it is
 written up below and it changes nothing the shaders can see.
 
-**Nothing on Linux can execute an RHI call yet, and that is a deliberate decision.** The engine
-binary does not exist on Linux, and building one is blocked behind all of Phase 6: `BaseModule::
-InitializeModule` halts in `InputSystem::Initialize` and `ImguiSystem::InitializePlatform`, both
-Phase 6 stubs, before `EngineModule::InitializeModule` ever reaches `RHI::CreateContext`. The
-decision was to write Phase 5 against the compiler and link only, and to first execute it when
-Phase 6 lands. See the 2026-08-28 decision entry. **Treat every P5.x entry as compile-verified
-and run-unverified until that changes.**
+**Phase 5 was written against the compiler and link only, on purpose**, because nothing on Linux
+could reach `RHI::CreateContext` until Phase 6 provided an entry point. See the 2026-08-28
+decision entry. **That has now happened**, and the first execution found four defects in four
+different groups. **Treat every P5.x entry as compile-verified and run-unverified except where
+the P6.6 and P6.7 entries say otherwise** - which is context, queues, command pools and buffers,
+the swapchain, barriers, a render pass, submit and present.
 
 Previously: **Phase 4 (done on Linux).** DXC is built from source with three patches that fix its SPIR-V back
 end, and **all 46 shader stages compile and pass `spirv-val`**. `./CompileShaders.sh` exits 0 and
@@ -180,8 +208,8 @@ reproduces byte-identical output. The Windows build has not been run.
 | 2 - Reflector | **done on Linux** (criterion 5 and 8 need a Windows machine) |
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
-| 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 to P6.7 done: SDL3 builds from source, `LinuxApplication` runs a window and an event loop, imgui and all three input devices work, the port renders on Linux, and **the engine binary builds, links and starts**. Criterion 1 is met. P6.8, first light, is next, and it owns the `DebugDraw` mesh shader that blocks a map |
+| 5 - Vulkan RHI | **all 16 groups written and merged to `main`, and the backend has now run.** P6.6 and P6.7 executed it for the first time and found four defects, all fixed. Context, queues, command pools and buffers, the swapchain, barriers, a render pass, submit and present are **verified**; the rest is still compile-verified only. 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function. P5.13 is finished by P5.17, which still comes after P6.8. Criteria 5 to 10 are now checkable |
+| 6 - Windowing and Input | **started.** P6.1 to P6.7 done: SDL3 builds from source, `LinuxApplication` runs a window and an event loop, imgui and all three input devices work, the port renders on Linux, and **the engine binary builds, links and starts**. Criterion 1 is met. P6.8, first light, is next, and it owns the `VK_ERROR_UNKNOWN` compute pipeline that blocks a map |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -193,54 +221,39 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-**`linux/p6.2-linuxapplication`.** `Application_Linux.{h,cpp}` on SDL3. PR #43 open, not merged.
+> ### **None of Phase 6 is on `main` yet. It is a stack of six open pull requests.**
+>
+> A session that checks out `main` finds Phase 5 and nothing after it. **Work continues on
+> `linux/p6.7-engine-application`, which contains every commit below.**
 
-**`linux/p6.3-imgui-platform`**, stacked on it. The imgui platform backend on SDL3. PR #44 open,
-not merged.
+| Branch | PR | What |
+|---|---|---|
+| `linux/p6.2-linuxapplication` | [#43](https://github.com/instinkt900/Esoterica/pull/43) | `Application_Linux.{h,cpp}` on SDL3 |
+| `linux/p6.3-imgui-platform` | [#44](https://github.com/instinkt900/Esoterica/pull/44) | The imgui platform backend |
+| `linux/p6.4-keyboard-mouse` | [#45](https://github.com/instinkt900/Esoterica/pull/45) | The keyboard and mouse device |
+| `linux/p6.5-gamepad` | [#46](https://github.com/instinkt900/Esoterica/pull/46) | The gamepad device |
+| `linux/p6.6-swapchain-surface` | [#47](https://github.com/instinkt900/Esoterica/pull/47) | The Vulkan surface, two RHI defects, and the `MaxPendingFrames` edit |
+| `linux/p6.7-engine-application` | [#49](https://github.com/instinkt900/Esoterica/pull/49) | The engine entry point, two build system defects, and the 16-bit feature gap |
 
-**`linux/p6.4-keyboard-mouse`**, stacked on that. The keyboard and mouse device on SDL3. PR #45
-open, not merged.
+Each is based on the one above it, so they merge bottom up. P6.1 is already merged, as
+[#42](https://github.com/instinkt900/Esoterica/pull/42).
 
-**`linux/p6.5-gamepad`**, stacked on that. The gamepad device on SDL3. PR #46 open, not merged.
+**P6.8 should branch off `linux/p6.7-engine-application`**, not off `main`, unless the stack has
+landed by then.
 
-**`linux/p6.6-swapchain-surface`**, stacked on that. The Vulkan surface, plus two defects found
-by running it, and the approved `MaxPendingFrames` edit. PR #47 open, not merged.
+---
 
-**`linux/p6.7-engine-application`**, stacked on that. The engine entry point, two build system
-defects and a Phase 5 device feature gap. PR open, not merged.
+**Phase 5 is merged and has now run.** All seventeen branches went in through PRs #24 to #41,
+ending with `p5.16-raytracing`. P6.6 and P6.7 executed the backend for the first time and found
+four defects in it, all fixed on the stack above. **What is still unverified is most of it**:
+every group's "Not verified" list stands except for the parts the P6.6 entry names.
 
-The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
-ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
-it.**
+**[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)
+is still the last piece of Phase 5, and it still comes after P6.8.** It is the indirect draw
+shader change that makes the frame draw geometry, and it cannot be tested until the engine
+reaches a frame loop - which it does not yet, because `vkCreateComputePipelines` fails first.
 
-**There is no next group. Every one of the sixteen is written.** What is left in Phase 5 is not
-more code:
-
-1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands. **Started: P6.1 to P6.7 are done, P6.8 is next. The engine binary exists,
-   and the first frame has run.**
-2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
-   the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
-   after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
-   easier to debug against a live frame.
-
-**P5.17 is written up in full in the phase document**, including the shape of the fix, the four
-shader files it touches, the `__spirv__` guard that keeps Windows untouched, the indirect compute
-case that does not fall out for free, and what "done" means. **Verifying it needs mesh shader
-hardware, which this machine does not have.**
-
-**Still owed to other groups**, each asserted or commented at the line rather than silently
-skipped:
-
-| Owed by | What |
-|---|---|
-| P5.14 | `CmdExecuteIndirect` on a `DispatchMesh` signature is `vkCmdDrawMeshTasksIndirectEXT`, which cannot be named until `VK_EXT_mesh_shader` is enabled. It halts at the line today. |
-| P5.16 | The same for a `DispatchRays` signature, which is `vkCmdTraceRaysIndirect2KHR`. |
-
-**Owed by later groups, recorded so they are not forgotten:**
-
-| Group | What it owes |
-|---|---|
+---
 
 ## `ALL_COMMANDS` sites
 
@@ -337,16 +350,37 @@ CullPrimitiveEXT variable needs to be a boolean value array. ID <10> (OpVariable
 bool scalar.
 ```
 
-Two separate problems, and **the second is structural**:
+**The SPIR-V is not the problem, and the validation layer is.** This is the *same* stale
+SPIRV-Tools that Phase 4 already ran into, now inside the Vulkan validation layer rather than in
+`/usr/bin/spirv-val`. Ubuntu 24.04 ships `vulkan-validationlayers 1.4.309.0`, which carries a
+SPIRV-Tools old enough to have the bug Phase 4 documented: it reads an
+`OpVariable %_ptr_Output__arr_bool_uint_64 Output` - an array of 64 bools, which is exactly what
+the spec asks for - and reports that it "is not a bool scalar".
 
-1. **DXC emits invalid SPIR-V for `CullPrimitiveEXT`.** That is a fourth defect in DXC's SPIR-V
-   back end, alongside the three Phase 4 already patches, and it is a Phase 4 fix or a shader
-   change. `spirv-val` catches it, so Phase 4's own validation step should have; worth checking
-   whether the mesh shader stages are actually being validated.
+**Measured, not assumed.** With `VK_LOADER_LAYERS_DISABLE='*'`, `vkCreateShaderModule` accepts
+the `DebugDraw` mesh shader and the engine walks straight past it. The driver has no complaint;
+only the layer does.
+
+**So there is no fourth DXC defect.** Phase 4's conclusion stands, and its rule stands with it:
+*a distribution's SPIRV-Tools is not interchangeable with the one the compiler validates
+against.* This is the second time that has cost a session, so it is worth stating in the form it
+now takes: **the Vulkan validation layers on Ubuntu 24.04 cannot be used on the mesh shader
+stages.** P6.8 must either disable them, or install a newer set, and record which.
+
+#### What actually blocks the engine, then
+
+Two things, and neither is what the paragraph above looked like:
+
+1. **`vkCreateComputePipelines` returns `VK_ERROR_UNKNOWN` for `InstancePickingResolve`.** That
+   is the first shader after the mesh stages, and it is the real wall. `VK_ERROR_UNKNOWN` from
+   Intel's ANV usually means the driver refused to compile the module, so the next step is to
+   run that one shader through the driver with `VK_LOADER_LAYERS_DISABLE` unset and a newer
+   validation layer, or through `spirv-val` and the driver's own shader cache diagnostics. This
+   is a Phase 5 group's first execution, so treat it as a P5.7 defect until shown otherwise.
 2. **`Shaders::Initialize` creates every shader module at startup**, mesh shaders included,
-   whatever the device supports. So the `DebugDraw` mesh shader blocks the engine on **any**
-   machine without `VK_EXT_mesh_shader`, not merely the debug draw pass. P5.14 recorded that
-   neither real GPU here has the extension; this makes that fatal rather than degraded.
+   whatever the device supports. That is not fatal by itself - the driver accepts the module -
+   but it means the engine pays for shaders it can never dispatch, and any future driver that is
+   stricter about an unsupported stage would stop here. Worth knowing; not urgent.
 
 **Both belong to P6.8 and Phase 5's completion, not to P6.7.** P6.7's deliverable is the binary,
 and the binary exists.
@@ -498,7 +532,8 @@ printed a symbolised backtrace and re-raised, which is what it was written to do
   that the swapchain survived a resize.
 - Acceptance criteria: **criterion 4 is met** - resize recreates the swapchain with no validation
   errors. **Criterion 8 is met for this path** - shutdown is clean with validation on. Criterion 1
-  is not: there is still no `EsotericaEngine` binary, which is P6.7. Criterion 10 is untouched.
+  is not: there was still no engine binary when this was written, which is P6.7. Criterion 10
+  is untouched.
 
 #### For P6.7
 
