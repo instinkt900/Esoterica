@@ -10,12 +10,14 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 6 (started). P6.1, P6.2 and P6.3 are done.** SDL3 `release-3.4.14` builds from source
-into `External/SDL3/`, `LinuxApplication` opens a window and runs an event loop, and the imgui
-platform backend runs on SDL3 with **multi-viewport verified**: three imgui windows became three
-live SDL windows. **Open question 4 is answered: the port always builds SDL3, because Ubuntu
-24.04 LTS packages none.** Nothing derives from `LinuxApplication` yet; that is P6.7.
-**P6.4, keyboard and mouse input, is next.**
+**Phase: 6 (started). P6.1 to P6.4 are done.** SDL3 `release-3.4.14` builds from source into
+`External/SDL3/`, `LinuxApplication` opens a window and runs an event loop, the imgui platform
+backend runs on SDL3 with **multi-viewport verified**, and keyboard and mouse input work with a
+**complete scancode table: 105 scancodes to 105 distinct `InputID`s, proved by running it**.
+**Open question 4 is answered: the port always builds SDL3, because Ubuntu 24.04 LTS packages
+none.** Nothing derives from `LinuxApplication` yet; that is P6.7. **P6.5, gamepads, is next**,
+and it is also what unblocks using `InputSystem` at all: `InputSystem::Initialize` still calls the
+halting controller stub.
 
 **Two findings from P6.3 that later phases need.** First, the vendored `ImguiPlatform_Win32.cpp`
 is about three years behind the imgui core beside it: the core is `v1.92.9b-docking`, the backend
@@ -155,7 +157,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
 | 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.4 onwards not started. imgui multi-viewport is verified on X11 and will not work on Wayland. The `SetMainWindowHandle` question is answered; P6.6 writes it |
+| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.5 onwards not started. imgui multi-viewport is verified on X11 and will not work on Wayland. The `SetMainWindowHandle` question is answered; P6.6 writes it |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -169,8 +171,11 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 **`linux/p6.2-linuxapplication`.** `Application_Linux.{h,cpp}` on SDL3. PR #43 open, not merged.
 
-**`linux/p6.3-imgui-platform`**, stacked on it. The imgui platform backend on SDL3. PR open, not
-merged.
+**`linux/p6.3-imgui-platform`**, stacked on it. The imgui platform backend on SDL3. PR #44 open,
+not merged.
+
+**`linux/p6.4-keyboard-mouse`**, stacked on that. The keyboard and mouse device on SDL3. PR open,
+not merged.
 
 The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
 ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
@@ -180,7 +185,7 @@ it.**
 more code:
 
 1. **Phase 6**, which is what finally executes any of this. Criteria 5 to 10 cannot be checked
-   before it lands. **Started: P6.1 to P6.3 are done, P6.4 is next.**
+   before it lands. **Started: P6.1 to P6.4 are done, P6.5 is next.**
 2. **[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
    the indirect draw shader change, which finishes P5.13 and makes the frame draw. **Scheduled
    after Phase 6 bring-up**, on purpose: it cannot be tested before the engine runs, and it is
@@ -232,6 +237,100 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-30 - P6.4 Keyboard and mouse. The mapping table is complete and proved complete
+
+**`InputDevice_KeyboardMouse_Linux.cpp` is a real device.** It replaces the Phase 1 stub of four
+halting functions. **The scancode table is complete: 105 scancodes map to 105 distinct
+`InputID`s, one to one, with none missing and none duplicated.** That is checked by running it,
+not by reading it.
+
+**Scancodes, not keycodes**, as the phase document requires. A scancode names the physical key and
+does not move with the layout, which is what the Win32 sibling gets from raw input. `SDL_SCANCODE_W`
+is `Keyboard_W` on AZERTY too.
+
+#### How an `SDL_Event` reaches the device
+
+**By pointer, in `GenericMessage::m_data0`.** `GenericMessage` is four `uint64_t` and an
+`SDL_Event` is 128 bytes, so it cannot be copied in. This is safe because
+`InputSystem::ForwardInputMessageToInputDevices` dispatches synchronously, from inside
+`LinuxApplication`'s event loop, while the event is still on the stack. The Win32 sibling passes
+an `HRAWINPUT` handle through the same field, so the shape is not new.
+
+**This is the contract P6.7 has to honour.** `EngineApplication_Linux::ProcessInputEvent` is one
+line:
+
+```cpp
+m_engine.GetInputSystem()->ForwardInputMessageToInputDevices( { (uint64_t) &event, 0, 0, 0 } );
+```
+
+Nothing may queue that message for later.
+
+#### What got simpler, and what got harder
+
+**Simpler.** The Win32 device spends 60 lines in `ConvertKeyMessageToInputID` fixing up
+`VK_SHIFT`, `VK_CONTROL`, `VK_MENU` and every numpad key from the message's scan code and
+extended bit, because a Windows virtual key does not distinguish left from right, or numpad from
+cursor block. Scancodes already do. That whole function is a hash lookup here.
+
+Wheel deltas arrive in notches, so there is no `WHEEL_DELTA` to divide by. A "natural scrolling"
+setting arrives as `SDL_MOUSEWHEEL_FLIPPED` rather than negated values, and is undone, so the
+engine sees what Windows reports.
+
+**Auto-repeat is dropped.** `SDL_EVENT_KEY_DOWN` repeats while a key is held and raw input does
+not, so the Win32 sibling never sees one. `Press` on an already held key would restart its state.
+
+#### Two behaviour gaps, both recorded rather than guessed at
+
+1. **Mouse deltas stop at the screen edge; on Windows they do not.** The Win32 device reads raw
+   input, which has no cursor and no bounds. `SDL_EVENT_MOUSE_MOTION`'s `xrel` and `yrel` follow
+   the pointer. X11 takes an implicit pointer grab on button press, so a camera drag keeps
+   receiving motion outside the *window*, but the *screen* edge still stops it.
+
+   **`SDL_SetWindowRelativeMouseMode` is the fix, and P6.4 deliberately does not call it.**
+   Turning it on for any button press would hide and warp the cursor and break every imgui drag,
+   and the device cannot tell a camera drag from a slider drag. imgui's own backend already calls
+   `SDL_CaptureMouse`, so a second owner of capture would fight it. **P6.8 should decide this
+   against a live camera**, which is the first time anyone can see whether it matters.
+
+2. **`m_charKeyPressed` only fills while text input is active.** SDL3 delivers
+   `SDL_EVENT_TEXT_INPUT` only after `SDL_StartTextInput`, and the only caller of that is imgui's
+   backend, when a text field has focus. `WM_CHAR` always arrives on Windows. **Nothing in the
+   engine reads `GetCharKeyPressed()`** - the grep is empty - so this blocks nothing today.
+
+   Non-ASCII is dropped rather than truncated. The field is one byte and `SDL_EVENT_TEXT_INPUT`
+   is UTF-8; the Win32 sibling truncates a `WM_CHAR` code point to a `char`, which is the same
+   loss written differently. imgui does its own text input and is unaffected.
+
+#### Verification
+
+- Files replaced: `Code/Base/Input/InputDevices/Platform/InputDevice_KeyboardMouse_Linux.cpp`,
+  which was a Phase 1 stub.
+- Files edited: `Code/Scripts/NinjaGen/LinuxSources.txt`, which now lists the file under Phase 6
+  rather than under the stubs.
+- **Upstream files edited: none.**
+- Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
+  `Esoterica.Applications.ResourceServer` only, which is where it failed before.
+- **Run, with a scratch harness (not committed). 20 checks, all passing.** It drives the device
+  through an `InputDevice*`, because `InputDevice` declares the overrides public and access is
+  checked on the static type:
+  - Every scancode from 1 to `SDL_SCANCODE_COUNT` is fed in and the resulting `InputID`s
+    collected. **105 scancodes produce 105 distinct IDs**; every ID from `Keyboard_A` to
+    `Keyboard_RAlt` is produced by exactly one scancode.
+  - Left and right Shift are distinct, and `Numpad4` is not the Left arrow. Those are the two
+    cases the Win32 fix-up code exists for.
+  - Press, hold, release; auto-repeat ignored.
+  - All five mouse buttons; the vertical and horizontal wheel; `SDL_MOUSEWHEEL_FLIPPED` undone.
+  - Two motion events in one frame accumulate, and the delta resets on the next.
+  - Char input; non-ASCII dropped; focus loss clears held keys.
+- **`InputSystem` cannot be used end to end yet.** `InputSystem::Initialize` constructs two
+  `XBoxControllerInputDevice`s and calls `Initialize` on each, and that is still the P6.5 stub,
+  which halts. The harness drives the keyboard and mouse device directly for that reason. P6.5
+  removes the obstacle.
+- Acceptance criteria: criterion 3 is half met. Keyboard and mouse are implemented and tested at
+  the device level; gamepad is P6.5, and "works for camera control" needs a running engine, which
+  is P6.7 and P6.8. Criterion 10 is untouched: the file is guarded with `#ifdef __linux__` and no
+  `.vcxproj` lists it.
 
 ### 2026-08-30 - P6.3 imgui platform backend. Multi-viewport works, and the Win32 copy is stale
 
