@@ -336,10 +336,15 @@ SHEETS = {
 # SHEETS arrives through UpstreamProjects.txt, which SyncUpstream.py regenerates from the
 # .vcxproj files, so a hand-written entry there would not survive the next sync.
 #
-# Only Esoterica.Base needs these. It holds RHI_Vulkan.cpp and the _Linux platform layers for
-# windowing, input and imgui, and every other project reaches both through it.
+# Esoterica.Base needs most of these: it holds RHI_Vulkan.cpp and the _Linux platform layers for
+# windowing, input and imgui, and every other project reaches those through it. A project that
+# writes SDL code of its own needs the SDL3 sheet as well.
 LINUX_ONLY_SHEETS = {
     'Esoterica.Base': ( 'Vulkan', 'VMA', 'SPIRVReflect', 'SDL3' ),
+    # EngineApplication_Linux.cpp reads SDL_Event fields, so it needs the headers. Everything
+    # else reaches SDL through Esoterica.Base, whose public headers forward declare the three
+    # SDL types they mention rather than including anything.
+    'Esoterica.Applications.Engine': ( 'SDL3', ),
 }
 
 def linux_only_sheets( project_name ):
@@ -511,9 +516,22 @@ def resolve_sheets( sheet_names, repo_root = None ):
 
         # -L before -l, and an rpath so an executable finds the .so at run time without
         # LD_LIBRARY_PATH. These live under External/, not in a system directory.
+        #
+        # **The rpath is $ORIGIN relative, not repository relative.** -L is resolved by the
+        # linker, which ninja runs from the repository root, so a plain relative path works
+        # there. An rpath is resolved by the dynamic loader against the *current working
+        # directory* of whoever runs the binary, so a repository-relative one only works when the
+        # process happens to start in the repository root. It does not, for example, when the
+        # engine is started from its own output directory, and the failure is
+        # "error while loading shared libraries: ... cannot open shared object file".
+        #
+        # Every output directory is Build/Linux_<configuration>/, two levels below the root, so
+        # $ORIGIN/../.. is the root. The $ is doubled because ninja reads this file's output.
+        # Found by running the engine for the first time in P6.7; it affected libSDL3,
+        # libdxcompiler and libGameNetworkingSockets alike.
         for directory in sheet.library_directories:
             link_flags.append( f'-L{directory}' )
-            link_flags.append( f'-Wl,-rpath,{directory}' )
+            link_flags.append( f"-Wl,-rpath,'$$ORIGIN/../../{directory}'" )
 
         link_flags.extend( f'-l{library}' for library in sheet.libraries )
 

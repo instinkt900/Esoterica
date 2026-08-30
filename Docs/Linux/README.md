@@ -118,6 +118,32 @@ buffer, indexed by `DrawIndex`. That is
 [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
 and it comes **after** Phase 6, because it cannot be tested until the engine runs.
 
-**Phase 6, windowing and input, has started.** P6.1 is done: SDL3 `release-3.4.14` builds from
-source into `External/SDL3/` and `Esoterica.Base` links it. Nothing includes an SDL header yet.
-P6.2, `LinuxApplication`, is next.
+**Phase 6, windowing and input, has started, and Esoterica has rendered on Linux.** P6.1 to P6.6
+are done: SDL3 builds from source, `LinuxApplication` opens a window and runs an event loop, the
+imgui platform backend runs on SDL3 with multi-viewport verified on X11, keyboard, mouse and
+gamepad input all work, and **a `VkSurfaceKHR` made from the SDL window drives a swapchain that
+cleared and presented twelve frames with no Vulkan validation errors**. `Base` has no Phase 6
+stubs left.
+
+**This carries the port's first real edit to an upstream file.** `RHI::MaxPendingFrames` is 3 on
+Linux, because the Intel UHD 620 and llvmpipe both report a swapchain `minImageCount` of 3. Four
+lines added, zero modified, and Windows is bit for bit unchanged. It was escalated, approved and
+registered in [TouchedFiles.md](TouchedFiles.md).
+
+**P6.7 is done too: the engine binary builds, links and starts.**
+`Build/Linux_Release/Esoterica.Applications.Engine -map data://... -packaged` reads its settings,
+loads compiled data, opens a window and creates a Vulkan device. **Criterion 1 is met.** It does
+not render a map yet: `vkCreateComputePipelines` returns `VK_ERROR_UNKNOWN` for the
+`InstancePickingResolve` compute shader. P6.8, first light, owns it.
+
+**Do not run the engine with the Ubuntu 24.04 Vulkan validation layers on.** They bundle the same
+stale SPIRV-Tools that Phase 4 documented and reject the `DebugDraw` mesh shader although its
+SPIR-V is correct and the driver accepts it. `VK_LOADER_LAYERS_DISABLE='*'` gets past it.
+
+**imgui viewports will not work under Wayland.** `ImGui_ImplSDL3_Init` enables them only for
+video drivers on its global-mouse white list, which does not include `wayland`. The editor
+depends on them, so Phase 7 needs to know. See the P6.3 entry in [Progress.md](Progress.md).
+
+**The surface question is settled and written.** `Platform::SetMainWindowHandle` holds an
+`SDL_Window*`, and `RHI_Vulkan.cpp` creates the `VkSurfaceKHR` itself through a Linux-only
+`Platform` function. See the decision entry in [Progress.md](Progress.md).
