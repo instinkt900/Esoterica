@@ -9,7 +9,7 @@
 
 //-------------------------------------------------------------------------
 
-#if _WIN32
+#if _WIN32 || defined( __linux__ )
 #include "Base/ThirdParty/imgui/misc/freetype/imgui_freetype.h"
 #endif
 
