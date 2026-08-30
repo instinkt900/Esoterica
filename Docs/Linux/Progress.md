@@ -22,10 +22,10 @@ packages none.**
 `SDL_Window*`, a swapchain, and twelve frames cleared and presented with **no Vulkan validation
 errors**. Every Phase 5 RHI call in that path had never executed before.
 
-**One line is escalated and blocks it from working as committed: `RHI::MaxPendingFrames` has to
-be 3 on Linux.** The Intel UHD 620 and llvmpipe both report a `minImageCount` of 3, and `RHI.h`
-is not in [TouchedFiles.md](TouchedFiles.md). The exact three-line edit, which leaves Windows bit
-for bit unchanged, is in the P6.6 entry. It was verified locally and reverted.
+**It carries the port's first edit to an upstream file that is not a pure include switch.**
+`RHI::MaxPendingFrames` is 3 on Linux, because the Intel UHD 620 and llvmpipe both report a
+swapchain `minImageCount` of 3. Four lines added, zero modified, Windows bit for bit unchanged.
+Escalated, approved, made, and registered in [TouchedFiles.md](TouchedFiles.md).
 
 **P6.7, `EngineApplication_Linux`, is next**, and it is the last thing between here and a
 running engine.
@@ -171,7 +171,7 @@ reproduces byte-identical output. The Windows build has not been run.
 | 3 - Resource Compiler | **done on Linux.** The 5 materials compile as of Phase 4's defect 2 fix; only the byte-comparison against Windows remains |
 | 4 - Shader Pipeline | **done on Linux** (criteria 6 and 10 need a Windows machine). DXC builds from source with three patches; all 46 shader stages compile, validate and link with layouts matching Direct3D, and `CompileShaders.sh` runs them |
 | 5 - Vulkan RHI | **all 16 groups written and merged to `main`, none run.** 3 `EE_UNIMPLEMENTED_FUNCTION` remain, down from 103, and none is a whole function: one is open question 7 and two are markers. **15 of the 16 groups are real, all unverified.** P5.13 is the exception, and P5.17 finishes it. The phase is not complete: criteria 5 to 10 all need a running engine, which is Phase 6 |
-| 6 - Windowing and Input | **started.** P6.1 and P6.2 done: SDL3 builds from source, and `LinuxApplication` opens and runs a window. P6.7 onwards not started. **The port renders on Linux**, blocked only on the escalated `MaxPendingFrames` line. imgui multi-viewport is verified on X11 and will not work on Wayland |
+| 6 - Windowing and Input | **started.** P6.1 to P6.6 done: SDL3 builds from source, `LinuxApplication` runs a window and an event loop, imgui and all three input devices work, and **the port renders on Linux** - twelve frames cleared and presented with no validation errors. P6.7 onwards not started. imgui multi-viewport is verified on X11 and will not work on Wayland |
 | 7 - Editor and Tools | not started |
 
 Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
@@ -194,8 +194,7 @@ open, not merged.
 **`linux/p6.5-gamepad`**, stacked on that. The gamepad device on SDL3. PR #46 open, not merged.
 
 **`linux/p6.6-swapchain-surface`**, stacked on that. The Vulkan surface, plus two defects found
-by running it. PR open, not merged, and **it needs the escalated `MaxPendingFrames` decision
-before the swapchain works**.
+by running it, and the approved `MaxPendingFrames` edit. PR #47 open, not merged.
 
 The Phase 5 stack is merged. All seventeen branches went in through PRs #24 to #41,
 ending with `p5.16-raytracing`, and `main` now carries every group. **Still nothing has run any of
@@ -259,7 +258,7 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
-### 2026-08-30 - P6.6 The Vulkan surface. **Esoterica renders on Linux**, and one line is escalated
+### 2026-08-30 - P6.6 The Vulkan surface. **Esoterica renders on Linux**
 
 **The port drew its first frame.** A window opens, `RHI::CreateContext` picks a device, a
 `VkSurfaceKHR` is made from the `SDL_Window*`, a swapchain is created, and twelve frames are
@@ -267,8 +266,9 @@ cleared and presented to the screen with **no Vulkan validation errors**. The sw
 on resize and tears down clean. Every Phase 5 RHI call in that path had never executed before
 today.
 
-**It needs one change to an upstream file that is not on the registry, and that is escalated
-below rather than made.** Everything else in this entry is done and committed.
+**It needed one change to an upstream file that was not on the registry.** That was escalated,
+approved and made: `RHI::MaxPendingFrames` is 3 on Linux. See below, and
+[TouchedFiles.md](TouchedFiles.md).
 
 #### Bring-up order, and what each step found
 
@@ -302,9 +302,9 @@ measured limit. In the order they appeared:
    allocated and nulls their handles as it is destroyed, so `DestroyCommandBuffer` skips a free
    that already happened and never reads a pool it no longer owns. Either order now works.
 
-#### **Escalation: `RHI::MaxPendingFrames` has to be 3 on Linux**
+#### `RHI::MaxPendingFrames` is 3 on Linux. **Escalated, approved, and made**
 
-**This is the one thing Phase 6 predicted by name, and it is real.** `RHI.h:31` sets
+**This is the one thing Phase 6 predicted by name, and it is real.** `RHI.h:31` set
 `MaxPendingFrames = 2`. Measured on this machine:
 
 | Surface | `minImageCount` | `maxImageCount` |
@@ -334,16 +334,17 @@ returns an index into it, so there is no way to absorb this in the backend.
 ```
 
 The existing line survives verbatim inside the `#else`, so **the Windows build is bit for bit
-unchanged** and stays double buffered. That is the shape Conventions rule 2 asks for. What makes
-it an escalation is only that `Code/Base/Render/RHI.h` is not in
-[TouchedFiles.md](TouchedFiles.md).
+unchanged** and stays double buffered. `git diff --stat upstream/main -- Code/Base/Render/RHI.h`
+reports `4 ++++` with no deletions. That is the shape Conventions rule 2 asks for. What made it an
+escalation is only that `Code/Base/Render/RHI.h` was not in
+[TouchedFiles.md](TouchedFiles.md); **it was escalated, approved, made, and is registered there
+now.**
 
-**Verified by making the change locally and running it: with it, everything above passes.**
-Without it, nothing after `CreateContext` runs at all. The change is reverted and not committed.
+**With it, everything above passes.** Without it, nothing after `CreateContext` runs at all.
 
-The one alternative that touches no upstream file is to give the backend three real swapchain
+The one alternative that touches no upstream file was to give the backend three real swapchain
 images, render into two of its own, and blit into the acquired image at present time. That is a
-full screen copy every frame to avoid three lines, and it is not recommended.
+full screen copy every frame to avoid four lines, and it was not taken.
 
 #### What actually ran
 
@@ -362,13 +363,13 @@ printed a symbolised backtrace and re-raised, which is what it was written to do
 - Files edited: `Code/Base/Platform/PlatformUtils_Linux.{h,cpp}` (the two surface functions),
   `Code/Base/Render/RHI_Vulkan.cpp` (the surface call, the BGRA candidates, the command pool
   teardown fix).
-- **Upstream files edited: none.** The one that is needed is escalated above.
+- **Upstream files edited: one.** `Code/Base/Render/RHI.h:31`, 4 added and 0 modified,
+  registered in [TouchedFiles.md](TouchedFiles.md). Escalated and approved before the edit.
 - Build: `Checks.py` passes. `ninja -k 0` fails on `Esoterica.Applications.Editor` and
   `Esoterica.Applications.ResourceServer` only, which is where it failed before.
-- Run: with the `MaxPendingFrames` change applied locally, a scratch application deriving from
-  `LinuxApplication` (not committed) reported every check passing, including that all three
-  swapchain images were acquired across twelve frames and that the swapchain survived a resize.
-  Without the change it halts in `CreateSwapchain`.
+- Run: a scratch application deriving from `LinuxApplication` (not committed) reported every
+  check passing, including that all three swapchain images were acquired across twelve frames and
+  that the swapchain survived a resize.
 - Acceptance criteria: **criterion 4 is met** - resize recreates the swapchain with no validation
   errors. **Criterion 8 is met for this path** - shutdown is clean with validation on. Criterion 1
   is not: there is still no `EsotericaEngine` binary, which is P6.7. Criterion 10 is untouched.
