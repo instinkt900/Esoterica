@@ -125,10 +125,10 @@ gamepad input all work, and **a `VkSurfaceKHR` made from the SDL window drives a
 cleared and presented twelve frames with no Vulkan validation errors**. `Base` has no Phase 6
 stubs left.
 
-**One line is escalated.** `RHI::MaxPendingFrames` has to be 3 on Linux, because the Intel UHD 620
-and llvmpipe both report a swapchain `minImageCount` of 3. `RHI.h` is an upstream file that
-[TouchedFiles.md](TouchedFiles.md) does not list, so the four-line edit - which leaves Windows
-bit for bit unchanged - is written up in [Progress.md](Progress.md) rather than made.
+**This carries the port's first real edit to an upstream file.** `RHI::MaxPendingFrames` is 3 on
+Linux, because the Intel UHD 620 and llvmpipe both report a swapchain `minImageCount` of 3. Four
+lines added, zero modified, and Windows is bit for bit unchanged. It was escalated, approved and
+registered in [TouchedFiles.md](TouchedFiles.md).
 
 P6.7, the engine entry point, is next, and it is the last thing between here and a running
 engine.
