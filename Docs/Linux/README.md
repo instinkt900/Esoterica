@@ -118,6 +118,11 @@ buffer, indexed by `DrawIndex`. That is
 [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
 and it comes **after** Phase 6, because it cannot be tested until the engine runs.
 
-**Phase 6, windowing and input, has started.** P6.1 is done: SDL3 `release-3.4.14` builds from
-source into `External/SDL3/` and `Esoterica.Base` links it. Nothing includes an SDL header yet.
-P6.2, `LinuxApplication`, is next.
+**Phase 6, windowing and input, has started.** P6.1 and P6.2 are done: SDL3 `release-3.4.14`
+builds from source into `External/SDL3/`, and `LinuxApplication` opens a window, takes resizes,
+persists its layout and shuts down cleanly. Nothing derives from it yet; that is P6.7. P6.3, the
+imgui platform backend, is next.
+
+**P6.6 is blocked on a question for a human.** `Platform::SetMainWindowHandle` holds an
+`SDL_Window*`, and `RHI_Vulkan.cpp` expects the same value to be a `VkSurfaceKHR`. See the P6.2
+entry in [Progress.md](Progress.md).
