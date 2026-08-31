@@ -5,6 +5,9 @@
 #include "EngineTools/Core/ToolsEmbeddedResources.inl"
 #include "EngineTools/Core/SystemDialogs.h"
 #include "Base/Platform/PlatformUtils_Win32.h"
+#if defined( __linux__ )
+#include "Base/Platform/PlatformUtils_Linux.h"
+#endif
 #include "Base/TypeSystem/ResourceInfo.h"
 #include "Base/Profiling.h"
 #include "EASTL/sort.h"
