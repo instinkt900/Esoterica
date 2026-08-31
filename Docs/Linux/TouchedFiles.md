@@ -116,6 +116,7 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 |---|---|---|---|
 | `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
 | `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`, with an `#else` including `<immintrin.h>`. The MSVC header is where `_tzcnt_u64` and `_lzcnt_u64` come from on Windows; clang has them in `<immintrin.h>`. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
+| `Code/Applications/Editor/EditorUI.h` | Add `#include "EngineTools/Core/EditorTool.h"`. The `IsToolOpen`, `GetTool` and `CreateTool` templates use `EE::EditorTool` as a complete type, and the header only forward-declares it. MSVC supplies the definition through another include; clang does not. 1 line added. | 7 | done |
 
 ## Phase 3 - Resource Compiler
 

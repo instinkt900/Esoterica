@@ -339,6 +339,30 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-08-31 - P7.0 The `EditorUI.h` include. The editor compiles
+
+`Code/Applications/Editor/EditorUI.h` uses `EE::EditorTool` as a complete type in the
+`IsToolOpen`, `GetTool` and `CreateTool` templates, and only forward-declares it. MSVC supplies
+the definition through another header; clang does not, so every use failed with `member access
+into incomplete type`.
+
+- **One line added**: `#include "EngineTools/Core/EditorTool.h"`, in the existing include block.
+  Registered in [TouchedFiles.md](TouchedFiles.md) under "Missing includes that MSVC supplies
+  transitively". Windows is unaffected - the header was already reaching the definition, just not
+  by name.
+- `EditorUI.cpp` and `EditorTool_GamePreviewer.cpp` now compile in every configuration.
+
+**What still fails, and it is the rest of the phase.** A whole-tree `ninja -k 0` fails in exactly
+two places now:
+
+- `Esoterica.Applications.Editor` does not link: `undefined reference to 'main'`. There is no
+  `EditorApplication_Linux` yet. That is P7.1.
+- `Esoterica.Applications.ResourceServer` does not compile: `shellapi.h` not found in
+  `ResourceServerApplication.h:13`, and `Platform::Win32::OpenInExplorer` at
+  `ResourceServerUI.cpp:799` and `:811`. That is P7.3.
+
+Nothing else in the tree fails.
+
 ### 2026-08-31 - The Shipping configuration links, for the first time
 
 **`Build/Linux_Shipping/Esoterica.Applications.Engine` exists.** It had never been produced: the
