@@ -10,12 +10,21 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
+> ### **The engine draws geometry on Linux.**
+>
+> Lit, shaded, textured triangles, on an RTX 3090, with host validation on and zero validation
+> messages. **The image is wrong** - the geometry is scrambled - and that is one remaining defect,
+> described in [Rendering: where we are](#rendering-where-we-are). Everything before it works.
+>
+> **The advice "do not chase rendering on this machine" applied to the first machine only.** A
+> second machine has a discrete NVIDIA GPU and rendering is exactly what should be chased there.
+> See [[dev-machines]] in the 2026-08-31 entries.
+
 **Phase 7 is in flight. P7.0 and P7.1 are done, and the editor runs.**
-`Esoterica.Applications.Editor` builds, links, launches and reaches the frame loop, where it hits
-the same GPU hang the engine does. **The ResourceServer is the only thing in the tree that still
-fails to build**, which makes P7.3 the next task. **Do not chase rendering on this machine** -
-see "What this machine still cannot do" below, and
-[Deferred on purpose](#deferred-on-purpose).
+`Esoterica.Applications.Editor` builds, links, launches and reaches the frame loop. **The
+ResourceServer is the only thing in the tree that still fails to build**, which makes P7.3 the
+next task. The editor has not been re-run since the rendering fixes landed, so what it shows now
+is unmeasured.
 
 **`Path::Split` asserted on every absolute Linux path**, and the editor could not initialise.
 Escalated, approved and fixed in P7.1: one character in
@@ -65,6 +74,10 @@ VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
   and the ResourceCompiler, not `EsotericaEngine` as the phase document originally wrote.
 
 ### Where it stops, and it depends on validation
+
+> **Superseded. The hang is fixed and the engine draws geometry.** It was
+> `vkCmdSetFragmentShadingRateKHR` on a transfer command buffer, not the dropped mesh draws. See
+> [Rendering: where we are](#rendering-where-we-are). The paragraph below is kept for the record.
 
 **The whole frame records and submits with zero validation errors, and the GPU hangs executing
 it.** `VK_ERROR_DEVICE_LOST`. **Deliberately not chased**: the mesh draws are dropped on this
@@ -268,6 +281,120 @@ Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
 `Applications/Editor` and `Applications/ResourceServer` do not, and are Phase 7.
 `Applications/BuildGenerator` is excluded permanently.
 Windows build status: **not run.** 69 upstream files carry `+494 -71` lines across Phases 0-3.
+
+## Rendering: where we are
+
+**Read this before touching anything in the render path.** It records what works, the one thing
+that does not, and - more valuable - the eight or so wrong turns that cost a whole session, so the
+next one does not repeat them.
+
+### What works
+
+Verified by running, on an RTX 3090, with `Enable_Host_Validation = true` and **zero validation
+messages** over 25 seconds:
+
+- The full frame records and submits. No `VK_ERROR_DEVICE_LOST`, no kernel `Xid`, no leaked device
+  memory.
+- Cluster culling runs on the GPU and is correct. Counter read back to the CPU:
+  `clusterVisible = (1,83) (1,84) (1,85) (1,86)`, count 15, dispatch 15x1x1.
+- Mesh shader draws execute: `vkCmdDrawMeshTasksIndirectCountEXT`, resolved indirect count 1,
+  `<612,1,1>` workgroups in a full frame.
+- Geometry rasterises with real materials and lighting.
+
+### What does not
+
+**The geometry is scrambled.** Recognisable shading and colour, wrong shapes - triangles fanning
+across the screen. One defect, somewhere in the vertex decode.
+
+The prime suspect is `StaticMeshVertex::GetPosition` in `MeshData.esh`. The struct is
+`uint16_t3 m_compressedPosition`, `int16_t3 m_compressedNormal`, two `float2` UVs and a packed
+colour: 32 bytes, and both `sizeof` on the C++ side and the SPIR-V `ArrayStride` agree on 32, so it
+is **not** a plain size mismatch. It decodes 16-bit values against a per-cluster anchor and a
+shared exponent, and this port has already been bitten once by 16-bit packing (DXC patch 0003).
+
+**`HLSL_STATIC_ASSERT` is compiled out on SPIR-V** (`RHI.esh:68`), because DXC's SPIR-V back end
+does not implement `_Static_assert`. Every shared-struct size check is therefore absent on Linux
+and present on Windows. That is worth remembering for any layout suspicion.
+
+### The two bugs that were fixed, and why they hid so well
+
+**Every triangle was back-face culled.** `frontFace` was inverted. The comment on that line said
+so itself - "the classic porting bug ... reasoned, not verified" - and the reasoning counted a
+double negative once too often.
+
+**Every triangle index read as zero.** `DefaultMeshShader.esh` declares `Buffer<uint>`, a typed
+buffer, but the cluster triangle buffer was created with a stride and **no format**, so the RHI
+could not tell `Buffer<T>` from `StructuredBuffer<T>` and wrote a storage-buffer descriptor where
+the shader wanted a uniform texel buffer. **A mutable descriptor heap swaps one for the other in
+silence** - no validation error, reads return 0. Direct3D 12 makes a structured SRV there and
+tolerates reading it as `Buffer<uint>`, which is why it never surfaced.
+
+Either bug alone produces a completely black frame, which is why fixing one at a time showed
+nothing and made both look like something else.
+
+### The one technique that cracked it
+
+**`vkCmdClearAttachments` inside the live render pass, immediately after the draw.** It turned the
+window green while the draw itself wrote nothing. A clear inside a render pass instance bypasses
+culling and fragment shading but shares the attachment, the render area, the image view and
+present - so it separates "the primitive was culled" from every other explanation in one step.
+
+Reach for that first next time. It would have saved most of a session.
+
+### Measurement traps that produced confidently wrong answers
+
+Each of these was believed, written down, and later disproved:
+
+| Trap | What it looked like | The truth |
+|---|---|---|
+| Fire-once diagnostics at startup | "No geometry is registered, cluster capacity is 1" | 1 is the empty baseline and the map had not finished loading. Measured late: **9286 clusters**. Always gate a render diagnostic on a frame counter |
+| RenderDoc's Mesh Output view | "Every vertex is identical, so the vertex fetch is broken" | That view is **index-driven**. Every index was 0, so it displayed vertex 0 over and over. The vertices were fine |
+| Reading a texture back with the wrong `oldLayout` | "The HDR target is all zeros" | A barrier with the wrong `oldLayout` makes the contents undefined. Pass the layout the resource is actually in |
+| De-duplicating the log by collapsing adjacent lines | "Descriptor heap slot 2 is double-allocated" | Every message is logged twice and the two copies interleave. Add a sequence number before drawing conclusions from ordering |
+| Testing one override at a time | "Not the indices, not the counts, not the culling" | Two independent bugs. Any single override still gave black. Combine overrides, or fix the cheapest confirmed bug first |
+| Overriding a shader with an early `return` | Engine asserts at startup | DXC strips resources nothing references, the reflected layout stops matching the root signature. Keep every declared resource live - multiply it by `1e-9` and add it to the result |
+
+### How to capture a frame
+
+RenderDoc is **not** packaged by Ubuntu; it is an official tarball, and `renderdoc_1.45` matches
+the `renderdoc_app.h` pin in `DownloadDependencies.sh`.
+
+```bash
+curl -L -o /tmp/renderdoc.tar.gz https://renderdoc.org/stable/1.45/renderdoc_1.45.tar.gz
+tar -xzf /tmp/renderdoc.tar.gz -C ~/
+~/renderdoc_1.45/bin/renderdoccmd vulkanlayer --register --user
+
+printf '[Render:RHI]\nEnable_Render_Doc = true\n' > Build/Linux_Release/Esoterica.ini
+LD_LIBRARY_PATH=~/renderdoc_1.45/lib ENABLE_VULKAN_RENDERDOC_CAPTURE=1 \
+  ./Build/Linux_Release/Esoterica.Applications.Engine -map data://demo/render/pbr/pbrdemo.map -packaged
+```
+
+The ini key is `Enable_Render_Doc`. Nothing in the engine calls `TriggerCapture`, so a capture
+needs the capture key or a temporary call to it.
+
+**A capture can be read without the GUI.** `renderdoccmd convert -f cap.rdc -o cap.zip.xml -c
+zip.xml` writes the whole chunk list as XML plus a sibling `.zip` holding every CPU-supplied
+buffer. That is how the push constants, the command signature, the pipeline state, the execution
+modes and the shader SPIR-V were all checked here. What it cannot give is anything the **GPU**
+wrote during the frame - those need a replay, or a readback.
+
+**Readback recipe**, which answered more questions than the capture did: create a
+`ResourceMemoryType::DeviceToHost` buffer with `PersistentMap`, `RHI::CmdCopyBuffer` into it, and
+read `m_pMappedAddress_WriteCombined` a few hundred frames later. For a texture, a temporary
+`vkCmdCopyImageToBuffer` plus the correct `oldLayout` works the same way.
+
+### Still open, beyond the scrambled geometry
+
+- **`storageInputOutput16` is absent on NVIDIA.** `DebugDraw.esf` passes a `uint16_t` handle from
+  the mesh stage to the pixel stage, so those modules fail to create. Two VUIDs guard it; survey
+  past them with `VK_LAYER_MESSAGE_ID_FILTER=0x6e224e9,0x715035dd`.
+- **The same query-as-enable-request pattern** used for the mesh shader features is still in place
+  for the shading rate, acceleration structure and ray tracing blocks. None has a cross-dependency
+  VUID today.
+- **`requirements_gamenetworkingsockets` does not version-check `protoc`.** A stale one earlier on
+  `PATH` is accepted and fails deep inside the build.
+
+---
 
 ## Deferred on purpose
 
@@ -521,6 +648,68 @@ two places now:
   `ResourceServerUI.cpp:799` and `:811`. That is P7.3.
 
 Nothing else in the tree fails.
+### 2026-08-31 - **Geometry renders.** Every triangle was culled, and every index read zero
+
+**The engine draws lit, shaded, textured geometry on Linux.** Host validation on, zero validation
+messages, 25 seconds. **The image is wrong** - the geometry is scrambled - and that is one further
+defect, not a return of any of the earlier ones. Full handoff in
+[Rendering: where we are](#rendering-where-we-are); this entry records the two fixes.
+
+**Two independent bugs. Either one alone produces a completely black frame**, which is why fixing
+either in isolation showed nothing and made both look like something else.
+
+#### The front face was inverted
+
+The comment on that line said what it was: "**the classic porting bug and it is reasoned, not
+verified**". The reasoning ran - Direct3D 12 sets `FrontCounterClockwise = ( m_frontFace ==
+ClockWise )`, which is already an inversion of the name; the Vulkan viewport reverses winding with
+its negative height; so inverting the inversion lands back on the name. That counted the double
+negative once too often. **Every triangle in the engine was back-face culled.**
+
+Measured this time, not reasoned. With the mapping inverted a fullscreen triangle rasterises with
+culling left on; with the old mapping the same draw wrote nothing while `vkCmdClearAttachments`
+inside the same render pass still wrote.
+
+The Y flip in `CmdSetViewport` is the other half of that pair and is unchanged.
+
+#### The cluster triangle buffer had no format
+
+`DefaultMeshShader.esh` declares `Buffer<uint>`, a **typed** buffer.
+`ResourceLoader_RenderMesh.cpp` created the buffer with a stride and no format, and the RHI decides:
+
+```cpp
+bool const isTypedBuffer = parameters.m_format != DataFormat::Undefined && !usageTypes.IsFlagSet( Raw );
+```
+
+So Vulkan wrote a **storage buffer** descriptor where the shader wanted a **uniform texel buffer**.
+**A mutable descriptor heap swaps one for the other in silence**: no validation error, and every
+read returns 0. Every triangle index was 0, so every primitive was degenerate.
+
+Direct3D 12 makes a structured SRV there and tolerates reading it as `Buffer<uint>`, which is why
+it was never noticed. The fix names the format, guarded to Linux, so **Windows is bit for bit
+unchanged**. It is an upstream engine file and is registered in
+[TouchedFiles.md](TouchedFiles.md).
+
+#### What this cost, and the lesson
+
+Most of a session went into geometry-level hypotheses that were all downstream of these two. The
+[measurement traps](#measurement-traps-that-produced-confidently-wrong-answers) table is the more
+useful half of this entry: a fire-once diagnostic at startup, RenderDoc's index-driven mesh view,
+a readback with the wrong `oldLayout`, and a log de-duplicated by adjacency each produced a
+confident, written-down, wrong conclusion.
+
+**The technique that actually worked** was `vkCmdClearAttachments` inside the live render pass right
+after the draw. It shares the attachment, image view, render area and present path with the draw,
+and bypasses culling and fragment shading - so it isolates "the primitive was culled" in one step.
+
+#### Files
+
+- Files changed: `Code/Base/Render/RHI_Vulkan.cpp` (the port owns it).
+- Upstream files edited: `Code/Engine/Render/ResourceLoaders/ResourceLoader_RenderMesh.cpp`, 8
+  added, 0 modified, Linux-guarded. Registered in [TouchedFiles.md](TouchedFiles.md).
+- Acceptance criteria: **Phase 6 criterion 2 is now half met** - a map renders, but not correctly.
+  Say which half, as that criterion asks.
+
 ### 2026-08-31 - A discrete NVIDIA GPU finds four defects, and the GPU hang is gone
 
 **The engine runs a continuous frame loop on an RTX 3090 and shuts down clean.** Forty seconds, no
