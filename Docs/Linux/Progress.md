@@ -55,8 +55,9 @@ VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
 
 ### Where it stops, and it depends on validation
 
-**With validation off**, at `CmdExecuteIndirect`. That is P5.17, and it is now the only thing
-between this port and a drawn frame.
+**Past `CmdExecuteIndirect`**, which P5.17 finished. The engine now stops in
+`CmdSetRenderTargets`, on a depth texture still in `VK_IMAGE_LAYOUT_UNDEFINED` - a texture layout
+defect in P5.6 and P5.9 territory. See the P5.17 entry.
 
 
 **With validation on**, in the same place, with **zero validation messages** on the way there
@@ -307,6 +308,93 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-31 - P5.17. **`CmdExecuteIndirect` executes, and the frame runs past it**
+
+**The last `EE_UNIMPLEMENTED_FUNCTION` that stopped the frame is gone.** The engine records the
+cluster culling indirect dispatch and runs on, into `RenderPass_GlobalEnvironmentMap`. Phase 5's
+16 groups have all now executed at least once except the four that need absent hardware.
+
+#### The shape that landed
+
+Close to the plan, with two corrections it did not anticipate.
+
+- **One push constant range**, the backend's only one, on every pipeline layout. It carries the
+  argument buffer address, the stride, a command index base and the two root block offsets.
+- **`CmdExecuteIndirect` fills it, then draws.** For a draw or a mesh dispatch that is one
+  indirect call and the shader adds `DrawIndex`. For an indirect **compute** dispatch it is a CPU
+  loop, one `vkCmdDispatchIndirect` per possible command with the index pushed each time, because
+  Vulkan has no indirect dispatch count at all and no `DrawIndex` in a compute stage.
+- **`RHI.esh` hides it.** `EE_DECLARE_INDIRECT_ROOT_CONSTANTS` and `_CBV` declare statics loaded
+  once at the top of the entry point. Each shader maps `RootConstants` and `RootCBV` onto them
+  with a two-line `#define`, so **no shader body changed**.
+- Everything is inside `#ifdef __spirv__`, with an `#else` that is the declaration that was there
+  before. The Direct3D 12 path is untouched.
+
+#### Correction 1: the `ConstantBuffer` declarations cannot be removed
+
+The plan said the declaration line was all that changed. **Removing it breaks the command
+signature.** `EngineShader.cpp` builds the indirect argument list by walking the root signature's
+`m_descriptorReflections`, which `CreateRootSignature` gets from SPIRV-Reflect over the module -
+and **DXC strips a resource nothing references**, measured. With the bindings gone the signature
+carries only its dispatch argument, its stride stops matching what the shader wrote, and
+`CmdSetRootConstants` indexes an empty vector. That is what the first attempt did.
+
+So `EE_DECLARE_INDIRECT_ROOT_CONSTANTS` still emits the `ConstantBuffer`, and the loader reads it
+in a branch guarded on `EE_IndirectRoot.m_stride == 0`. `m_stride` is a push constant, so nothing
+can prove the branch dead and the binding survives. It is also a real fallback: a shader declared
+this way and bound directly still reads the descriptor the engine wrote.
+
+#### Correction 2: `shaderDrawParameters`
+
+`DrawIndex` carries the `DrawParameters` capability. `VK_KHR_shader_draw_parameters` is core in
+Vulkan 1.1, which is what the plan checked, but **the feature bit still has to be enabled**. The
+seventh `CreateContext` gap of this class.
+
+#### Measured
+
+- **`CmdExecuteIndirect` has no `EE_UNIMPLEMENTED_FUNCTION` left.** `RHI_Vulkan.cpp` is down to
+  2 markers, both unreachable-caller markers, which is P5.17's first "done when".
+- `./CompileShaders.sh` exits 0.
+- **All 48 shader modules the engine creates pass `spirv-val --target-env vulkan1.3
+  --scalar-block-layout`.**
+- The two mesh shaders that the engine skips on this device were compiled directly with the
+  Reflector's own flags: both carry `BuiltIn DrawIndex` and both validate, apart from the stale
+  `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036` that Phase 4 and P6.8 already documented as a
+  false positive.
+- The engine now stops in `CmdSetRenderTargets`, on a depth texture still in
+  `VK_IMAGE_LAYOUT_UNDEFINED`. **A texture layout defect, not this task's**; see below.
+
+#### Not done, and it needs a decision
+
+**The indirect compute loop is only correct while `maxNumCommands` is 1**, which is what the
+pbrdemo scene happens to pass. Beyond that, a command past the GPU-written count reads a **stale
+argument slot**: `Renderer_ForwardShading.cpp:730` clears both counter buffers each frame and
+**nothing clears `m_ClusterCulling_ArgumentBuffer`**. Direct3D 12 never needed it to, because its
+count stops the walk there; Vulkan has no such count for a dispatch.
+
+**The fix is one line in the engine**, beside the two clears that are already there:
+
+```cpp
+RHI::CmdClearBuffer( pCommandBuffer_DepthPass, m_ClusterCulling_ArgumentBuffer.m_pBuffer, 0 );
+```
+
+An unwritten slot then dispatches `(0,0,0)`, a legal no-op. It is an upstream engine file and it
+costs Windows one extra clear of a small buffer per frame, so **it is escalated, not made.** The
+P5.17 plan predicted exactly this and said to escalate if the engine did not already clear.
+
+#### The next wall
+
+`CmdSetRenderTargets` reads `pVulkanTexture->m_currentLayout` for the depth attachment and finds
+`VK_IMAGE_LAYOUT_UNDEFINED`. `RenderPass_ForwardShading.cpp:121` binds a depth target the engine
+never barriered, because Direct3D 12 has no layouts to barrier into. **P5.6 and P5.9 territory**,
+and the first defect past the indirect draw.
+
+#### Files
+
+- Upstream shader files edited: five, all inside `#ifdef __spirv__`, all in
+  [TouchedFiles.md](TouchedFiles.md#shader-edits). **None is verified on Windows.**
+- `Code/Base/Render/RHI_Vulkan.cpp`, which the port owns.
 
 ### 2026-08-31 - `NoDescriptors` and the tessellation stages. **The frame is validation-clean to P5.17**
 
