@@ -63,6 +63,10 @@ namespace EE
         // Get the application icon
         inline SDL_Surface* GetIcon() const { return m_pWindowIcon; }
 
+        // Is the main window currently minimized? Replaces IsIconic. Defined out of line so
+        // that a subclass can skip its render work without taking SDL3 on its include path.
+        bool IsMainWindowMinimized() const;
+
         // Hit test for border less windows, in place of handling WM_NCHITTEST. Returns an
         // SDL_HitTestResult widened to int32_t, so that this header needs no SDL enum.
         //

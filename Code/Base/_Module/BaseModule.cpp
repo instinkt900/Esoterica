@@ -8,6 +8,8 @@
 
 #ifdef _WIN32
 #include "Base/Platform/PlatformUtils_Win32.h"
+#elif defined( __linux__ )
+#include "Base/Platform/PlatformUtils_Linux.h"
 #endif
 
 //-------------------------------------------------------------------------
@@ -17,7 +19,7 @@ namespace EE
     #if EE_DEVELOPMENT_TOOLS
     bool EnsureResourceServerIsRunning( FileSystem::Path const& resourceServerExecutablePath, String const& resourceServerNetworkAddress )
     {
-        #if _WIN32
+        #if _WIN32 || defined( __linux__ )
 
         // Don't start resource server when it's running on a remote PC
         if ( resourceServerNetworkAddress != "127.0.0.1" && resourceServerNetworkAddress != "localhost" )
