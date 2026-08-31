@@ -1441,6 +1441,21 @@ namespace EE::Render::RHI
         pVulkanContext->m_resourceHeapAllocator.Initialize( ( g_resourceHeapSize + 63 ) / 64 );
         pVulkanContext->m_samplerHeapAllocator.Initialize( ( g_samplerHeapSize + 63 ) / 64 );
 
+        // **Both heaps are a fixed size, so the allocator may not grow.**
+        //
+        // A Vulkan descriptor set is created once with a fixed descriptor count, exactly like the
+        // Direct3D 12 heap it mirrors, and RHI_Direct3D12.cpp:1250 turns growth off for that
+        // reason. This was missing here, so HandleAllocator kept its default growable behaviour:
+        // an allocation past the end would silently hand back a descriptor index the descriptor
+        // set does not contain, rather than the invalid handle the caller checks for, and
+        // TryShrink ran after every deallocation for no reason.
+        //
+        // **This is not what makes the frame black**; it was found looking for that and is a real
+        // divergence from the reference either way. Nothing in the pbrdemo scene comes close to
+        // the 65472-descriptor limit, so it changes no behaviour today.
+        pVulkanContext->m_resourceHeapAllocator.SetIsGrowable( false );
+        pVulkanContext->m_samplerHeapAllocator.SetIsGrowable( false );
+
         EE_LOG_MESSAGE( LogCategory::Render, "RHI/CreateContext", "ShaderResource descriptor pool size: %i", g_resourceHeapSize );
         EE_LOG_MESSAGE( LogCategory::Render, "RHI/CreateContext", "Sampler descriptor pool size: %i", g_samplerHeapSize );
 
