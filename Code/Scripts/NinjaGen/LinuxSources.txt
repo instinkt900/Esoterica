@@ -33,5 +33,5 @@ FileSystem/FileSystemWatcher_Linux.cpp
 Linux/EngineApplication_Linux.cpp
 
 [Esoterica.Applications.Editor]
-# Phase 7:
-#   Linux/EditorApplication_Linux.cpp
+# Phase 7 - P7.1. Mirrors Win32/EditorApplication_Win32.cpp.
+Linux/EditorApplication_Linux.cpp

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EngineTools/FileSystem/FileRegistry.h"
+#include "EngineTools/Core/EditorTool.h"
 #include "EngineTools/Core/ToolsContext.h"
 #include "EngineTools/Core/DialogManager.h"
 #include "Engine/ToolsUI/ToolsUI.h"

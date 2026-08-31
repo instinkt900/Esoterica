@@ -17,7 +17,7 @@ Status values: `planned` · `done` · `not needed` (checked, and confirmed unnec
 |---|---|
 | Files needing a 2-line `#elif` or `\|\|` addition | 7 |
 | Files needing a whole-body guard wrap (2 lines) | 0 - the one candidate is an exclusion instead |
-| Files needing a real edit | 5 |
+| Files needing a real edit | 6 |
 | Shader files edited for both platforms | 10 |
 | Files confirmed to need **no** change | 3 |
 | **New** files added (no upstream conflict possible) | ~40 |
@@ -42,6 +42,7 @@ nothing and guarantees conflicts.
 | `Code/Base/Memory/Memory.h` | Line 18: `#ifdef _WIN32` to `#if defined( _WIN32 ) \|\| defined( __linux__ )`. One line modified. The existing `#else` defines the stack allocators as empty, so `EE_STACK_ALLOC` and `EE_STACK_ARRAY_ALLOC` expanded to nothing. `alloca` works on both platforms; `Platform_Linux.h` supplies `<alloca.h>`. | 1 | done |
 | `Code/Base/Memory/Memory.cpp` | `#elif defined( __linux__ )` for `<sys/mman.h>`, and an `#else` inside each of `VirtualMemoryReserve`, `VirtualMemoryCommit` and `VirtualMemoryFree`. `mmap` with `PROT_NONE` and `MAP_NORESERVE` is the `MEM_RESERVE` equivalent, `mprotect` is `MEM_COMMIT`, `munmap` is `MEM_RELEASE`, and `__atomic_fetch_add` replaces `InterlockedAdd64`. Windows lines untouched. | 1 | done |
 | `Code/Base/Resource/ResourceTypeID.h` | Line 26: `template<eastl_size_t S>` to `template<int S>`. `eastl::fixed_string` declares its size parameter as `int`, so deducing an `eastl_size_t` from `TInlineString<9>` fails. MSVC accepts the narrowing during deduction. | 1 | done |
+| `Code/Base/FileSystem/FileSystemPath.cpp` | Line 256: `EE_ASSERT( currentDelimiterIdx > previousDelimiterIdx )` to `>=`. One line modified. `Path::Split` asserted that no two delimiters are adjacent and that the path does not start with one. Every absolute Linux path starts with `/`, so the first delimiter sits at index 0 and the assert fired on `0 > 0`. Relaxing it emits a leading empty segment, which is what the depth arithmetic already wants: the empty string plays the part `C:` plays on Windows, and both callers - `FileRegistry::FindDirectory` and `FindOrCreateDirectory` - index with `m_dataDirectoryPathDepth + 1`, derived from the same delimiter count by `GetDirectoryDepth`. Windows is unaffected: no Windows path the class accepts today has two delimiters in a row. Found by running the editor, which cannot initialise without it. | 7 | done |
 
 ## Shader edits
 
@@ -116,6 +117,7 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 |---|---|---|---|
 | `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
 | `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`, with an `#else` including `<immintrin.h>`. The MSVC header is where `_tzcnt_u64` and `_lzcnt_u64` come from on Windows; clang has them in `<immintrin.h>`. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
+| `Code/Applications/Editor/EditorUI.h` | Add `#include "EngineTools/Core/EditorTool.h"`. The `IsToolOpen`, `GetTool` and `CreateTool` templates use `EE::EditorTool` as a complete type, and the header only forward-declares it. MSVC supplies the definition through another include; clang does not. 1 line added. | 7 | done |
 
 ## Phase 3 - Resource Compiler
 

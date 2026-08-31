@@ -10,11 +10,16 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase 7 is the work to do next.** Start from
-[Phase7-EditorTools.md](Phases/Phase7-EditorTools.md); its "Start here" block names the three
-translation units that still fail and nothing else does. **Do not chase rendering on this
-machine** - see "What this machine still cannot do" below, and
+**Phase 7 is in flight. P7.0 and P7.1 are done, and the editor runs.**
+`Esoterica.Applications.Editor` builds, links, launches and reaches the frame loop, where it hits
+the same GPU hang the engine does. **The ResourceServer is the only thing in the tree that still
+fails to build**, which makes P7.3 the next task. **Do not chase rendering on this machine** -
+see "What this machine still cannot do" below, and
 [Deferred on purpose](#deferred-on-purpose).
+
+**`Path::Split` asserted on every absolute Linux path**, and the editor could not initialise.
+Escalated, approved and fixed in P7.1: one character in
+`Code/Base/FileSystem/FileSystemPath.cpp`, registered in [TouchedFiles.md](TouchedFiles.md).
 
 **Phase 6 is written and does not meet its goal. The engine reaches its frame loop.** Open question 8 is answered and the
 `VK_ERROR_UNKNOWN` is gone. `Shaders::Initialize` runs to the end, every compute and graphics
@@ -338,6 +343,97 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-31 - P7.1 `EditorApplication_Linux`. **The editor runs, and one assert blocked it**
+
+`Build/Linux_Release/Esoterica.Applications.Editor` builds, links, launches, initialises and
+reaches the frame loop. It stops where the engine stops: the GPU hang after a complete frame,
+which is [deferred on purpose](#deferred-on-purpose).
+
+- Files added: `Code/Applications/Editor/Linux/EditorApplication_Linux.{h,cpp}`, listed in
+  `LinuxSources.txt`. Upstream files edited: none.
+- It mirrors `Win32/EditorApplication_Win32.{h,cpp}` line for line. `EditorEngine` is copied
+  across unchanged. `EditorApplication` derives from `LinuxApplication`, keeps the `Borderless`
+  init option, and drops the two `EE_ENABLE_LPP` hooks.
+- **No new SDL3 include path.** The file only takes the address of the `SDL_Event`, and
+  `Application_Linux.h` forward declares the type, so `Toolchain.py`'s `LINUX_ONLY_SHEETS` is
+  unchanged. The Editor project still reaches SDL through `Esoterica.Base`.
+- **The borderless window needed no new code.** P6.2 already wrote `BorderlessWindowHitTest` and
+  wired `SDL_SetWindowHitTest`; the hit test calls `GetBorderlessTitleBarInfo`, which this class
+  now overrides. The phase document expected to iterate here and there was nothing to iterate on.
+- `EditorApplication::FatalError` calls `MessageDialog::Confirmation`, which on Linux is the
+  Phase 3 sibling that logs and returns `Cancel`. So a fatal error is logged and unsaved work is
+  not offered for saving. P7.2 fixes that when it replaces `SystemDialogs_Linux.cpp`.
+
+**A whole-tree `ninja -k 0` now fails in the ResourceServer and nowhere else.** The editor links
+in every configuration.
+
+#### What running it found: `Path::Split` asserts on every absolute Linux path
+
+**This is a port defect, not a hardware gap, and it stopped the editor during initialisation.**
+`Path::Split` (`Code/Base/FileSystem/FileSystemPath.cpp:256`) asserts
+`currentDelimiterIdx > previousDelimiterIdx`. On Windows the first delimiter of `C:\a\b\` is at
+index 2, so the assert holds. Every absolute Linux path starts with `/`, so the first delimiter
+is at index 0 and the assert fires immediately, on `0 > 0`.
+
+`FileRegistry::FindDirectory` and `FindOrCreateDirectory` are the only two callers, and both run
+while the resource browser builds its tree. So the editor cannot start.
+
+The fix is one character: `>` becomes `>=`. That emits a leading empty segment, which is exactly
+what the depth arithmetic already wants - the empty string plays the part `C:` plays on Windows,
+and both callers index with `m_dataDirectoryPathDepth + 1`, which `GetDirectoryDepth` derives
+from the same delimiter count. Windows is unaffected: no Windows path it accepts today produces
+two delimiters in a row.
+
+**`Code/Base/FileSystem/FileSystemPath.cpp` was not in [TouchedFiles.md](TouchedFiles.md), so it
+was escalated rather than changed. Approved, made, and registered there.** It is the second
+upstream file this port edits for a reason other than an include switch, after
+`RHI::MaxPendingFrames`.
+
+**With the assert relaxed the editor runs to the frame loop.** It loads compiled data, creates
+the Vulkan device, builds the tools UI, drops the mesh draws with the usual warning, and dies on
+`result == VK_SUCCESS` in the present path - the same wall the engine hits, on the same hardware,
+for the same reason.
+
+**Two things about running it that are not obvious:**
+
+- **`-packaged` is required, as it is for the engine.** Without it the editor tries to start
+  `EsotericaResourceServer.exe`, fails, and calls `FatalError`, which opens an
+  `SDL_ShowSimpleMessageBox`. That dialog is zenity, it is modal, and with no one to click it the
+  process hangs forever rather than exiting. A terminal `timeout` will not kill it without
+  `-s KILL`.
+- **Host validation has to be off to get past the shader modules.** With
+  `Enable_Host_Validation = true` the editor halts in `vkCreateShaderModule` on the
+  `storageInputOutput16` VUID, which is one of the four hardware gaps in "What this machine still
+  cannot do". ANV accepts the module with validation off.
+
+**Not checked, because they need a frame this machine cannot draw:** criteria 3, 5, 8, 9 and 10.
+The window is created, is borderless, and the hit test is installed; whether dragging and edge
+resizing feel right cannot be judged from a window that never presents.
+
+### 2026-08-31 - P7.0 The `EditorUI.h` include. The editor compiles
+
+`Code/Applications/Editor/EditorUI.h` uses `EE::EditorTool` as a complete type in the
+`IsToolOpen`, `GetTool` and `CreateTool` templates, and only forward-declares it. MSVC supplies
+the definition through another header; clang does not, so every use failed with `member access
+into incomplete type`.
+
+- **One line added**: `#include "EngineTools/Core/EditorTool.h"`, in the existing include block.
+  Registered in [TouchedFiles.md](TouchedFiles.md) under "Missing includes that MSVC supplies
+  transitively". Windows is unaffected - the header was already reaching the definition, just not
+  by name.
+- `EditorUI.cpp` and `EditorTool_GamePreviewer.cpp` now compile in every configuration.
+
+**What still fails, and it is the rest of the phase.** A whole-tree `ninja -k 0` fails in exactly
+two places now:
+
+- `Esoterica.Applications.Editor` does not link: `undefined reference to 'main'`. There is no
+  `EditorApplication_Linux` yet. That is P7.1.
+- `Esoterica.Applications.ResourceServer` does not compile: `shellapi.h` not found in
+  `ResourceServerApplication.h:13`, and `Platform::Win32::OpenInExplorer` at
+  `ResourceServerUI.cpp:799` and `:811`. That is P7.3.
+
+Nothing else in the tree fails.
 
 ### 2026-08-31 - The Shipping configuration links, for the first time
 
