@@ -463,6 +463,11 @@ namespace EE::Render::RHI
         if ( !available.m_vulkan12.shaderStorageImageArrayNonUniformIndexing )  { return "shaderStorageImageArrayNonUniformIndexing"; }
         if ( !available.m_vulkan12.shaderStorageBufferArrayNonUniformIndexing ) { return "shaderStorageBufferArrayNonUniformIndexing"; }
         if ( !available.m_vulkan12.shaderUniformTexelBufferArrayNonUniformIndexing ) { return "shaderUniformTexelBufferArrayNonUniformIndexing"; }
+        // The same RWBuffer<T> storage texel buffer the update-after-bind row above names. It is
+        // in the heap, so NonUniformResourceIndex reaches it too, and the shaders declare the
+        // StorageTexelBufferArrayNonUniformIndexing capability. The update-after-bind half of
+        // this pair was added when P5.5 missed it; this half was missed with it.
+        if ( !available.m_vulkan12.shaderStorageTexelBufferArrayNonUniformIndexing ) { return "shaderStorageTexelBufferArrayNonUniformIndexing"; }
         if ( !available.m_mutableDescriptorType.mutableDescriptorType ) { return "mutableDescriptorType"; }
 
         return nullptr;
@@ -1018,6 +1023,7 @@ namespace EE::Render::RHI
         enabledFeatures.m_vulkan12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
         enabledFeatures.m_vulkan12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
         enabledFeatures.m_vulkan12.shaderUniformTexelBufferArrayNonUniformIndexing = VK_TRUE;
+        enabledFeatures.m_vulkan12.shaderStorageTexelBufferArrayNonUniformIndexing = VK_TRUE;
 
         enabledFeatures.m_mutableDescriptorType.mutableDescriptorType = VK_TRUE;
 
@@ -1144,6 +1150,16 @@ namespace EE::Render::RHI
             // Both, because the engine's debug draw uses a task stage as well as a mesh one.
             if ( meshShaderFeatures.meshShader && meshShaderFeatures.taskShader )
             {
+                // The query above filled every bit this device supports, and the same struct is
+                // what vkCreateDevice reads, so anything left set is a feature being asked for.
+                // Ask for the two the engine uses and nothing else. multiviewMeshShader is the
+                // one that bites: it additionally requires VkPhysicalDeviceMultiviewFeatures
+                // ::multiview, which nothing here enables, and vkCreateDevice rejects that pair
+                // (VUID-VkPhysicalDeviceMeshShaderFeaturesEXT-multiviewMeshShader-07032).
+                meshShaderFeatures.multiviewMeshShader = VK_FALSE;
+                meshShaderFeatures.primitiveFragmentShadingRateMeshShader = VK_FALSE;
+                meshShaderFeatures.meshShaderQueries = VK_FALSE;
+
                 deviceExtensions.emplace_back( VK_EXT_MESH_SHADER_EXTENSION_NAME );
                 enabledFeatures.m_mutableDescriptorType.pNext = &meshShaderFeatures;
 
@@ -1730,6 +1746,11 @@ namespace EE::Render::RHI
         bool                                                m_hasDepthAttachment = false;
         bool                                                m_hasStencilAttachment = false;
 
+        // Copied from the pool this buffer was allocated from. FlushBarriers clamps every stage
+        // mask to it, and CreateCommandBuffer uses it to decide whether the buffer gets the
+        // fragment shading rate entry point at all.
+        VkQueueFlags                                        m_queueFlags = 0;
+
         // Barriers are batched exactly as Direct3D 12 batches them at
         // RHI_Direct3D12.cpp:1516, and flushed at the same points. Vulkan gains a second reason
         // to batch: one vkCmdPipelineBarrier2 for the whole set lets the driver see them
@@ -1804,6 +1825,14 @@ namespace EE::Render::RHI
     struct VulkanCommandPool final : CommandPool
     {
         VkCommandPool                                       m_commandPool = VK_NULL_HANDLE;
+
+        // **Which queue family this pool draws from decides what may be recorded into it.** A
+        // transfer-only or compute-only family rejects any graphics command and any barrier
+        // naming a graphics stage, and a discrete GPU really does expose such families: the RTX
+        // 3090 puts transfer on family 1, which has VK_QUEUE_TRANSFER_BIT and nothing else.
+        // Direct3D 12 needs no equivalent - a copy command list has no method for the state in
+        // question, and D3D12_BARRIER_SYNC_* carries no queue restriction at all.
+        VkQueueFlags                                        m_queueFlags = 0;
 
         // **Destroying a VkCommandPool frees every buffer allocated from it**, and a later
         // vkFreeCommandBuffers on the dead pool is a validation error. Direct3D 12 has no such
@@ -2752,6 +2781,12 @@ namespace EE::Render::RHI
         VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( parameters.m_pQueue );
         VulkanCommandPool* pVulkanCommandPool = pVulkanContext->CreateObject<VulkanCommandPool>();
 
+        uint32_t numQueueFamilies = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties( pVulkanContext->m_physicalDevice, &numQueueFamilies, nullptr );
+        TVector<VkQueueFamilyProperties> queueFamilyProperties( numQueueFamilies );
+        vkGetPhysicalDeviceQueueFamilyProperties( pVulkanContext->m_physicalDevice, &numQueueFamilies, queueFamilyProperties.data() );
+        pVulkanCommandPool->m_queueFlags = queueFamilyProperties[pVulkanQueue->m_queueFamilyIndex].queueFlags;
+
         VkCommandPoolCreateInfo commandPoolCreateInfo = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
         commandPoolCreateInfo.queueFamilyIndex = pVulkanQueue->m_queueFamilyIndex;
         // RESET_COMMAND_BUFFER_BIT, so that vkBeginCommandBuffer implicitly resets the one
@@ -2834,7 +2869,16 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasks = pVulkanContext->m_vkCmdDrawMeshTasks;
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirect = pVulkanContext->m_vkCmdDrawMeshTasksIndirect;
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirectCount = pVulkanContext->m_vkCmdDrawMeshTasksIndirectCount;
-        pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate = pVulkanContext->m_vkCmdSetFragmentShadingRate;
+        // The pool's family decides what this buffer may record. FlushBarriers needs it for
+        // every barrier; the shading rate entry point is gated on it right below.
+        pVulkanCommandBuffer->m_queueFlags = pVulkanCommandPool->m_queueFlags;
+
+        // Only on a graphics pool. vkCmdSetFragmentShadingRateKHR requires VK_QUEUE_GRAPHICS_BIT,
+        // and BeginCommandBuffer sets the full rate on every buffer it is given a pointer for.
+        // Leaving it null on a transfer or compute pool is what stops that, and it also makes
+        // CmdSetShadingRate's assert name the caller if a pass ever asks for a rate on one.
+        pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate = ( pVulkanCommandPool->m_queueFlags & VK_QUEUE_GRAPHICS_BIT )
+                                                             ? pVulkanContext->m_vkCmdSetFragmentShadingRate : nullptr;
         pVulkanCommandBuffer->m_vkCmdBuildAccelerationStructures = pVulkanContext->m_vkCmdBuildAccelerationStructures;
         pVulkanCommandBuffer->m_vkCmdTraceRays = pVulkanContext->m_vkCmdTraceRays;
         pVulkanCommandBuffer->m_vkCmdTraceRaysIndirect2 = pVulkanContext->m_vkCmdTraceRaysIndirect2;
@@ -4316,6 +4360,63 @@ namespace EE::Render::RHI
 
     // Everything recorded since the last flush, in one call. Called by every draw, every
     // dispatch and EndCommandBuffer, which are the points Direct3D 12 flushes at too.
+    // **A Vulkan barrier may only name stages its queue family can run, and a Direct3D 12 one
+    // has no such rule.** The engine transitions a resource on whichever queue happens to own
+    // the work, describing the stage that will read it next, and that reader is often on another
+    // queue: Renderer_ForwardShading barriers a buffer for a vertex shader from the compute
+    // queue. D3D12_BARRIER_SYNC_* carries no queue restriction, so upstream is not wrong.
+    //
+    // Only a device with dedicated families notices. The RTX 3090 has a transfer-only family and
+    // a compute-only one, and vkCmdPipelineBarrier2 rejects a graphics stage on either
+    // (VUID-vkCmdPipelineBarrier2-dstStageMask-03850). An Intel iGPU exposing one universal
+    // family accepts everything, which is why this went unseen until Phase 6 ran on an NVIDIA
+    // part.
+    //
+    // **Dropping the stages the queue cannot run is correct, not a workaround.** A barrier
+    // orders work within one queue. Making a compute write visible to a vertex shader on the
+    // graphics queue is a queue-to-queue dependency, and that is already carried by the timeline
+    // semaphore every submit waits on - see RecordQueueOrderingWait and the P5.3 entry. The
+    // barrier's job here is only the part that happens on this queue.
+    static VkPipelineStageFlags2 ClampStagesToQueue( VkPipelineStageFlags2 stageMask, VkQueueFlags queueFlags )
+    {
+        // ALL_COMMANDS is defined as every stage the queue supports, so it is legal everywhere
+        // and needs no clamping. VulkanPipelineStage returns it alone for PipelineStage::All.
+        if ( stageMask == VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT ) { return stageMask; }
+
+        if ( !( queueFlags & VK_QUEUE_GRAPHICS_BIT ) )
+        {
+            stageMask &= ~( VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT |
+                            VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                            VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT |
+                            VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT );
+        }
+
+        if ( !( queueFlags & VK_QUEUE_COMPUTE_BIT ) )
+        {
+            stageMask &= ~( VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                            VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR );
+        }
+
+        // DRAW_INDIRECT covers the indirect argument fetch for a draw and for a dispatch, so
+        // either capability keeps it.
+        if ( !( queueFlags & ( VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT ) ) )
+        {
+            stageMask &= ~VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        }
+
+        // **Every named stage was dropped, and the access mask is still set.** An access bit
+        // requires a compatible stage, so NONE here would be a fresh validation error rather
+        // than a fix. ALL_COMMANDS satisfies any access mask and is legal on this queue, and
+        // over-synchronising one barrier is the safe direction. It joins the ALL_COMMANDS sites
+        // in Docs/Linux/Progress.md.
+        if ( stageMask == VK_PIPELINE_STAGE_2_NONE ) { return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; }
+
+        return stageMask;
+    }
+
     static void FlushBarriers( VulkanCommandBuffer* pVulkanCommandBuffer )
     {
         if ( pVulkanCommandBuffer->m_globalBarriers.empty() &&
@@ -4323,6 +4424,29 @@ namespace EE::Render::RHI
              pVulkanCommandBuffer->m_imageBarriers.empty() )
         {
             return;
+        }
+
+        // Clamped here rather than in VulkanPipelineStage, because that function is handed no
+        // command buffer and so cannot know the queue. This is the one place every barrier
+        // passes through on its way to the device.
+        VkQueueFlags const queueFlags = pVulkanCommandBuffer->m_queueFlags;
+
+        for ( VkMemoryBarrier2& barrier : pVulkanCommandBuffer->m_globalBarriers )
+        {
+            barrier.srcStageMask = ClampStagesToQueue( barrier.srcStageMask, queueFlags );
+            barrier.dstStageMask = ClampStagesToQueue( barrier.dstStageMask, queueFlags );
+        }
+
+        for ( VkBufferMemoryBarrier2& barrier : pVulkanCommandBuffer->m_bufferBarriers )
+        {
+            barrier.srcStageMask = ClampStagesToQueue( barrier.srcStageMask, queueFlags );
+            barrier.dstStageMask = ClampStagesToQueue( barrier.dstStageMask, queueFlags );
+        }
+
+        for ( VkImageMemoryBarrier2& barrier : pVulkanCommandBuffer->m_imageBarriers )
+        {
+            barrier.srcStageMask = ClampStagesToQueue( barrier.srcStageMask, queueFlags );
+            barrier.dstStageMask = ClampStagesToQueue( barrier.dstStageMask, queueFlags );
         }
 
         // **A barrier may not run inside dynamic rendering.** This is the one place that has to
