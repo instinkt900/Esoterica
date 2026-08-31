@@ -344,6 +344,90 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-08-31 - Set 0 for an indirect draw, and RenderDoc attaches at last
+
+**Every material draw in the frame was invalid, and the frame is now clean.** Thirty seconds with
+host validation on and zero validation messages, where it previously halted on the first mesh
+draw. **The window is still black** - see "What is still unknown" below, which is now a short list.
+
+#### An indirect draw's set 0 is declared but never written
+
+A Direct3D 12 command signature writes the root constants and binds the root CBV per command as
+the GPU walks the argument buffer, so the engine binds neither on the CPU.
+`RenderPass_ForwardShading.cpp` calls `CmdSetRootConstants` with a **null** pointer, which the
+reference treats as a no-op, and never calls `CmdSetRootParameter` for the root CBV at all.
+
+P5.17 moved those reads into the shader, but `RHI.esh` keeps the `ConstantBuffer` declarations on
+purpose - they are the direct-bind fallback, and they preserve the reflected layout the command
+signature is built from - so the shader **statically** uses set 0, and Vulkan requires a
+statically used binding to be bound whether or not the shader reaches it.
+
+`CmdExecuteIndirect` now fills only the bindings the engine left alone, tracked by a mask on the
+command buffer and pointed at the root constant ring. **A direct draw gets no such help**, so a
+genuinely forgotten binding still fails validation there rather than quietly reading the ring.
+Nothing consumes ring space: reserving a block per indirect draw would burn a 64KB ring that
+asserts rather than wraps, for bytes nothing reads.
+
+**This never fired on the first machine** because `CmdSetPipeline` dropped every mesh draw there
+for want of hardware, so `CmdSetRootConstants` returned early and no draw was ever recorded.
+
+#### RenderDoc could never connect on Linux
+
+`CreateContext` probed for the library with `dlopen( RTLD_NOLOAD )` **before** `vkCreateInstance`.
+On Windows RenderDoc injects itself before `main`, so `GetModuleHandleA` finds it at any point. On
+Linux it arrives as an implicit Vulkan layer and the loader only maps `librenderdoc.so` while
+servicing `vkCreateInstance`, so the probe always missed and `m_pRenderDocAPI` stayed null.
+
+The probe now runs just after `vkCreateInstance`. **The ini key is `Enable_Render_Doc`** under
+`[Render:RHI]`, and the run also needs `ENABLE_VULKAN_RENDERDOC_CAPTURE=1` and RenderDoc's layer
+registered (`renderdoccmd vulkanlayer --register --user`). RenderDoc is not packaged by Ubuntu; it
+is an official tarball, and `renderdoc_1.45` matches the `renderdoc_app.h` pin already in
+`DownloadDependencies.sh`.
+
+#### What was ruled out, and how
+
+Everything up to the mesh shader is confirmed working. Recorded so the next session does not
+repeat any of it:
+
+| Checked | Result |
+|---|---|
+| Map, entities, components | Loads. 3 entities, components register on task threads |
+| Geometry registered | **9286 clusters** in the `ComplexSurfacePBR` bucket |
+| Cluster culling on the GPU | **Works.** Read the counter back to the CPU: `drawCounters = 1 0 0 0 0 0`, which is right for 9286 clusters packed into one command |
+| Command signature | `hasRoot=1 stride=64 rcOffset=0 cbvOffset=32 drawArgOffset=40`, and the offsets match the `DrawArgument` layout |
+| Indirect push constants | Captured and decoded: address non-zero, `stride=64`, `commandIndexBase=0`, offsets as above |
+| The draw call itself | `vkCmdDrawMeshTasksIndirectCountEXT`, `offset=40`, count buffer bound, `maxDrawCount=1`, `stride=64` |
+| `DrawIndex` in mesh shaders | Present in **all 13** captured `MS_main` modules, with the `DrawParameters` capability |
+| Presentation | Works. Forcing every colour attachment to clear magenta turns the window magenta |
+
+**Measure late, not early.** Several of these look wrong if sampled in the first frames, because
+the map is still loading: cluster capacity reads 1, which is the empty baseline, and no components
+have registered yet. A fire-once diagnostic at startup gives the wrong answer to every question
+above. That cost a session.
+
+#### What is still unknown
+
+The mesh shader runs, with a correct command and correct push constants, and no geometry appears.
+What it reads out of the argument buffer at runtime, and whether it emits any primitives, needs a
+**replay**, not a capture: the argument buffer is GPU-written mid-frame, so its contents are not in
+the capture's initial state. `renderdoccmd convert -c zip.xml` gives the full chunk list and every
+CPU-supplied buffer as XML, which is how the table above was checked, but not GPU-written
+contents.
+
+Open in `qrenderdoc` and look at the first `ComplexSurfacePBR DepthOnly` draw: the mesh output, and
+the contents of the draw argument buffer at that point.
+
+**A caution for whoever does that.** Forcing `MS_main` to emit a fixed triangle to isolate the
+draw path does not work naively: an early `return` makes the resource declarations dead code, DXC
+strips them, the reflected layout stops matching the root signature, and the engine asserts at
+startup. `RHI.esh` documents that hazard. Keep every declared resource referenced.
+
+#### Files
+
+- Files changed: `Code/Base/Render/RHI_Vulkan.cpp`. The port owns it.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- Acceptance criteria: no change. Phase 6 criterion 2 is still not met.
+
 ### 2026-08-31 - P7.1 `EditorApplication_Linux`. **The editor runs, and one assert blocked it**
 
 `Build/Linux_Release/Esoterica.Applications.Editor` builds, links, launches, initialises and
