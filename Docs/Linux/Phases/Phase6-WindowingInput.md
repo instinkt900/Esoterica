@@ -319,8 +319,9 @@ no frame loop.
    at all**; see P6.3.
 7. **Not met and not testable here.** A tiling window manager ignores client sizing, and this
    machine has no HiDPI display.
-8. **Met for the RHI path.** Shutdown is clean with validation on. `ReportDeviceMemoryLeaks` has
-   not been exercised through the engine.
+8. **Met.** Shutdown is clean with validation on, and `ReportDeviceMemoryLeaks` reports "No
+   device memory leaked" through the engine - measured on the Shipping binary once it linked,
+   2026-08-31.
 9. **Not met.** No frame loop in the engine yet.
 10. **Met throughout.** One upstream file is edited in this whole phase,
     `Code/Base/Render/RHI.h:31`, and it adds a Linux-only branch that leaves the Windows value
