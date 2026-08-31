@@ -64,6 +64,14 @@ namespace EE::Render
                 RHI::BufferParameters clusterTriangleBufferParameters = {};
                 clusterTriangleBufferParameters.m_bufferSize = geo.GetNumClusterTriangles() * sizeof( uint32_t );
                 clusterTriangleBufferParameters.m_bufferStride = sizeof( uint32_t );
+                #if defined( __linux__ )
+                // DefaultMeshShader.esh declares this as Buffer<uint>, a *typed* buffer. Direct3D
+                // 12 tolerates reading a structured SRV that way, so no format was ever needed;
+                // Vulkan does not, because a uniform texel buffer and a storage buffer are
+                // different descriptor types and the mutable heap swaps one for the other in
+                // silence. Naming the format makes the descriptor match the declaration.
+                clusterTriangleBufferParameters.m_format = RHI::DataFormat::R32_UInt;
+                #endif
                 clusterTriangleBufferParameters.m_debugName.sprintf( "Triangles %s", resourceID.c_str() );
 
                 pMeshResource->m_clusterBuffersState.emplace_back
