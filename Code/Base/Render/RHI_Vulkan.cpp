@@ -3946,11 +3946,16 @@ namespace EE::Render::RHI
         // mesh stage bits go in with it, but only when VK_EXT_mesh_shader is enabled: naming a
         // stage from a disabled extension is a validation error. Without them, a barrier before
         // a mesh draw would not cover the stage that reads the result.
+        //
+        // **No tessellation or geometry stage**, for the same reason and permanently. Both are
+        // optional Vulkan features, CreateContext enables neither, and naming a stage from a
+        // disabled feature is the same validation error. The engine has no tessellation or
+        // geometry shader for a barrier to wait on either - no .esf declares one - so there is
+        // nothing to synchronise. If one ever appears, the feature and these bits go in
+        // together. Direct3D 12 has nothing to switch on, so the reference lists them freely.
         if ( pipelineStages.IsFlagSet( PipelineStage::NonPixelShader ) )
         {
-            stageMask |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
-                         VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT | VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            stageMask |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
             if ( g_meshShaderEnabled )
             {
@@ -3960,9 +3965,8 @@ namespace EE::Render::RHI
         if ( pipelineStages.IsFlagSet( PipelineStage::ComputeShader ) ) { stageMask |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT; }
         if ( pipelineStages.IsFlagSet( PipelineStage::AllShader ) )
         {
-            stageMask |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
-                         VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT | VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
-                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            stageMask |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
             if ( g_meshShaderEnabled )
             {
@@ -5250,21 +5254,41 @@ namespace EE::Render::RHI
         // Direct3D 12 needs almost none of this: a buffer is a buffer and the view decides what
         // it is. Vulkan wants the usage up front, so it is derived from the descriptor types
         // the caller asked for, plus the transfer bits, which every buffer here can need.
+        //
+        // **Read from `parameters`, not from `descriptorTypes`.** `BufferFlags::NoDescriptors`
+        // means "give this buffer no descriptor heap slot", which is all it can mean on
+        // Direct3D 12, where usage is not a property of a buffer at all. On Vulkan it is, and a
+        // push descriptor write still needs the matching usage bit on the buffer it names. The
+        // two are separate questions, and reading the cleared copy here answered the second with
+        // the first.
+        //
+        // P5.4's root constant ring is the case that proved it. It is created with
+        // ConstantBuffer and NoDescriptors together, correctly - CmdSetRootConstants pushes a
+        // descriptor at an offset into it rather than giving it a slot - and it came out without
+        // VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, which made every one of those writes invalid.
+        // Found by running with validation once the engine reached its frame loop.
+        //
+        // The descriptor heap work below reads `descriptorTypes` and tests NoDescriptors on its
+        // own, so it is unaffected, and so is the copy stored on the buffer: a NoDescriptors
+        // buffer still has no handle to hand out.
+        TBitFlags<DescriptorTypeFlags> const usageTypes = parameters.m_descriptorTypes;
 
         VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::ConstantBuffer ) )         { usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT; }
-        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::IndexBuffer ) )            { usage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT; }
-        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::IndirectArgumentBuffer ) ) { usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT; }
+        if ( usageTypes.IsFlagSet( DescriptorTypeFlags::ConstantBuffer ) )         { usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT; }
+        if ( usageTypes.IsFlagSet( DescriptorTypeFlags::IndexBuffer ) )            { usage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT; }
+        if ( usageTypes.IsFlagSet( DescriptorTypeFlags::IndirectArgumentBuffer ) ) { usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT; }
 
-        bool const isTypedBuffer = parameters.m_format != DataFormat::Undefined && !descriptorTypes.IsFlagSet( DescriptorTypeFlags::Raw );
+        // Only ever read where a view is made, which NoDescriptors already excludes, so the two
+        // sources agree everywhere this is used.
+        bool const isTypedBuffer = parameters.m_format != DataFormat::Undefined && !usageTypes.IsFlagSet( DescriptorTypeFlags::Raw );
 
-        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::Buffer ) )
+        if ( usageTypes.IsFlagSet( DescriptorTypeFlags::Buffer ) )
         {
             usage |= isTypedBuffer ? VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         }
 
-        if ( descriptorTypes.IsFlagSet( DescriptorTypeFlags::RWBuffer ) )
+        if ( usageTypes.IsFlagSet( DescriptorTypeFlags::RWBuffer ) )
         {
             usage |= isTypedBuffer ? VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         }

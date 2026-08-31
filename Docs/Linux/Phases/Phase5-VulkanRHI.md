@@ -32,12 +32,14 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 > | P6.7 | `CreateContext` never enabled the 16-bit shader feature bits. Direct3D 12 has nothing to mirror. |
 > | P6.8 | `CreateContext` missed five more shader feature bits, and mesh modules were created on devices without `VK_EXT_mesh_shader`. |
 > | OQ8 | `CreateContext` never enabled `depthClamp`, which every non-clipping pass turns on. |
+> | P5.4 | `BufferFlags::NoDescriptors` stripped a buffer's usage flags along with its heap slot. |
+> | P5.9 | Barriers named tessellation and geometry stages the device never enabled. |
 >
 > **The `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines` was not P5.7's.** It was
 > `Buffer<uint64_t>`, now [answered](../Progress.md#open-questions) as `Buffer<uint2>`.
-> **The engine now reaches `CmdExecuteIndirect`, so P5.17 is the only wall left before a drawn
-> frame.** With validation on it stops earlier, on a P5.4 defect: `BufferFlags::NoDescriptors`
-> strips the root constant ring's `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT` along with its heap slot.
+> **The engine reaches `CmdExecuteIndirect` with host validation on and zero validation
+> messages, so P5.17 is the only wall left before a drawn frame** - and it can be written
+> against a live engine.
 >
 > **Criteria 5 to 10 are now checkable.** They were not before.
 
@@ -263,8 +265,10 @@ Read the decision entry in [Progress.md](../Progress.md) before starting; it rec
 alternatives were rejected.
 
 **Phase 6 bring-up has happened and the door is open.** The engine builds every shader and
-every pipeline, enters its frame loop, and halts in `CmdExecuteIndirect` - this refusal.
-**P5.17 is now testable, and it is the last thing between this port and a drawn frame.**
+every pipeline, enters its frame loop, and halts in `CmdExecuteIndirect` - this refusal. It gets
+there with **host validation on and no validation messages**, so P5.17 can be written against a
+live engine with validation watching. **It is the last thing between this port and a drawn
+frame.**
 
 **Do this after Phase 6 bring-up, not before.** Nothing here can be tested until the engine runs,
 and this is a change to shaders that Windows also compiles. Bring the window, the input and the

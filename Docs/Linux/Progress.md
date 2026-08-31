@@ -58,10 +58,10 @@ VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
 **With validation off**, at `CmdExecuteIndirect`. That is P5.17, and it is now the only thing
 between this port and a drawn frame.
 
-**With validation on**, earlier, at `vkCmdPushDescriptorSetKHR`: P5.4's root constant ring is
-created with `BufferFlags::NoDescriptors`, and `CreateBuffer` reads that as "not a constant
-buffer either", so it loses `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT`. **A small fix**, diagnosed in
-the open question 8 entry.
+
+**With validation on**, in the same place, with **zero validation messages** on the way there
+once the four hardware-gap VUIDs are filtered. That was not true a day ago; see the
+`NoDescriptors` entry.
 
 ### What this machine still cannot do
 
@@ -307,6 +307,67 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-31 - `NoDescriptors` and the tessellation stages. **The frame is validation-clean to P5.17**
+
+**The engine now runs from startup to `CmdExecuteIndirect` with host validation on and zero
+validation messages.** Two defects stood between it and that, both found by running with
+validation once open question 8 let the engine reach its frame loop.
+
+#### `BufferFlags::NoDescriptors` answered two questions with one flag
+
+`CreateBuffer` cleared `descriptorTypes` outright when it saw `NoDescriptors`
+(`RHI_Vulkan.cpp:5243`) and then derived the `VkBufferUsageFlags` from the cleared copy.
+
+**Those are separate questions.** On Direct3D 12, "no descriptors" can only mean "no descriptor
+heap slot", because usage is not a property of a buffer there at all. On Vulkan it is, and a push
+descriptor write still needs the matching usage bit on the buffer it names.
+
+**P5.4's root constant ring is what proved it.** `CreateCommandBuffer` builds it at `:2772` with
+`m_descriptorTypes = ConstantBuffer` and `NoDescriptors` together, which is correct -
+`CmdSetRootConstants` pushes a descriptor at an offset into it rather than giving it a slot - and
+it came out without `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT`. Every root constant push in the engine
+was invalid.
+
+The fix reads the usage from `parameters.m_descriptorTypes`. Nothing else moves: the descriptor
+heap work below tests `NoDescriptors` on its own already, and the copy stored on the buffer stays
+cleared, so a `NoDescriptors` buffer still has no handle to hand out - which the P5.16 comment at
+`:4711` depends on.
+
+**A second buffer was quietly wrong the same way.** The raytracing top level structure buffer
+(`:4719`) is `RWBuffer` plus `NoDescriptors`, and was losing `VK_BUFFER_USAGE_STORAGE_BUFFER_BIT`.
+Never observed, because nothing calls it. Fixed by the same change.
+
+#### The barrier named stages the device does not have
+
+`VulkanPipelineStage` put `TESSELLATION_CONTROL`, `TESSELLATION_EVALUATION` and `GEOMETRY` into
+the mask for `PipelineStage::NonPixelShader` and `PipelineStage::AllShader`. All three are
+optional Vulkan features, `CreateContext` enables none of them, and naming a stage from a
+disabled feature is a validation error - the same rule the mesh stage bits two lines above were
+already gated on.
+
+**The bits are gone rather than gated.** The engine has no tessellation or geometry shader for a
+barrier to wait on - no `.esf` declares one - so there is nothing to synchronise and a flag that
+is always false would be scaffolding. If a stage ever appears, the feature and the bits go in
+together. Direct3D 12 has nothing to switch on, so the reference lists them freely.
+
+#### Measured
+
+With host validation on and `VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true`:
+
+- **Zero validation messages** from startup to `CmdExecuteIndirect`, with the four hardware-gap
+  VUIDs filtered. Every RHI call the frame makes before the indirect draw is now clean.
+- **One** without that filter, and it is the first hardware gap, `storageInputOutput16`.
+- The engine stops in the same place with validation on as with it off, which was the point.
+
+**`CmdExecuteIndirect` is now the only thing left.** That is
+[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
+and it can be written against a live engine with validation on.
+
+#### Files
+
+- Files changed: `Code/Base/Render/RHI_Vulkan.cpp`. The port owns it.
+- Upstream files edited: **none.**
 
 ### 2026-08-31 - Open question 8 answered: `Buffer<uint2>`. **The engine reaches its frame loop**
 
