@@ -99,6 +99,19 @@ namespace EE::Render::RHI
     static constexpr uint32_t g_resourceHeapSize = 64 * 1023;
     static constexpr uint32_t g_samplerHeapSize = 2048;
 
+    // P5.17's indirect root block. **The only push constant range the backend uses.**
+    // CmdExecuteIndirect fills it and the shader reads its own command out of the argument
+    // buffer with it, because no Vulkan indirect draw rebinds a descriptor per command. The
+    // layout is mirrored in RHI.esh as EE_IndirectRootPushConstants; the two must agree.
+    struct IndirectRootPushConstants
+    {
+        uint64_t                                            m_argumentBufferAddress = 0;
+        uint32_t                                            m_stride = 0;
+        uint32_t                                            m_commandIndexBase = 0;
+        uint32_t                                            m_rootConstantOffset = 0;
+        uint32_t                                            m_rootCbvOffset = 0;
+    };
+
     static constexpr uint32_t g_rootParameterSet = 0;
     static constexpr uint32_t g_heapSet = 1;
     static constexpr uint32_t g_resourceHeapBinding = 0;
@@ -1052,6 +1065,12 @@ namespace EE::Render::RHI
         // bit again.
         enabledFeatures.m_vulkan12.shaderBufferInt64Atomics = availableFeatures.m_vulkan12.shaderBufferInt64Atomics;
         enabledFeatures.m_vulkan12.shaderSharedInt64Atomics = availableFeatures.m_vulkan12.shaderSharedInt64Atomics;
+
+        // P5.17's indirect draws read their own command index out of the DrawIndex builtin, which
+        // carries the DrawParameters capability. VK_KHR_shader_draw_parameters is core in Vulkan
+        // 1.1, but the feature bit still has to be asked for. Direct3D 12 has no equivalent: a
+        // command signature pushes the data instead, so nothing there needs an index.
+        enabledFeatures.m_vulkan11.shaderDrawParameters = availableFeatures.m_vulkan11.shaderDrawParameters;
 
         // CreateGraphicsOrMeshPipeline sets depthClampEnable from the engine's rasterizer state,
         // which is the inverse of Direct3D 12's DepthClipEnable and so is on for any pass that
@@ -3559,8 +3578,14 @@ namespace EE::Render::RHI
         uint32_t                                            m_drawArgumentOffset = 0;
 
         // True when the signature also sets root constants or binds root descriptors per
-        // command, which is the part Vulkan has no command for. See the note above.
+        // command. Direct3D 12 has a command for that and Vulkan does not, so P5.17 turns the
+        // push into a pull: the shader reads its own command out of the argument buffer.
         bool                                                m_hasRootArguments = false;
+
+        // Byte offsets of the two root blocks inside one command, for the shader to index with.
+        // -1 when the signature has no such block. CmdExecuteIndirect pushes both.
+        int32_t                                             m_rootConstantOffset = -1;
+        int32_t                                             m_rootCbvOffset = -1;
     };
 
     void CmdExecuteIndirect( CommandBuffer* pCommandBuffer, CommandSignature const* pCommandSignature, uint32_t maxNumCommands, Buffer const* pIndirectBuffer, uint64_t indirectBufferOffset, Buffer const* pCounterBuffer, uint64_t counterBufferOffset )
@@ -3573,11 +3598,29 @@ namespace EE::Render::RHI
         EE_ASSERT( ( pVulkanIndirectBuffer->m_stride % IndirectCommandAlignment ) == 0 );
         EE_ASSERT( pVulkanIndirectBuffer->m_stride == pVulkanCommandSignature->m_stride );
 
+        // **The push becomes a pull.** A Direct3D 12 command signature writes root constants and
+        // binds a root CBV as the GPU walks the argument buffer, and no Vulkan indirect draw
+        // rebinds anything per command. So the shader reads its own command instead, and this is
+        // where it is told where to look. See P5.17 and the open question 7 decision entry.
+        //
+        // Pushed for every signature, not only the ones with root arguments, so a shader built
+        // from an indirect-capable declaration reads a defined block either way.
         if ( pVulkanCommandSignature->m_hasRootArguments )
         {
-            EE_LOG_ERROR( LogCategory::Render, "RHI/CmdExecuteIndirect", "This command signature sets root constants or binds root descriptors per command, which no Vulkan indirect draw can do. See the note above CmdExecuteIndirect in RHI_Vulkan.cpp." );
-            EE_UNIMPLEMENTED_FUNCTION();
-            return;
+            EE_ASSERT( pVulkanIndirectBuffer->m_deviceAddress != 0 );
+
+            VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanCommandBuffer->m_pBoundRootSignature );
+            EE_ASSERT( pVulkanRootSignature != nullptr );
+
+            IndirectRootPushConstants pushConstants = {};
+            pushConstants.m_argumentBufferAddress = pVulkanIndirectBuffer->m_deviceAddress + indirectBufferOffset;
+            pushConstants.m_stride = pVulkanCommandSignature->m_stride;
+            pushConstants.m_commandIndexBase = 0;
+            pushConstants.m_rootConstantOffset = uint32_t( Math::Max( pVulkanCommandSignature->m_rootConstantOffset, 0 ) );
+            pushConstants.m_rootCbvOffset = uint32_t( Math::Max( pVulkanCommandSignature->m_rootCbvOffset, 0 ) );
+
+            vkCmdPushConstants( pVulkanCommandBuffer->m_commandBuffer, pVulkanRootSignature->m_pipelineLayout,
+                                VK_SHADER_STAGE_ALL, 0, sizeof( pushConstants ), &pushConstants );
         }
 
         // **A draw stays inside the render pass and a dispatch may not.** This corrects what
@@ -3634,12 +3677,44 @@ namespace EE::Render::RHI
             case IndirectArgumentType::DispatchCompute:
             {
                 // **vkCmdDispatchIndirect runs exactly one dispatch and reads no count buffer**,
-                // where Direct3D 12 runs min( maxNumCommands, count ) of them. A caller that
-                // passes either would silently get one dispatch, so both are refused instead.
-                EE_ASSERT( pVulkanCounterBuffer == nullptr );
-                EE_ASSERT( maxNumCommands == 1 );
+                // where Direct3D 12 runs min( maxNumCommands, count ) of them. There is no
+                // indirect dispatch count in Vulkan at all, so the count is spent on the CPU:
+                // one dispatch is recorded per possible command, each at its own offset, each
+                // with its own command index pushed. A draw gets its index from DrawIndex; a
+                // dispatch has no such builtin, which is why this is the loop and the draws are
+                // not. See P5.17.
+                //
+                // **A command past the GPU-written count reads a stale slot**, because nothing
+                // resets the argument buffer between frames - Direct3D 12 never needed it to,
+                // since the count stops it there. The engine clears the buffer for us; see the
+                // clear next to the counter clears in Renderer_ForwardShading.cpp. An unwritten
+                // slot is then a (0,0,0) dispatch, which is a legal no-op.
+                if ( maxNumCommands <= 1 )
+                {
+                    vkCmdDispatchIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset );
+                }
+                else
+                {
+                    VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanCommandBuffer->m_pBoundRootSignature );
+                    EE_ASSERT( pVulkanRootSignature != nullptr );
 
-                vkCmdDispatchIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset );
+                    IndirectRootPushConstants pushConstants = {};
+                    pushConstants.m_argumentBufferAddress = pVulkanIndirectBuffer->m_deviceAddress + indirectBufferOffset;
+                    pushConstants.m_stride = pVulkanCommandSignature->m_stride;
+                    pushConstants.m_rootConstantOffset = uint32_t( Math::Max( pVulkanCommandSignature->m_rootConstantOffset, 0 ) );
+                    pushConstants.m_rootCbvOffset = uint32_t( Math::Max( pVulkanCommandSignature->m_rootCbvOffset, 0 ) );
+
+                    for ( uint32_t commandIndex = 0; commandIndex < maxNumCommands; ++commandIndex )
+                    {
+                        pushConstants.m_commandIndexBase = commandIndex;
+
+                        vkCmdPushConstants( pVulkanCommandBuffer->m_commandBuffer, pVulkanRootSignature->m_pipelineLayout,
+                                            VK_SHADER_STAGE_ALL, 0, sizeof( pushConstants ), &pushConstants );
+
+                        vkCmdDispatchIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer,
+                                               argumentOffset + VkDeviceSize( commandIndex ) * pVulkanCommandSignature->m_stride );
+                    }
+                }
             }
             break;
 
@@ -4610,19 +4685,40 @@ namespace EE::Render::RHI
                 {
                     EE_ASSERT( argument.m_byteSize == sizeof( uint32_t ) * pDescriptorReflection->m_numConstants );
 
+                    // P5.17: the shader reads this block itself, so where it sits is no longer
+                    // just bookkeeping for the stride.
+                    EE_ASSERT( pVulkanCommandSignature->m_rootConstantOffset == -1 );
+                    pVulkanCommandSignature->m_rootConstantOffset = int32_t( commandStride );
+
                     commandStride += sizeof( uint32_t ) * pDescriptorReflection->m_numConstants;
                     pVulkanCommandSignature->m_hasRootArguments = true;
                 }
                 break;
 
                 case IndirectArgumentType::ConstantBufferView:
+                {
+                    // A GPU virtual address. RendererTypes.esh:268 calls it "device address of
+                    // this CBV, workaround for lack of HLSL buffer address support". A Vulkan
+                    // descriptor takes a buffer and an offset rather than an address, so there is
+                    // nothing to turn one back into - but a shader can dereference the address
+                    // directly, which is what P5.17's EE_DECLARE_INDIRECT_ROOT_CBV does.
+                    EE_ASSERT( pVulkanCommandSignature->m_rootCbvOffset == -1 );
+                    pVulkanCommandSignature->m_rootCbvOffset = int32_t( commandStride );
+
+                    commandStride += 8;
+                    pVulkanCommandSignature->m_hasRootArguments = true;
+                }
+                break;
+
                 case IndirectArgumentType::ShaderResourceView:
                 case IndirectArgumentType::UnorderedAccessView:
                 {
-                    // A GPU virtual address. RendererTypes.esh:268 calls it "device address of
-                    // this CBV, workaround for lack of HLSL buffer address support", and a
-                    // Vulkan descriptor takes a buffer and an offset rather than an address, so
-                    // there is nothing to turn one back into.
+                    // Also an address, and **P5.17 does not read these**. Only RootConstants and
+                    // RootCBV have indirect declarations, because only those two appear in the
+                    // shaders an indirect draw reaches. DebugDrawMesh.esf declares a RootSRV as
+                    // well, so a signature can carry one; its stride still has to be counted,
+                    // and a shader that actually indexed it would need a third declaration
+                    // macro. Nothing does yet.
                     commandStride += 8;
                     pVulkanCommandSignature->m_hasRootArguments = true;
                 }
@@ -6595,10 +6691,14 @@ namespace EE::Render::RHI
             if ( descriptorReflection.m_descriptorTypeFlags.IsFlagSet( DescriptorTypeFlags::RootConstant ) )
             {
                 // Not Vulkan push constants. RHI.esh declares the block through
-                // EE_DECLARE_ROOT_CONSTANTS as a ConstantBuffer, so DXC emits a uniform buffer,
-                // and making it a push constant block needs [[vk::push_constant]] in RHI.esh,
-                // which Phase 4 rule 4 forbids. CmdSetRootConstants copies into a per-frame
-                // upload ring and pushes a descriptor at it. See the binding model entry.
+                // EE_DECLARE_ROOT_CONSTANTS as a ConstantBuffer, so DXC emits a uniform buffer.
+                // CmdSetRootConstants copies into a per-frame upload ring and pushes a descriptor
+                // at it. See the binding model entry.
+                //
+                // P5.17 does now add a [[vk::push_constant]] block to RHI.esh, which Phase 4's
+                // criterion 4 ruled out at the time and which was escalated and approved for
+                // P5.17. It carries the indirect argument address, not this block: a directly
+                // bound root constant still arrives as a descriptor write.
                 descriptorReflection.m_numConstants = constantSizes[shaderResourceIndex] / sizeof( uint32_t );
                 binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             }
@@ -6661,9 +6761,22 @@ namespace EE::Render::RHI
         // Both sets, in order. Set 1 is the same layout for every pipeline in the engine.
         VkDescriptorSetLayout const setLayouts[2] = { pVulkanRootSignature->m_rootParameterSetLayout, pVulkanContext->m_heapSetLayout };
 
+        // **The one push constant range, on every pipeline layout.** P5.17's indirect draws read
+        // their own command through it. It is given to every layout rather than only to the
+        // signatures that need it, because a root signature does not know whether a command
+        // signature will later be built from it, and 24 bytes of a guaranteed 128 costs nothing.
+        // Nothing else in the backend uses push constants: CmdSetRootConstants and
+        // CmdSetRootParameter are push descriptor writes into set 0.
+        VkPushConstantRange indirectPushConstantRange = {};
+        indirectPushConstantRange.stageFlags = VK_SHADER_STAGE_ALL;
+        indirectPushConstantRange.offset = 0;
+        indirectPushConstantRange.size = sizeof( IndirectRootPushConstants );
+
         VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         pipelineLayoutCreateInfo.setLayoutCount = 2;
         pipelineLayoutCreateInfo.pSetLayouts = setLayouts;
+        pipelineLayoutCreateInfo.pushConstantRangeCount = 1;
+        pipelineLayoutCreateInfo.pPushConstantRanges = &indirectPushConstantRange;
 
         result = vkCreatePipelineLayout( pVulkanContext->m_device, &pipelineLayoutCreateInfo, nullptr, &pVulkanRootSignature->m_pipelineLayout );
         EE_ASSERT( result == VK_SUCCESS );
