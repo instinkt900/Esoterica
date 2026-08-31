@@ -30,9 +30,11 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 > | P6.6 | `DestroySwapchain` freed command buffers after their pool. P5.4 assumed the other order. |
 > | P6.6 | `MaxPendingFrames` was 2 and Linux drivers report a `minImageCount` of 3. |
 > | P6.7 | `CreateContext` never enabled the 16-bit shader feature bits. Direct3D 12 has nothing to mirror. |
+> | P6.8 | `CreateContext` missed five more shader feature bits, and mesh modules were created on devices without `VK_EXT_mesh_shader`. |
 >
-> **The current wall is `vkCreateComputePipelines` returning `VK_ERROR_UNKNOWN` for
-> `InstancePickingResolve`.** That is P5.7's first execution. P6.8 owns chasing it.
+> **The `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines` was not P5.7's.** P6.8 traced it to
+> `Buffer<uint64_t>`, which DXC emits as a 64-bit sampled image and Mesa refuses to lower. It is
+> [open question 8](../Progress.md#open-questions), and it needs a shader change.
 >
 > **Criteria 5 to 10 are now checkable.** They were not before.
 
@@ -257,9 +259,11 @@ approach is decided: the shader reads its own command's root data out of the arg
 Read the decision entry in [Progress.md](../Progress.md) before starting; it records why the two
 alternatives were rejected.
 
-**Phase 6 bring-up has now happened, so the door is open.** The engine binary exists and starts.
-It does not reach a frame loop yet - `vkCreateComputePipelines` fails earlier, see P6.8 - so
-**P5.17 is still not testable, and still comes after P6.8.**
+**Phase 6 bring-up has now happened, and the door is still shut.** The engine binary exists,
+starts and creates every shader. It reaches no frame loop, because
+[open question 8](../Progress.md#open-questions) stops the first pipeline that reads a
+`Buffer<uint64_t>` - and one is in every material pixel shader. **P5.17 is still not testable,
+and open question 8 now comes before it.**
 
 **Do this after Phase 6 bring-up, not before.** Nothing here can be tested until the engine runs,
 and this is a change to shaders that Windows also compiles. Bring the window, the input and the
@@ -444,8 +448,9 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    validation errors. See the 2026-08-28 decision entry and the P6.6 entry in
    [Progress.md](../Progress.md).
 5. The full engine frame produces no Vulkan validation errors and no warnings. **Blocked on
-   P6.8**, which owns the `VK_ERROR_UNKNOWN` compute pipeline. Note that the Ubuntu 24.04
-   validation layers cannot be used on the mesh shader stages; see the P6.7 entry.
+   [open question 8](../Progress.md#open-questions)**, and on hardware; see the P6.8 entry. The
+   Ubuntu 24.04 validation layers are usable after all, with
+   `VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true`.
 6. All 26 shaders from Phase 4 load and execute.
 7. The full engine frame renders correctly, checked against Windows Direct3D 12 screenshots of
    the same scene. List any visual difference, with an explanation.

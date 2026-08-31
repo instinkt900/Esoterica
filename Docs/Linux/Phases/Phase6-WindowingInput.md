@@ -6,12 +6,14 @@
 opens a window and renders. The binary is named after its project, like the Reflector and the
 ResourceCompiler, and `-packaged` is needed until the ResourceServer builds in Phase 7.
 
-> ## Status: P6.1 to P6.7 are done. **P6.8 is next and is all that is left.**
+> ## Status: P6.1 to P6.8 are written. **The phase does not meet its goal, and cannot on this
+> machine.**
 >
-> The engine binary builds, links and starts, and a scratch application has cleared and presented
-> frames through the Vulkan backend with no validation errors. **What P6.8 inherits is written
-> up in its own section below.** Read the P6.x entries in [Progress.md](../Progress.md) first;
-> they carry every measurement and every decision this phase made.
+> The engine binary builds, links, starts and creates every shader in the engine. It renders no
+> map. Two things stop it: **open question 8**, which needs a shader change and stops any Vulkan
+> device, and **four hardware gaps** that no GPU in the development machine clears. Both are
+> measured in the P6.8 entry in [Progress.md](../Progress.md). Read the P6.x entries there
+> first; they carry every measurement and every decision this phase made.
 
 **Prerequisites:** Phase 5, all sixteen groups, which are written and merged. **This phase is
 where the Vulkan backend ran for the first time**, and doing so found four real defects in it.
@@ -24,7 +26,9 @@ which is deliberately scheduled after this phase.** Every engine render pass dra
 line. The window, the input, the swapchain and imgui all come up without it. **Geometry does
 not.** Read acceptance criterion 2 with that in mind.
 
-**Two things now sit in front of P5.17**, and P6.8 hits them first. See "P6.8 - First light".
+**And [open question 8](../Progress.md#open-questions) now sits in front of P5.17.** The
+engine's `Buffer<uint64_t>` has no Vulkan spelling, and one sits in every material pixel shader.
+P6.8 found it and escalated it. Nothing in the frame runs until it is answered.
 
 **Rough cost:** 3-4 weeks.
 
@@ -233,34 +237,48 @@ mirror.
 **Run it with `-packaged`** until the ResourceServer builds in Phase 7. Without it the engine
 uses the network resource provider and tries to start `EsotericaResourceServer.exe`.
 
-### P6.8 - First light — **next, and all that is left**
+### P6.8 - First light — **done as far as this machine allows, and the goal is not met**
 
-**Read this before running anything.**
+**Read the P6.8 entry in [Progress.md](../Progress.md) before running anything.** It carries the
+command line, the measurements and the two things that stop the engine.
 
-#### The Ubuntu 24.04 validation layers cannot be used on the mesh shader stages
+#### Run it with validation on
 
-`vulkan-validationlayers 1.4.309.0` bundles a SPIRV-Tools old enough to carry the bug
-[Phase 4](Phase4-ShaderPipeline.md) already documented, so `vkCreateShaderModule` rejects the
-`DebugDraw` mesh shader on `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036`. **The SPIR-V is
-correct and the driver accepts it** - measured with `VK_LOADER_LAYERS_DISABLE='*'`, where the
-engine walks straight past. This is the second time a stale SPIRV-Tools has misled this port; the
-first cost Phase 4 a session.
+```bash
+printf '[Render:RHI]\nEnable_Host_Validation = true\n' > Build/Linux_Release/Esoterica.ini
 
-**Either disable the layers or install a newer set, and record which.** Losing validation
-entirely is a bad trade for the rest of this task, so a newer layer package is worth the effort.
+VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
+  ./Build/Linux_Release/Esoterica.Applications.Engine \
+  -map data://demo/render/pbr/pbrdemo.map -packaged
+```
 
-#### The real wall: `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines`
+**The stale SPIRV-Tools is no longer a reason to lose validation.**
+`VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true` turns off only the layer's bundled
+spirv-val, which is where the bug lives, and leaves every other check on. Ubuntu 24.04's
+`vulkan-validationlayers 1.4.309.0` needs no replacing. `VK_LAYER_MESSAGE_ID_FILTER` takes a
+comma separated VUID list, which is how several walls were surveyed in one run.
 
-`InstancePickingResolve`, the first compute shader after the mesh stages, fails to create a
-pipeline. `VK_ERROR_UNKNOWN` from Intel's ANV usually means the driver refused to compile the
-module. **Treat it as a P5.7 defect until shown otherwise** - it is that group's first execution.
+#### What P6.8 fixed
 
-#### Also worth knowing
+- **The `VK_ERROR_UNKNOWN` is explained**, and it was not P5.7's. Mesa's `spirv_to_nir` refuses
+  the 64-bit sampled image DXC emits for `Buffer<uint64_t>`. It is **open question 8**.
+- **Five feature defects in `CreateContext`**, the same class as P6.7's 16-bit finding:
+  `storageInputOutput16`, `shaderInt64`, `shaderSubgroupExtendedTypes`,
+  `shaderDemoteToHelperInvocation` and the two 64-bit atomic bits. Two optional extensions are
+  now asked for as well.
+- **Startup survives a device without mesh shaders.** `CreateShader` skips a Task or Mesh module,
+  `CreatePipeline` returns an empty mesh pipeline, and `CmdSetPipeline` is where the halt moved.
+  `Shaders::Initialize` now runs to the end instead of stopping at shader 14 of 28.
 
-**`Shaders::Initialize` creates every shader module at startup**, mesh shaders included,
-whatever the device supports. Not fatal - the driver accepts the module - but the engine pays
-for shaders it can never dispatch, and a stricter driver would stop there. P5.14 recorded that
-neither real GPU in this machine has `VK_EXT_mesh_shader`.
+#### What is left, and what it needs
+
+**Open question 8 first.** Nothing in the frame runs until `Buffer<uint64_t>` has a Vulkan
+spelling. It sits in front of P5.17, not behind it.
+
+**Then a machine with a current GPU.** Four gaps are hardware, and none of the three GPUs here
+clears them: `VK_KHR_fragment_shader_barycentric`, `shaderSharedInt64Atomics`,
+`storageInputOutput16` and `VK_EXT_mesh_shader`. The MX250 is refused earlier still, for
+`VK_EXT_mutable_descriptor_type`. The table in the P6.8 entry has the detail.
 
 **Then the long tail this task was always about.** Window resize and swapchain recreation, DPI
 scaling, input focus, cursor clipping, fullscreen transitions, and imgui viewport behaviour under
@@ -277,13 +295,17 @@ A tiling window manager also makes acceptance criterion 7 and the client-driven 
 
 ## Acceptance criteria
 
-Status as of P6.7. **Anything not marked met is P6.8's.**
+Status as of P6.8, which is the end of the phase's work on this machine. **Only criterion 1 and
+the bookkeeping ones are met.** P6.8 got the engine further without moving any of the rest: it
+now creates every shader in the engine instead of stopping at the fourteenth, and still reaches
+no frame loop.
 
 1. **Met.** `Build/Linux_Release/Esoterica.Applications.Engine` builds and links.
-2. **Not met.** It opens a window but does not render a map; see P6.8. **This one is split.** The
+2. **Not met.** It opens a window but does not render a map. **This one is split.** The
    window, the swapchain, the frame loop and imgui are this phase's and are done. **Geometry
-   needs [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
-   and mesh shader hardware, which this machine does not have. Say which half you met.
+   needs [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)
+   and [open question 8](../Progress.md#open-questions)**, and mesh shader hardware, which this
+   machine does not have. Say which half you met.
 3. **Half met.** Keyboard, mouse and gamepad are implemented and each is tested at the device
    level. "Works for camera control" needs a running engine.
 4. **Met for the RHI, not for the application.** Resize recreates the swapchain with no
@@ -328,6 +350,10 @@ Phase 7 needs three things from this phase:
 - **`ImguiPlatform_Linux.cpp` keeps upstream's formatting in its vendored region**, deliberately,
   so it can be re-synced with a `diff`. That breaks Conventions rule 8 and a banner in the file
   says why. Do not reformat it, and do not copy the pattern to files that are not vendored.
+
+Phase 7 also inherits **the way to run with validation on**, which P6.8 found:
+`VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true`, plus a hand-written `[Render:RHI]` section
+in the configuration's `Esoterica.ini`. Both are in the P6.8 entry.
 
 Everything this phase learned is in the P6.x entries in [Progress.md](../Progress.md), with the
 measurements. The short version of what is worth knowing before touching any of it:
