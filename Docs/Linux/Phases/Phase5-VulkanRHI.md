@@ -376,7 +376,7 @@ capture says the empty dispatches cost something.
 
 **It was escalated, and the human approved it on 2026-08-29.** `RHI.esh` and the four shader files
 above are upstream files, and Conventions rule 3 and the escalation list in
-[/AGENTS.md](../../AGENTS.md) both say to stop before editing one that
+[/AGENTS.md](../../../AGENTS.md) both say to stop before editing one that
 [TouchedFiles.md](../TouchedFiles.md) does not list. They are on the registry now, marked
 `planned`, with the guard shape that keeps each diff small. **Keep every edit inside an
 `#ifdef __spirv__`.** A change that alters the Direct3D path has broken the prime directive, not
