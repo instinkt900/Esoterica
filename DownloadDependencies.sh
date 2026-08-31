@@ -104,6 +104,12 @@ requirements_renderdoc()
 
 # X11 and Wayland are both forced on in the SDL3 build, so both sets of headers are required
 # rather than optional. A missing one silently drops that video backend otherwise.
+#
+# The X11 entries mirror SDL's own CheckX11 macro, which calls SDL_missing_dependency for nine
+# extensions and stops the configure on the first one it cannot find. Seven of the nine arrive
+# with libx11-dev, libxext-dev, libxrandr-dev, libxi-dev, libxcursor-dev and libxfixes-dev.
+# XSCRNSAVER and XTEST arrive with nothing else, so they are the two a fresh machine trips over,
+# one CMake run at a time.
 requirements_sdl3()
 {
     require_command cmake cmake
@@ -115,6 +121,8 @@ requirements_sdl3()
     require_pkg_config xi libxi-dev
     require_pkg_config xcursor libxcursor-dev
     require_pkg_config xfixes libxfixes-dev
+    require_pkg_config xscrnsaver libxss-dev
+    require_pkg_config xtst libxtst-dev
     require_pkg_config wayland-client libwayland-dev
     require_pkg_config wayland-egl libwayland-dev
     require_pkg_config wayland-scanner wayland-protocols
