@@ -7431,18 +7431,21 @@ namespace EE::Render::RHI
             case CullMode::Front:   rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT; break;
         }
 
-        // **Winding, and the Y flip.** This is the classic porting bug and it is reasoned, not
-        // verified.
+        // **Winding, and the Y flip. This was the classic porting bug, and it was wrong.**
         //
-        // The Direct3D 12 backend sets FrontCounterClockwise = ( m_frontFace == ClockWise ),
-        // which is already an inversion of the name. The Vulkan viewport inverts Y with a
-        // negative height, which Phase 4 recorded and P5.8 applies, and that reverses triangle
-        // winding in framebuffer space. Inverting the inversion lands back on the name, so
-        // ClockWise means VK_FRONT_FACE_CLOCKWISE here.
+        // The old reasoning ran: the Direct3D 12 backend sets FrontCounterClockwise =
+        // ( m_frontFace == ClockWise ), which is already an inversion of the name; the Vulkan
+        // viewport inverts Y with a negative height, which reverses winding in framebuffer
+        // space; so inverting the inversion lands back on the name. That double negative was
+        // counted once too often, and **every triangle in the engine was back-face culled**.
         //
-        // If back faces turn out inside out, this line and the sign of the viewport height in
-        // CmdSetViewport are the only two places that can be responsible.
-        rasterizationState.frontFace = ( parameters.m_rasterizerState.m_frontFace == FrontFace::ClockWise ) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        // Measured, not reasoned, this time. With the mapping below inverted a fullscreen
+        // triangle rasterises with culling left on; with the old mapping the same draw produced
+        // nothing, while vkCmdClearAttachments inside the same render pass still wrote. That
+        // pair is what separates "culled" from every other cause.
+        //
+        // The Y flip in CmdSetViewport is the other half of the pair and is unchanged.
+        rasterizationState.frontFace = ( parameters.m_rasterizerState.m_frontFace == FrontFace::ClockWise ) ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
 
         // Direct3D 12's DepthClipEnable is the inverse of Vulkan's depthClampEnable, and the two
         // are not identical: clipping discards the primitive, clamping keeps it at the near or
