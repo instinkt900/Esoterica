@@ -427,12 +427,21 @@ rejected in one startup.
 lack `storageInputOutput16` and barycentrics. **And open question 8 stops every device, including
 ones that pass this table.**
 
-**Barycentrics are a development tools cost.** `MaterialShaderPBR.esh:82` adds
-`SV_Barycentrics` to the material pixel shader only when `EE_DEVELOPMENT_TOOLS` is set, for a
-wireframe overlay. A Shipping build would not declare it. **The Shipping Engine binary does not
-link**, and never has: `EE::Animation::GraphController`'s virtuals and typeinfo are undefined at
-link time from the Game module. Pre-existing and unrelated to this task, and nobody has tried
-that configuration before.
+**Barycentrics look like a development tools cost, and a Shipping build does not escape them.**
+`MaterialShaderPBR.esh:82` adds `SV_Barycentrics` to the material pixel shader only when
+`EE_DEVELOPMENT_TOOLS` is set, for a wireframe overlay. **But the Reflector always defines it
+when it compiles shaders** (`ShaderReflection_ShaderCompiler.cpp:21` and `:23`, reached from
+`COMMON_DXC_ARGUMENTS` at `:72`), and the SPIR-V it embeds is one variant shared by every build
+configuration. So the barycentric capability is in the bytecode whatever the engine is built as.
+Dropping it means changing the Reflector, not the build configuration.
+
+**The Shipping Engine binary does not link**, and never has. This is a defect in
+`NinjaGen.py`, not upstream's: Shipping builds static archives, and the link line is
+`libEsoterica.Engine.Runtime.a libEsoterica.Base.a libEsoterica.Game.Runtime.a`.
+`Game.Runtime` references `EE::Animation::GraphController`, which lives in `Engine.Runtime`,
+already scanned by the time the linker reaches it. Archive order, or `--start-group`. The object
+files are all there and the source lists match Release exactly, 766 each. **Not caused by this
+task, and fixable here.**
 
 #### Files
 
