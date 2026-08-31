@@ -283,7 +283,7 @@ correct-enough to keep going and wrong enough to sweep before the port is called
 | Attachment transitions use `ALL_COMMANDS` and all-access masks | `TransitionAttachmentIfNeeded`, `RHI_Vulkan.cpp` | Nothing at the call site says what last touched the image or what the pass will do to it | Over-synchronisation. Correct, slow. Belongs with the other `ALL_COMMANDS` sites above |
 | Mesh draws are dropped instead of halting | `CmdSetPipeline`, `RHI_Vulkan.cpp` | No GPU here has `VK_EXT_mesh_shader`, and halting stopped the frame before anything else could be exercised | **A frame missing its geometry is not a rendered frame.** It warns once. On hardware with mesh shaders the branch never runs |
 | An indirect `RootSRV` cannot be read | `CreateCommandSignature`, `RHI_Vulkan.cpp` | Only `RootConstants` and `RootCBV` have indirect declarations. `DebugDrawMesh.esf` declares a `RootSRV`, so a signature can carry one | Nothing indexes it yet. A shader that did would need a third declaration macro |
-| The `GPU hang` after a full frame | See the image layouts entry | Unresolvable here: part of it is likely an artefact of the dropped mesh draws, and the two cannot be told apart without mesh hardware | The frame records and submits clean and never presents |
+| ~~The `GPU hang` after a full frame~~ **Fixed.** It was `vkCmdSetFragmentShadingRateKHR` on a transfer command buffer, not the dropped mesh draws. See the 2026-08-31 NVIDIA entry | `BeginCommandBuffer`, `RHI_Vulkan.cpp` | Was recorded as unresolvable without mesh hardware. That was wrong: the kernel named it as `Xid 32` throughout, and a GPU with dedicated queue families made it reproducible | Nothing now. The frame loop runs and shuts down clean |
 
 **Five upstream shader files are unverified on Windows.** `RHI.esh` and the four shaders changed
 by open question 8 and P5.17 compile for both platforms and have only ever been built on Linux.
@@ -349,6 +349,9 @@ Append one entry per completed task, newest first. Format:
 `Build/Linux_Release/Esoterica.Applications.Editor` builds, links, launches, initialises and
 reaches the frame loop. It stops where the engine stops: the GPU hang after a complete frame,
 which is [deferred on purpose](#deferred-on-purpose).
+
+> **Superseded on the same day.** That hang is fixed - see the NVIDIA entry below. The editor has
+> not been re-run since, so what it does now is unmeasured rather than known.
 
 - Files added: `Code/Applications/Editor/Linux/EditorApplication_Linux.{h,cpp}`, listed in
   `LinuxSources.txt`. Upstream files edited: none.
@@ -434,6 +437,107 @@ two places now:
   `ResourceServerUI.cpp:799` and `:811`. That is P7.3.
 
 Nothing else in the tree fails.
+### 2026-08-31 - A discrete NVIDIA GPU finds four defects, and the GPU hang is gone
+
+**The engine runs a continuous frame loop on an RTX 3090 and shuts down clean.** Forty seconds, no
+`VK_ERROR_DEVICE_LOST`, no kernel `Xid`, and `ReportDeviceMemoryLeaks` reports "No device memory
+leaked". **The window is black: no geometry.** See "What still stops a picture".
+
+**A second machine did this, not new work on the first.** NVIDIA GeForce RTX 3090, driver
+580.173.02, Ubuntu 24.04.4, X11. It closes four of the five hardware gaps in the table above:
+`VK_KHR_fragment_shader_barycentric`, `VK_EXT_mesh_shader`, `VK_EXT_mutable_descriptor_type` and
+`shaderSharedInt64Atomics` are all present. **`storageInputOutput16` is still absent** - NVIDIA
+does not expose it - so that row stands on both machines.
+
+**The gaps closing is what found the defects.** Every one below sits on a path no previous GPU
+could reach: three need mesh shader hardware or a real shading rate extension, and one needs
+dedicated queue families. All four are in `RHI_Vulkan.cpp`, which the port owns. **No upstream file
+is edited.**
+
+#### The `GPU hang` had a cause, and it was ours
+
+The `VK_ERROR_DEVICE_LOST` recorded above as unresolvable here **was not the dropped mesh draws.**
+It was an illegal command in the transfer command buffer, and the kernel said so all along:
+`NVRM: Xid 32`, an invalid or corrupted push buffer stream.
+
+**`BeginCommandBuffer` called `vkCmdSetFragmentShadingRateKHR` on every command buffer**, transfer
+and compute included. That call requires `VK_QUEUE_GRAPHICS_BIT`. It was guarded on the entry point
+being non-null, which tests whether the *device* has the extension, not whether *this queue* can
+run the command. The first machine never saw it because neither GPU there enabled
+`VK_KHR_fragment_shading_rate` at all.
+
+`VulkanCommandPool` now carries the `VkQueueFlags` of its family, and the entry point is left null
+on a non-graphics pool. `BeginCommandBuffer`'s existing null check then does the right thing, and
+`CmdSetShadingRate`'s assert names the caller if a pass ever asks for a rate on such a buffer.
+
+#### A Vulkan barrier may only name stages its queue can run
+
+Directly behind it, the same shape on the compute queue:
+`VUID-vkCmdPipelineBarrier2-dstStageMask-03850`, a barrier with `VERTEX_SHADER` as its destination
+recorded on a compute-only family.
+
+**Upstream is not wrong.** `D3D12_BARRIER_SYNC_*` carries no queue restriction, so the engine
+transitions a resource on whichever queue owns the work while naming the stage that reads it next,
+and that reader is often on another queue. Only a device with dedicated families notices. The RTX
+3090 has a transfer-only family and a compute-only one; an Intel iGPU exposing one universal family
+accepts everything.
+
+`FlushBarriers` now clamps every stage mask to the queue's capabilities, in the one place every
+barrier passes through on its way to the device. **Dropping those stages is correct, not a
+workaround**: a barrier orders work within one queue, and the queue-to-queue half is already
+carried by the timeline semaphore every submit waits on (`RecordQueueOrderingWait`, P5.3). Where
+clamping would empty a mask, it becomes `ALL_COMMANDS` rather than `NONE`, because an access bit
+with no compatible stage is a fresh validation error. **That is a new `ALL_COMMANDS` site** and
+belongs with the others listed above.
+
+#### Two device-creation defects
+
+**The mesh shader feature struct was echoed back as an enable request.** The query result and the
+`vkCreateDevice` request were the same struct, so every bit the device supported was asked for,
+including `multiviewMeshShader` - which additionally requires `multiview`, which nothing enables.
+`vkCreateDevice` refused the device outright
+(`VUID-VkPhysicalDeviceMeshShaderFeaturesEXT-multiviewMeshShader-07032`). Only the two bits the
+engine uses are asked for now. **The same query-as-request pattern is still in place for the
+shading rate, acceleration structure and ray tracing blocks.** None of them has a cross-dependency
+VUID today, so none was touched.
+
+**`shaderStorageTexelBufferArrayNonUniformIndexing` was never enabled**, and the shaders declare
+the capability, so `vkCreateComputePipelines` rejected the first pipeline it was given. This is the
+other half of the pair P5.5 missed: `descriptorBindingStorageTexelBufferUpdateAfterBind` was added
+when that was found, and the matching non-uniform-indexing bit was missed with it. Both the
+requirement check and the enable list carry it now.
+
+#### What still stops a picture
+
+**Set 0 is not bound at a mesh draw.** With validation on, the frame reaches
+`vkCmdDrawMeshTasksIndirectCountEXT` for the `ComplexSurfacePBR DepthOnly Pipeline` and stops on
+`VUID-vkCmdDrawMeshTasksIndirectCountEXT-None-08600`: the pipeline statically uses set 0 and
+nothing is bound there. P5.17 routes a command's root data through the argument buffer instead of
+set 0, and the shader still declares the set.
+
+**This is P5.17's mesh half, and it has never run anywhere.** The indexed-draw half was verified on
+the first machine; the mesh half could not be, because `CmdSetPipeline` dropped every mesh draw
+there for want of hardware. Treat "P5.17 is done" as true for indexed draws only.
+
+**`storageInputOutput16` now blocks a real pipeline rather than producing a warning.**
+`DebugDraw.esf` passes a `uint16_t` handle from the mesh stage to the pixel stage, and with mesh
+shaders enabled those modules are created for the first time. Two VUIDs guard it, `08740` and
+`06334`. Surveying past it needs
+`VK_LAYER_MESSAGE_ID_FILTER=0x6e224e9,0x715035dd`.
+
+#### Not chased, deliberately
+
+The black frame was not investigated beyond finding the set 0 error. The mesh draw is the geometry,
+and there is no point reading a frame whose geometry pass is undefined. Fix set 0 first.
+
+#### Files
+
+- Files changed: `Code/Base/Render/RHI_Vulkan.cpp`. The port owns it.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- Acceptance criteria: **Phase 6 criterion 9 is now met** - the engine reaches and runs a frame
+  loop. Criterion 2 is still not met, because the window is black. Criterion 8 holds, measured
+  again here.
+
 ### 2026-08-31 - The SDL3 requirement check misses two X11 packages
 
 **Bootstrapping a second machine found a gap in `requirements_sdl3`.** It checks nine pkg-config
