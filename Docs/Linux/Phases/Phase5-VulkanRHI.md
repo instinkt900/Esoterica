@@ -37,9 +37,10 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 >
 > **The `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines` was not P5.7's.** It was
 > `Buffer<uint64_t>`, now [answered](../Progress.md#open-questions) as `Buffer<uint2>`.
-> **The engine reaches `CmdExecuteIndirect` with host validation on and zero validation
-> messages, so P5.17 is the only wall left before a drawn frame** - and it can be written
-> against a live engine.
+> **P5.17 is done.** The engine runs past `CmdExecuteIndirect` into
+> `RenderPass_GlobalEnvironmentMap` and stops on a depth texture still in
+> `VK_IMAGE_LAYOUT_UNDEFINED`. The indirect compute loop needs one engine-side buffer clear that
+> is **escalated, not made**; see the P5.17 entry in [Progress.md](../Progress.md).
 >
 > **Criteria 5 to 10 are now checkable.** They were not before.
 
@@ -257,7 +258,7 @@ This is the largest optional-feature group. `AccelerationStructureBuildFlags`,
 `AccelerationStructureGeometryFlags`, and `AccelerationStructureInstanceFlags` map closely onto
 their `VK_KHR_acceleration_structure` equivalents, so it is more mechanical than it looks.
 
-### P5.17 - The indirect draw shader change - **scheduled, not started**
+### P5.17 - The indirect draw shader change - **done, and unverified on mesh hardware**
 
 **This finishes P5.13 and unblocks the frame. It is the answer to open question 7, and the
 approach is decided: the shader reads its own command's root data out of the argument buffer.**
