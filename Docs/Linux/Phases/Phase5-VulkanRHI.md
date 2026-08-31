@@ -30,9 +30,16 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 > | P6.6 | `DestroySwapchain` freed command buffers after their pool. P5.4 assumed the other order. |
 > | P6.6 | `MaxPendingFrames` was 2 and Linux drivers report a `minImageCount` of 3. |
 > | P6.7 | `CreateContext` never enabled the 16-bit shader feature bits. Direct3D 12 has nothing to mirror. |
+> | P6.8 | `CreateContext` missed five more shader feature bits, and mesh modules were created on devices without `VK_EXT_mesh_shader`. |
+> | OQ8 | `CreateContext` never enabled `depthClamp`, which every non-clipping pass turns on. |
+> | P5.4 | `BufferFlags::NoDescriptors` stripped a buffer's usage flags along with its heap slot. |
+> | P5.9 | Barriers named tessellation and geometry stages the device never enabled. |
 >
-> **The current wall is `vkCreateComputePipelines` returning `VK_ERROR_UNKNOWN` for
-> `InstancePickingResolve`.** That is P5.7's first execution. P6.8 owns chasing it.
+> **The `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines` was not P5.7's.** It was
+> `Buffer<uint64_t>`, now [answered](../Progress.md#open-questions) as `Buffer<uint2>`.
+> **The engine reaches `CmdExecuteIndirect` with host validation on and zero validation
+> messages, so P5.17 is the only wall left before a drawn frame** - and it can be written
+> against a live engine.
 >
 > **Criteria 5 to 10 are now checkable.** They were not before.
 
@@ -257,9 +264,11 @@ approach is decided: the shader reads its own command's root data out of the arg
 Read the decision entry in [Progress.md](../Progress.md) before starting; it records why the two
 alternatives were rejected.
 
-**Phase 6 bring-up has now happened, so the door is open.** The engine binary exists and starts.
-It does not reach a frame loop yet - `vkCreateComputePipelines` fails earlier, see P6.8 - so
-**P5.17 is still not testable, and still comes after P6.8.**
+**Phase 6 bring-up has happened and the door is open.** The engine builds every shader and
+every pipeline, enters its frame loop, and halts in `CmdExecuteIndirect` - this refusal. It gets
+there with **host validation on and no validation messages**, so P5.17 can be written against a
+live engine with validation watching. **It is the last thing between this port and a drawn
+frame.**
 
 **Do this after Phase 6 bring-up, not before.** Nothing here can be tested until the engine runs,
 and this is a change to shaders that Windows also compiles. Bring the window, the input and the
@@ -444,8 +453,9 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    validation errors. See the 2026-08-28 decision entry and the P6.6 entry in
    [Progress.md](../Progress.md).
 5. The full engine frame produces no Vulkan validation errors and no warnings. **Blocked on
-   P6.8**, which owns the `VK_ERROR_UNKNOWN` compute pipeline. Note that the Ubuntu 24.04
-   validation layers cannot be used on the mesh shader stages; see the P6.7 entry.
+   [open question 8](../Progress.md#open-questions)**, and on hardware; see the P6.8 entry. The
+   Ubuntu 24.04 validation layers are usable after all, with
+   `VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true`.
 6. All 26 shaders from Phase 4 load and execute.
 7. The full engine frame renders correctly, checked against Windows Direct3D 12 screenshots of
    the same scene. List any visual difference, with an explanation.

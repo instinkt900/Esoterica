@@ -114,7 +114,7 @@ float4 PS_main( bool isFrontFace : SV_IsFrontFace, VertexOutput vertex, Primitiv
     StructuredBuffer<LightInstance_PointLight>          pointLightBuffer            = GetBuffer( RootCBV.m_pointLightBuffer );
     StructuredBuffer<LightInstance_SpotLight>           spotLightBuffer             = GetBuffer( RootCBV.m_spotLightBuffer );
 
-    Buffer<uint64_t>                                    directionalLightPageBuffer  = GetBuffer( RootCBV.m_directionalLightPageBuffer );
+    Buffer<uint2>                                       directionalLightPageBuffer  = GetBuffer( RootCBV.m_directionalLightPageBuffer );
 
     StructuredBuffer<CascadedShadow>    cascadedShadowBuffer        = GetBuffer( RootCBV.m_cascadedShadowBuffer );
 
@@ -191,7 +191,7 @@ float4 PS_main( bool isFrontFace : SV_IsFrontFace, VertexOutput vertex, Primitiv
         //-------------------------------------------------------------------------
         for ( uint pageIdx = 0; pageIdx < RootCBV.m_numDirectionalLightPages; ++pageIdx )
         {
-            uint64_t mask = directionalLightPageBuffer[pageIdx];
+            uint64_t mask = PackUint64( directionalLightPageBuffer[pageIdx] );
 
             [loop] while ( mask )
             {

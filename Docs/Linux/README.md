@@ -132,13 +132,21 @@ registered in [TouchedFiles.md](TouchedFiles.md).
 
 **P6.7 is done too: the engine binary builds, links and starts.**
 `Build/Linux_Release/Esoterica.Applications.Engine -map data://... -packaged` reads its settings,
-loads compiled data, opens a window and creates a Vulkan device. **Criterion 1 is met.** It does
-not render a map yet: `vkCreateComputePipelines` returns `VK_ERROR_UNKNOWN` for the
-`InstancePickingResolve` compute shader. P6.8, first light, owns it.
+loads compiled data, opens a window and creates a Vulkan device. **Criterion 1 is met.**
 
-**Do not run the engine with the Ubuntu 24.04 Vulkan validation layers on.** They bundle the same
-stale SPIRV-Tools that Phase 4 documented and reject the `DebugDraw` mesh shader although its
-SPIR-V is correct and the driver accepts it. `VK_LOADER_LAYERS_DISABLE='*'` gets past it.
+**P6.8 is written, and Phase 6 does not meet its goal.** The engine now creates every shader in
+the engine, up from fourteen of twenty-eight, and it still renders no map. Two things stop it.
+**Open question 8**: `Buffer<uint64_t>` has no Vulkan spelling, DXC emits a 64-bit sampled image
+for it, and one sits in every material pixel shader. That was the `VK_ERROR_UNKNOWN`, and it
+needs a shader change like P5.17. **And four hardware gaps** that no GPU in the development
+machine clears. P6.8 also fixed five more shader feature bits `CreateContext` never enabled. See
+the P6.8 entry in [Progress.md](Progress.md).
+
+**Run the engine with validation on.** The Ubuntu 24.04 layers are usable after all:
+`VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true` turns off only the layer's bundled
+spirv-val, which is where the stale SPIRV-Tools that rejects the `DebugDraw` mesh shader lives.
+Host validation also has to be switched on in the configuration's `Esoterica.ini`; the P6.8 entry
+has both lines.
 
 **imgui viewports will not work under Wayland.** `ImGui_ImplSDL3_Init` enables them only for
 video drivers on its global-mouse white list, which does not include `wayland`. The editor

@@ -42,7 +42,7 @@ void CS_main(
     
     GroupMemoryBarrierWithGroupSync();
         
-    Buffer<uint64_t>                                meshInstancePageBuffer          = GetBuffer( RootCBV.m_meshInstancePageBuffer );
+    Buffer<uint2>                                   meshInstancePageBuffer          = GetBuffer( RootCBV.m_meshInstancePageBuffer );
     StructuredBuffer<MeshInstance>                  meshInstanceBuffer              = GetBuffer( RootCBV.m_meshInstanceBuffer );
     ByteAddressBuffer                               meshInstanceRootBuffer          = GetBuffer( RootCBV.m_meshInstanceRootBuffer );
     StructuredBuffer<RenderView>                    renderViewBuffer                = GetBuffer( RootCBV.m_renderViewBuffer );
@@ -59,7 +59,7 @@ void CS_main(
 
     // const ShaderDebugDraw                           debugDraw                       = InitializeShaderDebugDraw( BufferHandle( RootCBV.m_shaderDebugDrawBuffer ) );
 
-    uint64_t meshInstancePage = meshInstancePageBuffer[groupID];
+    uint64_t meshInstancePage = PackUint64( meshInstancePageBuffer[groupID] );
     uint64_t meshInstancePageMask = ( 1ULL << groupThreadID );
         
     if ( meshInstancePage & meshInstancePageMask )

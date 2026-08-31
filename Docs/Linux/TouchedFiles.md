@@ -18,6 +18,7 @@ Status values: `planned` · `done` · `not needed` (checked, and confirmed unnec
 | Files needing a 2-line `#elif` or `\|\|` addition | 7 |
 | Files needing a whole-body guard wrap (2 lines) | 0 - the one candidate is an exclusion instead |
 | Files needing a real edit | 5 |
+| Shader files edited for both platforms | 6 |
 | Files confirmed to need **no** change | 3 |
 | **New** files added (no upstream conflict possible) | ~40 |
 
@@ -41,6 +42,40 @@ nothing and guarantees conflicts.
 | `Code/Base/Memory/Memory.h` | Line 18: `#ifdef _WIN32` to `#if defined( _WIN32 ) \|\| defined( __linux__ )`. One line modified. The existing `#else` defines the stack allocators as empty, so `EE_STACK_ALLOC` and `EE_STACK_ARRAY_ALLOC` expanded to nothing. `alloca` works on both platforms; `Platform_Linux.h` supplies `<alloca.h>`. | 1 | done |
 | `Code/Base/Memory/Memory.cpp` | `#elif defined( __linux__ )` for `<sys/mman.h>`, and an `#else` inside each of `VirtualMemoryReserve`, `VirtualMemoryCommit` and `VirtualMemoryFree`. `mmap` with `PROT_NONE` and `MAP_NORESERVE` is the `MEM_RESERVE` equivalent, `mprotect` is `MEM_COMMIT`, `munmap` is `MEM_RELEASE`, and `__atomic_fetch_add` replaces `InterlockedAdd64`. Windows lines untouched. | 1 | done |
 | `Code/Base/Resource/ResourceTypeID.h` | Line 26: `template<eastl_size_t S>` to `template<int S>`. `eastl::fixed_string` declares its size parameter as `int`, so deducing an `eastl_size_t` from `TInlineString<9>` fails. MSVC accepts the narrowing during deduction. | 1 | done |
+
+## Shader edits
+
+**A different category from everything above.** These change HLSL that **both** platforms
+compile, so there is no Linux-only branch to hide behind and no `__linux__` guard to write. Every
+one has to be correct on Direct3D 12 as well, and none of them can be verified on Windows from
+here. Each needs a Windows build and a visual check before it is trusted.
+
+They exist because DXC's SPIR-V back end and its DXIL back end disagree about what a piece of
+HLSL means. The fix is to write HLSL both back ends read the same way.
+
+| File | Change | Phase | Status |
+|---|---|---|---|
+| `Code/Base/Render/RHI.esh` | Adds `PackUint64( uint2 )` and `UnpackUint64( uint64_t )` next to the existing `RWBufferToBuffer` helpers. 18 lines added, 0 modified. | 6 (open question 8) | **done, unverified on Windows** |
+| `Code/Engine/Render/Shaders/SpatialHash.esh` | `SpatialHashBase`'s payload buffer becomes `Buffer<uint2>` / `RWBuffer<uint2>`. `LoadPayload` and `StorePayload` pack through the new helpers; `LoadMetadata` and `StoreMetadata` lose their packing entirely, because the element is now the `uint2` they always returned. | 6 (open question 8) | **done, unverified on Windows** |
+| `Code/Engine/Render/Shaders/Picking/InstancePickingResolve.esf` | `Buffer<uint64_t>` to `Buffer<uint2>`, one read wrapped in `PackUint64`. | 6 (open question 8) | **done, unverified on Windows** |
+| `Code/Engine/Render/Shaders/Renderer/InstanceCulling.esf` | As above. | 6 (open question 8) | **done, unverified on Windows** |
+| `Code/Engine/Render/Shaders/Renderer/LightCulling_CullLights.esf` | As above, two buffers and two reads. | 6 (open question 8) | **done, unverified on Windows** |
+| `Code/Engine/Render/Shaders/Renderer/MaterialShaderPBR.esh` | As above. Reaches every material pixel shader. | 6 (open question 8) | **done, unverified on Windows** |
+
+**Why this is not a behaviour change on Direct3D 12.** The RHI already creates all five of these
+buffers as `RG32_UInt` - `DeviceRenderWorld.cpp:604`, `:628`, `:649`, `:670` and
+`SpatialHash.cpp:50` - and both backends pass that straight to the view
+(`RHI_Direct3D12.cpp:4171`, `RHI_Vulkan.cpp:5394`). The bytes were always two 32-bit words, low
+word first. `Buffer<uint2>` names what the view already is; `Buffer<uint64_t>` did not.
+`RWBuffer<uint2>` was already in use elsewhere in the same shaders, so this is not a new pattern.
+
+**No atomics were lost.** The only atomic in `SpatialHash.esh` is an
+`InterlockedCompareExchange` on `m_keys`, which is a 32-bit `RWBuffer<uint>` and is untouched.
+The 64-bit payload buffer is only ever read and written by index.
+
+See the open question 8 entry in [Progress.md](Progress.md) for the measurements.
+
+---
 
 ## Two-line guard additions
 

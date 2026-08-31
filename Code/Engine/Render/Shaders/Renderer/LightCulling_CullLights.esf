@@ -122,8 +122,8 @@ void CS_main( uint groupThreadID : SV_GroupThreadID, uint3 groupID : SV_GroupID,
 
     StructuredBuffer<LightInstance_PointLight>  pointLights     = GetBuffer( RootCBV.m_pointLightBuffer );
     StructuredBuffer<LightInstance_SpotLight>   spotLights      = GetBuffer( RootCBV.m_spotLightBuffer );
-    Buffer<uint64_t>                            pointLightPages = GetBuffer( RootCBV.m_pointLightPageBuffer );
-    Buffer<uint64_t>                            spotLightPages  = GetBuffer( RootCBV.m_spotLightPageBuffer );
+    Buffer<uint2>                               pointLightPages = GetBuffer( RootCBV.m_pointLightPageBuffer );
+    Buffer<uint2>                               spotLightPages  = GetBuffer( RootCBV.m_spotLightPageBuffer );
 
     uint maxPages = max( RootCBV.m_numPointLightPages, RootCBV.m_numSpotLightPages );
 
@@ -161,7 +161,7 @@ void CS_main( uint groupThreadID : SV_GroupThreadID, uint3 groupID : SV_GroupID,
 
             if ( pageIndex < RootCBV.m_numPointLightPages )
             {
-                uint64_t pageMask = pointLightPages[pageIndex];
+                uint64_t pageMask = PackUint64( pointLightPages[pageIndex] );
                 bool     occupied = ( pageMask & testBit ) != 0;
                 bool     inParent = isRoot || ( ( parentPayload.x & testBit ) != 0 );
 
@@ -183,7 +183,7 @@ void CS_main( uint groupThreadID : SV_GroupThreadID, uint3 groupID : SV_GroupID,
             //-------------------------------------------------------------------------
             if ( pageIndex < RootCBV.m_numSpotLightPages )
             {
-                uint64_t pageMask = spotLightPages[pageIndex];
+                uint64_t pageMask = PackUint64( spotLightPages[pageIndex] );
                 bool     occupied = ( pageMask & testBit ) != 0;
                 bool     inParent = isRoot || ( ( parentPayload.y & testBit ) != 0 );
 
