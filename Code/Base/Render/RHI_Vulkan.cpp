@@ -1751,6 +1751,13 @@ namespace EE::Render::RHI
         // fragment shading rate entry point at all.
         VkQueueFlags                                        m_queueFlags = 0;
 
+        // **One bit per set 0 parameter the engine has written since the last CmdSetPipeline.**
+        // CmdExecuteIndirect binds whatever is still clear, because a shader reached by an
+        // indirect draw statically uses bindings that no engine call ever fills. A direct draw
+        // gets no such help, so a genuinely forgotten binding still fails validation there.
+        // 32 bits, matching the inline capacity of m_rootParameterBindings.
+        uint32_t                                            m_boundRootParameterMask = 0;
+
         // Barriers are batched exactly as Direct3D 12 batches them at
         // RHI_Direct3D12.cpp:1516, and flushed at the same points. Vulkan gains a second reason
         // to batch: one vkCmdPipelineBarrier2 for the whole set lets the driver see them
@@ -2036,6 +2043,11 @@ namespace EE::Render::RHI
         // Set 0 of the binding model: per-pipeline, derived from reflection, and created with
         // PUSH_DESCRIPTOR_BIT so CmdSetRootParameter is a push rather than a set allocation.
         VkDescriptorSetLayout                               m_rootParameterSetLayout = VK_NULL_HANDLE;
+
+        // The bindings that layout was built from, kept so CmdExecuteIndirect can bind the ones
+        // the engine left alone. Same order as m_descriptorReflections, so a parameter index
+        // indexes both. See BindUnboundRootParameters.
+        TInlineVector<VkDescriptorSetLayoutBinding, 32>     m_rootParameterBindings;
 
         // Copied from the context so CmdSetPipeline, which takes no Context, can bind it.
         VkDescriptorSet                                     m_heapDescriptorSet = VK_NULL_HANDLE;
@@ -2905,7 +2917,10 @@ namespace EE::Render::RHI
         ringParameters.m_bufferSize = g_rootConstantRingSize;
         ringParameters.m_memoryType = ResourceMemoryType::HostToDevice;
         ringParameters.m_flags.SetMultipleFlags( BufferFlags::NoDescriptors, BufferFlags::PersistentMap );
-        ringParameters.m_descriptorTypes = DescriptorTypeFlags::ConstantBuffer;
+        // RWBuffer as well as ConstantBuffer, for the storage buffer usage bit. The ring also
+        // stands in for a set 0 binding the engine never wrote, and a root SRV or UAV there is a
+        // storage buffer. Nothing reads those bytes; see BindUnboundRootParameters.
+        ringParameters.m_descriptorTypes.SetMultipleFlags( DescriptorTypeFlags::ConstantBuffer, DescriptorTypeFlags::RWBuffer );
         ringParameters.m_debugName.sprintf( "%s RootConstants", parameters.m_debugName.c_str() );
 
         pVulkanCommandBuffer->m_pRootConstantRing = CreateBuffer( pContext, ringParameters );
@@ -3442,6 +3457,10 @@ namespace EE::Render::RHI
         // - the environment map, post process, imgui, the swapchain - can be exercised on
         // hardware that cannot run the geometry path at all. See the P5.14 and P6.8 entries.
         // On hardware that has mesh shaders this branch never runs.
+        // A pipeline layout change invalidates the push descriptor set, so whatever set 0 held
+        // is gone from here on.
+        pVulkanCommandBuffer->m_boundRootParameterMask = 0;
+
         pVulkanCommandBuffer->m_boundPipelineIsNull = ( pVulkanPipeline->m_pipeline == VK_NULL_HANDLE );
         if ( pVulkanCommandBuffer->m_boundPipelineIsNull )
         {
@@ -3531,6 +3550,8 @@ namespace EE::Render::RHI
         EE_ASSERT( pVulkanCommandBuffer->m_vkCmdPushDescriptorSet != nullptr );
         pVulkanCommandBuffer->m_vkCmdPushDescriptorSet( pVulkanCommandBuffer->m_commandBuffer, pVulkanCommandBuffer->m_boundBindPoint,
                                                         pVulkanCommandBuffer->m_boundPipelineLayout, g_rootParameterSet, 1, &write );
+
+        pVulkanCommandBuffer->m_boundRootParameterMask |= ( 1u << constantIndex );
     }
 
     void CmdSetRootParameter( CommandBuffer* pCommandBuffer, uint32_t parameterIndex, Buffer* pBuffer, size_t bufferOffset )
@@ -3585,6 +3606,8 @@ namespace EE::Render::RHI
         EE_ASSERT( pVulkanCommandBuffer->m_vkCmdPushDescriptorSet != nullptr );
         pVulkanCommandBuffer->m_vkCmdPushDescriptorSet( pVulkanCommandBuffer->m_commandBuffer, pVulkanCommandBuffer->m_boundBindPoint,
                                                         pVulkanCommandBuffer->m_boundPipelineLayout, g_rootParameterSet, 1, &write );
+
+        pVulkanCommandBuffer->m_boundRootParameterMask |= ( 1u << parameterIndex );
     }
 
     void CmdSetIndexBuffer( CommandBuffer* pCommandBuffer, Buffer const* pIndexBuffer, IndexType indexType, uint64_t offset )
@@ -3783,6 +3806,88 @@ namespace EE::Render::RHI
         int32_t                                             m_rootCbvOffset = -1;
     };
 
+    // **An indirect draw's set 0 bindings are declared but never written, and Vulkan still wants
+    // them bound.**
+    //
+    // A Direct3D 12 command signature writes the root constants and binds the root CBV per
+    // command as the GPU walks the argument buffer, so the engine binds neither on the CPU:
+    // RenderPass_ForwardShading.cpp calls CmdSetRootConstants with a **null** pointer, which the
+    // reference treats as a no-op, and never calls CmdSetRootParameter for the root CBV at all.
+    //
+    // P5.17 moved those reads into the shader, which loads them out of the argument buffer. But
+    // RHI.esh keeps the ConstantBuffer declarations on purpose - they are the direct-bind
+    // fallback, and they preserve the reflected layout the command signature is built from - so
+    // the shader **statically** uses set 0. Vulkan requires a statically used binding to be
+    // bound, whether or not the shader reaches it at runtime.
+    //
+    // So the gaps are filled here, pointing at the root constant ring, which every command buffer
+    // already owns. The contents are undefined and unread: on this path
+    // EE_IndirectRoot.m_stride is non-zero, so the shader takes the argument buffer branch.
+    // Undefined-and-unread is what Direct3D 12 leaves in those root arguments too.
+    //
+    // **Only the bindings the engine did not write, and only on an indirect draw.** A direct draw
+    // gets no such help, so a genuinely forgotten binding still fails validation there rather
+    // than quietly reading the ring.
+    //
+    // Nothing here consumes ring space. Reserving a block per indirect draw would burn a 64KB
+    // ring that asserts rather than wraps, for bytes nothing reads.
+    static void BindUnboundRootParameters( VulkanCommandBuffer* pVulkanCommandBuffer )
+    {
+        VulkanRootSignature const* pVulkanRootSignature = static_cast<VulkanRootSignature const*>( pVulkanCommandBuffer->m_pBoundRootSignature );
+        if ( pVulkanRootSignature == nullptr || pVulkanRootSignature->m_rootParameterBindings.empty() )
+        {
+            return;
+        }
+
+        VulkanBuffer const* pRing = static_cast<VulkanBuffer const*>( pVulkanCommandBuffer->m_pRootConstantRing );
+        EE_ASSERT( pRing != nullptr );
+
+        TInlineVector<VkDescriptorBufferInfo, 32> bufferInfos;
+        TInlineVector<VkWriteDescriptorSet, 32> writes;
+
+        for ( uint32_t parameterIndex = 0; parameterIndex < pVulkanRootSignature->m_rootParameterBindings.size(); ++parameterIndex )
+        {
+            if ( pVulkanCommandBuffer->m_boundRootParameterMask & ( 1u << parameterIndex ) ) { continue; }
+
+            VkDescriptorSetLayoutBinding const& binding = pVulkanRootSignature->m_rootParameterBindings[parameterIndex];
+
+            // A sampler cannot be pointed at a buffer. No shader puts one in set 0 today - the
+            // binding model routes samplers through the heap - and CreateRootSignature's static
+            // sampler path already halts if one appears, so this is a guard and not a gap.
+            if ( binding.descriptorType != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER &&
+                 binding.descriptorType != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER )
+            {
+                continue;
+            }
+
+            VkDescriptorBufferInfo bufferInfo = {};
+            bufferInfo.buffer = pRing->m_buffer;
+            bufferInfo.offset = 0;
+            bufferInfo.range = VK_WHOLE_SIZE;
+            bufferInfos.push_back( bufferInfo );
+
+            VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+            write.dstBinding = binding.binding;
+            write.descriptorCount = 1;
+            write.descriptorType = binding.descriptorType;
+            writes.push_back( write );
+        }
+
+        if ( writes.empty() ) { return; }
+
+        // Fixed up after the fact, because push_back may reallocate the info array and leave
+        // every pBufferInfo already stored pointing at freed memory.
+        for ( uint32_t writeIndex = 0; writeIndex < writes.size(); ++writeIndex )
+        {
+            writes[writeIndex].pBufferInfo = &bufferInfos[writeIndex];
+        }
+
+        EE_ASSERT( pVulkanCommandBuffer->m_vkCmdPushDescriptorSet != nullptr );
+        pVulkanCommandBuffer->m_vkCmdPushDescriptorSet( pVulkanCommandBuffer->m_commandBuffer, pVulkanCommandBuffer->m_boundBindPoint,
+                                                        pVulkanCommandBuffer->m_boundPipelineLayout, g_rootParameterSet,
+                                                        uint32_t( writes.size() ), writes.data() );
+    }
+
     void CmdExecuteIndirect( CommandBuffer* pCommandBuffer, CommandSignature const* pCommandSignature, uint32_t maxNumCommands, Buffer const* pIndirectBuffer, uint64_t indirectBufferOffset, Buffer const* pCounterBuffer, uint64_t counterBufferOffset )
     {
         VulkanCommandBuffer*            pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
@@ -3816,6 +3921,12 @@ namespace EE::Render::RHI
 
             vkCmdPushConstants( pVulkanCommandBuffer->m_commandBuffer, pVulkanRootSignature->m_pipelineLayout,
                                 VK_SHADER_STAGE_ALL, 0, sizeof( pushConstants ), &pushConstants );
+        }
+
+        // Nothing is bound when the pipeline was dropped, so there is no layout to push against.
+        if ( !pVulkanCommandBuffer->m_boundPipelineIsNull )
+        {
+            BindUnboundRootParameters( pVulkanCommandBuffer );
         }
 
         // **A draw stays inside the render pass and a dispatch may not.** This corrects what
@@ -7062,6 +7173,11 @@ namespace EE::Render::RHI
             rootParameterBindings.push_back( binding );
             pVulkanRootSignature->m_descriptorReflections.push_back( descriptorReflection );
         }
+
+        // Kept for CmdExecuteIndirect, which has to know the descriptor type of a binding the
+        // engine never wrote. Recomputing the type there would be a second copy of the mapping
+        // above, and the two would drift.
+        pVulkanRootSignature->m_rootParameterBindings = rootParameterBindings;
 
         // Static samplers find no matching shader resource in any current shader, which is what
         // the binding model recorded, so there are no Vulkan immutable samplers here either.
