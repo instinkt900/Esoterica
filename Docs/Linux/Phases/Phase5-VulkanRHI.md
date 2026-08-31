@@ -36,8 +36,8 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 > **The `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines` was not P5.7's.** It was
 > `Buffer<uint64_t>`, now [answered](../Progress.md#open-questions) as `Buffer<uint2>`.
 > **The engine now reaches `CmdExecuteIndirect`, so P5.17 is the only wall left before a drawn
-> frame.** With validation on it stops earlier, on a P5.5 defect: a root CBV buffer is created
-> without `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT`.
+> frame.** With validation on it stops earlier, on a P5.4 defect: `BufferFlags::NoDescriptors`
+> strips the root constant ring's `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT` along with its heap slot.
 >
 > **Criteria 5 to 10 are now checkable.** They were not before.
 
