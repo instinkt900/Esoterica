@@ -309,6 +309,48 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-08-31 - The Shipping configuration links, for the first time
+
+**`Build/Linux_Shipping/Esoterica.Applications.Engine` exists.** It had never been produced: the
+link failed with undefined references to `EE::Animation::GraphController` from the Game module,
+and nobody had tried that configuration since Phase 0 set it up.
+
+**A defect in `NinjaGen.py`, not upstream's.** `topological_order` was a pre-order walk, which is
+right for a chain and wrong for a fan. Given references `[Engine.Runtime, Game.Runtime]` it
+emitted `Engine.Runtime` first, and `Game.Runtime`'s references into it were then already past.
+A static archive is scanned once, in order, and only pulls the symbols undefined at the moment
+the linker reaches it, so every archive has to appear **before** the archives it needs.
+
+It is a post-order walk reversed now, which is the real reverse topological order. The link line
+went from
+
+```
+libEsoterica.Engine.Runtime.a libEsoterica.Base.a libEsoterica.Game.Runtime.a
+```
+
+to
+
+```
+libEsoterica.Game.Runtime.a libEsoterica.Engine.Runtime.a libEsoterica.Base.a
+```
+
+**Only Shipping was affected.** Debug and Release build shared libraries, where the loader
+resolves the graph and link order does not matter, which is why nothing noticed for seven phases.
+Both still link unchanged.
+
+A cycle between two archives cannot be fixed by ordering at all. Nothing in the solution has one;
+the walk guards against it so a future one is a wrong link rather than a hang.
+
+#### Two things the Shipping binary told us
+
+**`ReportDeviceMemoryLeaks` reports "No device memory leaked", through the engine.** That is
+**Phase 6 acceptance criterion 8**, which P6.8 recorded as met for the RHI path but never
+exercised through the engine. It is met now.
+
+**It has no data to run.** `Build/Linux_Shipping/CompiledData` does not exist - Phase 3 filled
+the Release directory only - so the run fails at initialisation, shuts down cleanly and exits 0.
+Compiling data for the other configurations is unfinished business, not a defect.
+
 ### 2026-08-31 - Image layouts, dropped mesh draws and the swapchain spelling. **The whole frame records**
 
 **The engine records and submits a complete frame with zero validation errors.** Every pass runs:
@@ -778,13 +820,8 @@ when it compiles shaders** (`ShaderReflection_ShaderCompiler.cpp:21` and `:23`, 
 configuration. So the barycentric capability is in the bytecode whatever the engine is built as.
 Dropping it means changing the Reflector, not the build configuration.
 
-**The Shipping Engine binary does not link**, and never has. This is a defect in
-`NinjaGen.py`, not upstream's: Shipping builds static archives, and the link line is
-`libEsoterica.Engine.Runtime.a libEsoterica.Base.a libEsoterica.Game.Runtime.a`.
-`Game.Runtime` references `EE::Animation::GraphController`, which lives in `Engine.Runtime`,
-already scanned by the time the linker reaches it. Archive order, or `--start-group`. The object
-files are all there and the source lists match Release exactly, 766 each. **Not caused by this
-task, and fixable here.**
+**The Shipping Engine binary did not link, and never had.** A `NinjaGen.py` defect in the
+archive ordering. **Fixed 2026-08-31**; see the Shipping configuration entry.
 
 #### Files
 
