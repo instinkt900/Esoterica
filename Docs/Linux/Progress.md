@@ -10,7 +10,9 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 6. P6.1 to P6.7 are done. P6.8, first light, is the only task left in the phase.**
+**Phase: 6. P6.1 to P6.8 are written. The phase does not meet its acceptance criteria and
+cannot on this machine.** P6.8 root-caused the `VK_ERROR_UNKNOWN`, fixed five real defects in
+`CreateContext`, and found a wall that needs a shader change. See the P6.8 entry.
 
 ### Start here
 
@@ -18,28 +20,50 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 python3 Code/Scripts/NinjaGen/NinjaGen.py
 ninja -f Build/Linux/Esoterica.ninja Build/Linux_Release/Esoterica.Applications.Engine
 
-VK_LOADER_LAYERS_DISABLE='*' \
+printf '[Render:RHI]\nEnable_Host_Validation = true\n' > Build/Linux_Release/Esoterica.ini
+
+VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
   ./Build/Linux_Release/Esoterica.Applications.Engine \
   -map data://demo/render/pbr/pbrdemo.map -packaged
 ```
 
-**Three things about that command line, each of which cost a session to find:**
+**Four things about that, each of which cost a session to find:**
 
 - **`-packaged` is required.** Without it the engine uses the network resource provider and tries
   to start `EsotericaResourceServer.exe`, which is Phase 7. `-packaged` reads
   `Build/Linux_<configuration>/CompiledData` directly, which is what Phase 3 filled.
-- **`VK_LOADER_LAYERS_DISABLE='*'` is required on Ubuntu 24.04.** Its
-  `vulkan-validationlayers 1.4.309.0` bundles the same stale SPIRV-Tools that Phase 4
-  documented, and rejects the `DebugDraw` mesh shader on
-  `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07036`. **The SPIR-V is correct and the driver accepts
-  it**, measured. This is the second time a stale SPIRV-Tools has misled this port. Losing
-  validation is a bad trade, so installing a newer layer package is worth the effort - and
-  recording which version works is worth more.
+- **Validation is off unless the ini says otherwise.** `RenderSettings::m_enableHostValidation`
+  defaults to false and only a Debug build forces it on. The generated `Esoterica.ini` is empty
+  because `Settings::SaveSettings` skips every property still at its default, so the section has
+  to be written by hand. The key names come from the reflected `Category` and `FriendlyName`.
+  That is upstream behaviour, not a Linux defect.
+- **`VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true` replaces
+  `VK_LOADER_LAYERS_DISABLE='*'`.** It turns off only the validation layer's bundled spirv-val,
+  which is where the stale SPIRV-Tools lives, and leaves every other check on. P6.7 turned the
+  layers off entirely and lost validation with them. No newer layer package is needed.
+  `VK_LAYER_MESSAGE_ID_FILTER=<vuid>[,<vuid>]` silences one VUID at a time, which is how P6.8
+  surveyed several walls in one run.
 - **The binary is `Esoterica.Applications.Engine`**, named after its project like the Reflector
   and the ResourceCompiler, not `EsotericaEngine` as the phase document originally wrote.
 
-**Where it stops: `vkCreateComputePipelines` returns `VK_ERROR_UNKNOWN` for
-`InstancePickingResolve`.** That is P5.7's first execution, and chasing it is P6.8's first job.
+**Where it stops: the first shader that declares a capability this hardware does not have.**
+On the Intel UHD 620 that is `storageInputOutput16`, in `DebugDraw`'s pixel stage. Behind it are
+three more hardware gaps and one wall that no hardware fixes; see the table in the P6.8 entry.
+
+### The one that needs a decision
+
+**`Buffer<uint64_t>` cannot be expressed in Vulkan as the engine uses it.** DXC's SPIR-V backend
+emits `OpTypeImage %ulong Buffer 2 0 0 1 R64ui`, a 64-bit sampled image. The RHI creates the
+matching buffer view with `RG32_UInt` (`DeviceRenderWorld.cpp:604`), which is what Direct3D 12
+wants: a typed buffer load there returns two 32-bit words and HLSL packs them into a `uint64_t`.
+The two do not agree in Vulkan, `VK_FORMAT_R64_UINT` is not a uniform texel buffer format on this
+hardware, and Mesa's `spirv_to_nir` refuses the type outright. **This was the `VK_ERROR_UNKNOWN`.**
+
+**The fix is a shader change, like [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started).**
+Six sites read one: `SpatialHash.esh:185` and `:207`, `LightCulling_CullLights.esf:125` and
+`:126`, `InstanceCulling.esf:45`, `InstancePickingResolve.esf:16`, and `MaterialShaderPBR.esh:117`.
+The last puts it in every material pixel shader, so the whole frame is on it. **Escalated, not
+started.** It is open question 8.
 
 ### What is behind that
 
@@ -221,25 +245,13 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## In flight
 
-> ### **None of Phase 6 is on `main` yet. It is a stack of six open pull requests.**
+> ### **Phase 6 is merged. P6.8 is the one branch open.**
 >
-> A session that checks out `main` finds Phase 5 and nothing after it. **Work continues on
-> `linux/p6.7-engine-application`, which contains every commit below.**
+> PRs #43 to #49 all landed, so a session that checks out `main` finds P6.1 to P6.7.
 
 | Branch | PR | What |
 |---|---|---|
-| `linux/p6.2-linuxapplication` | [#43](https://github.com/instinkt900/Esoterica/pull/43) | `Application_Linux.{h,cpp}` on SDL3 |
-| `linux/p6.3-imgui-platform` | [#44](https://github.com/instinkt900/Esoterica/pull/44) | The imgui platform backend |
-| `linux/p6.4-keyboard-mouse` | [#45](https://github.com/instinkt900/Esoterica/pull/45) | The keyboard and mouse device |
-| `linux/p6.5-gamepad` | [#46](https://github.com/instinkt900/Esoterica/pull/46) | The gamepad device |
-| `linux/p6.6-swapchain-surface` | [#47](https://github.com/instinkt900/Esoterica/pull/47) | The Vulkan surface, two RHI defects, and the `MaxPendingFrames` edit |
-| `linux/p6.7-engine-application` | [#49](https://github.com/instinkt900/Esoterica/pull/49) | The engine entry point, two build system defects, and the 16-bit feature gap |
-
-Each is based on the one above it, so they merge bottom up. P6.1 is already merged, as
-[#42](https://github.com/instinkt900/Esoterica/pull/42).
-
-**P6.8 should branch off `linux/p6.7-engine-application`**, not off `main`, unless the stack has
-landed by then.
+| `linux/p6.8-first-light` | open | The `VK_ERROR_UNKNOWN` root cause, five `CreateContext` feature defects, and the mesh-shader startup path |
 
 ---
 
@@ -283,6 +295,170 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-31 - P6.8 First light. **The `VK_ERROR_UNKNOWN` is explained, and it is not P5.7's**
+
+**Not first light.** The engine still does not render a map, and it cannot on this machine. What
+this task did instead: root-caused the `VK_ERROR_UNKNOWN`, fixed five real defects in
+`CreateContext`, made startup survive a device without mesh shaders, and measured exactly what
+stops the engine here. Read [the "Start here" block](#start-here) before running anything.
+
+#### Validation works now, and the stale SPIRV-Tools is no longer a reason to lose it
+
+P6.7 ran with `VK_LOADER_LAYERS_DISABLE='*'`, which turns validation off. It does not have to be.
+
+```bash
+VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true
+```
+
+`debug_disable_spirv_val` is a setting the Khronos layer already has. It switches off the layer's
+bundled spirv-val, which is where the stale SPIRV-Tools that rejects the `DebugDraw` mesh shader
+lives, and leaves every other check on. **No newer layer package is needed**, and Ubuntu 24.04's
+`vulkan-validationlayers 1.4.309.0` is fine with that one flag. `VK_LAYER_MESSAGE_ID_FILTER`
+takes a comma separated VUID list and silences those messages, which is how the remaining walls
+below were found in one run rather than one rebuild each.
+
+Host validation also has to be switched on. It defaults to false and only a Debug build forces
+it. The generated `Esoterica.ini` is empty because `Settings::SaveSettings` skips any property
+still at its default, so the section is written by hand:
+
+```ini
+[Render:RHI]
+Enable_Host_Validation = true
+```
+
+The key names come from the reflected `Category` and `FriendlyName`, with spaces replaced by
+underscores (`Settings.cpp:11`). **The empty ini is upstream behaviour, not a Linux defect.**
+
+#### The `VK_ERROR_UNKNOWN` is `Buffer<uint64_t>`, and it is open question 8
+
+`vkCreateComputePipelines` failed for `InstancePickingResolve`. With validation on, Mesa says
+what it is:
+
+```
+SPIR-V offset 4620: SPIR-V parsing FAILED:
+    glsl_type_is_texture(type->glsl_image)
+spirv_to_nir failed (VK_ERROR_UNKNOWN)
+```
+
+The instruction is `%type_buffer_image = OpTypeImage %ulong Buffer 2 0 0 1 R64ui`, from
+`Buffer<uint64_t>` in the HLSL. **This is not a P5.7 defect.** P5.7 builds the pipeline
+correctly; the module it is handed cannot be lowered.
+
+The RHI creates the matching buffer with `RHI::DataFormat::RG32_UInt`
+(`DeviceRenderWorld.cpp:604`), which is right for Direct3D 12: a typed buffer load there returns
+two 32-bit words and HLSL packs them into a `uint64_t`. DXC's SPIR-V backend does not do that. It
+emits a 64-bit sampled image, whose sampled type has to match the view's format, and
+`VK_FORMAT_R64_UINT` is not a uniform texel buffer format on this hardware. Mesa refuses the type
+before any of that matters.
+
+**The fix is a shader change on both backends, the same shape as
+[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started):**
+read the pages as `Buffer<uint2>` and assemble the `uint64_t` in the shader. Six sites:
+
+| File | Line |
+|---|---|
+| `Code/Engine/Render/Shaders/SpatialHash.esh` | 185, 207 |
+| `Code/Engine/Render/Shaders/Renderer/LightCulling_CullLights.esf` | 125, 126 |
+| `Code/Engine/Render/Shaders/Renderer/InstanceCulling.esf` | 45 |
+| `Code/Engine/Render/Shaders/Picking/InstancePickingResolve.esf` | 16 |
+| `Code/Engine/Render/Shaders/Renderer/MaterialShaderPBR.esh` | 117 |
+
+The last one puts a `Buffer<uint64_t>` in **every material pixel shader**, so the whole frame is
+on it. **Escalated, not started.**
+
+#### Five defects in `CreateContext`, all the same class as P6.7's 16-bit finding
+
+The engine's shaders declare capabilities that Direct3D 12 folds into the shader model and Vulkan
+gates one at a time. `vkCreateShaderModule` rejects any the device did not enable. P6.7 found the
+first three; validation named five more.
+
+| Enabled now | Who needs it | Intel UHD 620 |
+|---|---|---|
+| `storageInputOutput16` | a `uint16_t` bindless handle crossing a stage interface | **no** |
+| `shaderInt64` | `uint64_t` in `InstancePickingResolve` | yes |
+| `shaderSubgroupExtendedTypes` | a wave operation on a 16- or 64-bit operand | yes |
+| `shaderDemoteToHelperInvocation` | HLSL `discard` under Shader Model 6.6 | yes |
+| `shaderBufferInt64Atomics`, `shaderSharedInt64Atomics` | a 64-bit `InterlockedMin` or `InterlockedAdd` | yes, **no** |
+
+Two optional extensions are now asked for when the device has them, chained the way the mesh
+shader and shading rate blocks already are: `VK_EXT_shader_image_atomic_int64` and
+`VK_KHR_fragment_shader_barycentric`. Neither has an RHI entry point to assert in, so a device
+without one fails at the shader that declares it.
+
+**`storageInputOutput16` is worth its own note.** A bindless handle is a `uint16_t`
+(`RHI.esh:91-96`), and shaders pass handles down the stage interface -
+`DebugDraw.esf`'s `DebugDrawPrimitiveOutput` carries a `TextureHandle` from the mesh stage to the
+pixel stage. Vulkan gates 16-bit stage I/O separately from 16-bit buffer access. Direct3D 12 does
+not: `Native16BitShaderOps` covers every use at once.
+
+#### Startup now survives a device without mesh shaders
+
+`Shaders::Initialize` creates every shader in the engine at startup, mesh stages included,
+whatever the device supports. Three changes, all in `RHI_Vulkan.cpp`:
+
+- **`CreateShader` skips `vkCreateShaderModule` for a Task or Mesh stage** when the device has no
+  `VK_EXT_mesh_shader`, and leaves the handle null. Reflection still runs, because it reads the
+  SPIR-V and not the module, so the root signature is built either way.
+- **`CreatePipeline( MeshPipelineParameters )` returns a pipeline with a null handle** instead of
+  asserting. `SurfaceShader`'s constructor builds one at startup for every shader, so the assert
+  stopped the engine before it had a frame loop over a pass it may never run. **`CmdSetPipeline`
+  asserts instead**, which names the pass.
+- **`SetVulkanObjectName` ignores a null handle.** Naming `VK_NULL_HANDLE` is a validation error,
+  and the guard belongs in the shared function rather than at each call site.
+
+With these, `Shaders::Initialize` runs to the end on a device with no mesh shader support.
+
+#### What this machine cannot do
+
+Measured on all three GPUs with `vulkaninfo` and confirmed by running. Counts are shader modules
+rejected in one startup.
+
+| Gap | Modules | Intel UHD 620 | NVIDIA MX250 | llvmpipe |
+|---|---|---|---|---|
+| `VK_KHR_fragment_shader_barycentric` | 17 | no | no | no |
+| `shaderSharedInt64Atomics` | 4 | no | yes | yes |
+| `storageInputOutput16` | 2 | no | no | no |
+| `VK_EXT_mesh_shader` | debug draw | no | no | yes |
+| `VK_EXT_mutable_descriptor_type` | all of them | yes | **no** | yes |
+
+**No GPU here can run the engine's shaders.** The MX250 is refused at device selection for
+`VK_EXT_mutable_descriptor_type`, which the binding model requires. llvmpipe and the UHD 620 both
+lack `storageInputOutput16` and barycentrics. **And open question 8 stops every device, including
+ones that pass this table.**
+
+**Barycentrics are a development tools cost.** `MaterialShaderPBR.esh:82` adds
+`SV_Barycentrics` to the material pixel shader only when `EE_DEVELOPMENT_TOOLS` is set, for a
+wireframe overlay. A Shipping build would not declare it. **The Shipping Engine binary does not
+link**, and never has: `EE::Animation::GraphController`'s virtuals and typeinfo are undefined at
+link time from the Game module. Pre-existing and unrelated to this task, and nobody has tried
+that configuration before.
+
+#### Files
+
+- Files added: none.
+- Files changed: `Code/Base/Render/RHI_Vulkan.cpp`. The port owns it; it is not upstream.
+- Upstream files edited: **none.** [TouchedFiles.md](TouchedFiles.md) is unchanged.
+
+#### Acceptance criteria
+
+Criterion 1 stays met. **Nothing else moved.** The engine gets further - `Shaders::Initialize`
+now runs to the end where it used to stop at shader 14 of 28 - but it still reaches no frame
+loop, so criteria 2 to 9 are exactly as P6.7 left them. Criteria 10 to 12 stay met: this task
+edited no upstream file.
+
+#### For the next session
+
+- **Answer open question 8 before anything else.** Nothing in the frame runs until
+  `Buffer<uint64_t>` has a Vulkan spelling, and it sits in front of P5.17 rather than behind it.
+- **Run with validation on.** The two lines at the top of this entry cost a session to find and
+  turn every remaining wall into a named message instead of a `VK_ERROR_UNKNOWN`.
+- **Do not read `VK_ERROR_UNKNOWN` from Mesa as a compile failure.** Here it meant
+  `spirv_to_nir` refused a type. `INTEL_DEBUG=cs` dumps the shaders that did compile, which is
+  how the failing one was narrowed down by elimination.
+- **A machine with a current GPU is needed to finish Phase 6.** The four gaps above are hardware,
+  not port defects. Any device with `VK_EXT_mutable_descriptor_type`, `VK_EXT_mesh_shader`,
+  `VK_KHR_fragment_shader_barycentric` and `storageInputOutput16` clears the table.
 
 ### 2026-08-30 - P6.7 `EngineApplication_Linux`. **The engine binary exists and runs**
 
@@ -4425,6 +4601,7 @@ question to "Decisions made" once you answer it.
 | 5 | ~~Does `GameNetworkingSockets` block the first `Base` link?~~ | Phase 1 | **answered: yes, and at compile time, not link** |
 | 6 | ~~Does the `VirtualAlloc` region in `Memory.cpp` have a working non-Windows path?~~ | Phase 1 | **answered: no** |
 | 7 | ~~How do the engine's indirect draws reach Vulkan?~~ | Phase 5, and the whole frame | **answered 2026-08-29: the shader reads its own command's root data out of the argument buffer, indexed by `DrawIndex`.** Scheduled as P5.17, after Phase 6 bring-up. See the decision entry |
+| 8 | How does `Buffer<uint64_t>` reach Vulkan? | Phase 6, and the whole frame | **open, raised 2026-08-31.** DXC emits a 64-bit sampled image; the RHI creates the view as `RG32_UInt` because that is what Direct3D 12 wants, and Mesa refuses the type. Six shader sites, one of them in every material pixel shader. See the P6.8 entry |
 
 Answered:
 

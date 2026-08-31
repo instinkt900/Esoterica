@@ -1008,11 +1008,57 @@ namespace EE::Render::RHI
         enabledFeatures.m_vulkan11.uniformAndStorageBuffer16BitAccess = availableFeatures.m_vulkan11.uniformAndStorageBuffer16BitAccess;
         enabledFeatures.m_vulkan11.storagePushConstant16 = availableFeatures.m_vulkan11.storagePushConstant16;
 
-        if ( availableFeatures.m_features2.features.shaderInt16 != VK_TRUE || availableFeatures.m_vulkan12.shaderFloat16 != VK_TRUE )
+        // **The fifth 16-bit feature, and the one the port cannot work around.** A bindless
+        // handle is a uint16_t (RHI.esh:91-96), and a shader passes handles down its stage
+        // interface: DebugDraw.esf's DebugDrawPrimitiveOutput carries a TextureHandle from the
+        // mesh stage to the pixel stage. That puts a 16-bit type in an Input or Output variable,
+        // which Vulkan gates separately from the buffer accesses above. Direct3D 12 does not
+        // split it out: Native16BitShaderOps covers every use at once.
+        //
+        // Found by running with validation in P6.8. No GPU in the development machine has it -
+        // not the Intel UHD 620, not the NVIDIA MX250, not llvmpipe - so the engine's shaders
+        // cannot be created there at all. See the P6.8 entry in Progress.md.
+        enabledFeatures.m_vulkan11.storageInputOutput16 = availableFeatures.m_vulkan11.storageInputOutput16;
+
+        if ( availableFeatures.m_features2.features.shaderInt16 != VK_TRUE ||
+             availableFeatures.m_vulkan12.shaderFloat16 != VK_TRUE ||
+             availableFeatures.m_vulkan11.storageInputOutput16 != VK_TRUE )
         {
-            EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "This device is missing 16-bit shader types (shaderInt16 %s, shaderFloat16 %s). Shaders that use them will fail to create.",
+            EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "This device is missing 16-bit shader types (shaderInt16 %s, shaderFloat16 %s, storageInputOutput16 %s). Shaders that use them will fail to create.",
                             availableFeatures.m_features2.features.shaderInt16 ? "yes" : "no",
-                            availableFeatures.m_vulkan12.shaderFloat16 ? "yes" : "no" );
+                            availableFeatures.m_vulkan12.shaderFloat16 ? "yes" : "no",
+                            availableFeatures.m_vulkan11.storageInputOutput16 ? "yes" : "no" );
+        }
+
+        // 64-bit types and subgroup operations
+        //-------------------------------------------------------------------------
+        // The same story as the 16-bit block, for two more capabilities the engine's shaders
+        // declare and Direct3D 12 does not gate.
+        //
+        // shaderInt64 carries the Int64 capability. InstancePickingResolve.esf packs a depth and
+        // an instance ID into one uint64_t. shaderSubgroupExtendedTypes lets a wave operation
+        // take a 16-, 64- or 8-bit operand, which the culling shaders do.
+        //
+        // Both found by running with validation in P6.8.
+        enabledFeatures.m_features2.features.shaderInt64 = availableFeatures.m_features2.features.shaderInt64;
+        enabledFeatures.m_vulkan12.shaderSubgroupExtendedTypes = availableFeatures.m_vulkan12.shaderSubgroupExtendedTypes;
+
+        // HLSL's `discard` compiles to OpDemoteToHelperInvocation under Shader Model 6.6, which
+        // Vulkan gates and Direct3D 12 does not. Every material pixel shader has one.
+        enabledFeatures.m_vulkan13.shaderDemoteToHelperInvocation = availableFeatures.m_vulkan13.shaderDemoteToHelperInvocation;
+
+        // A 64-bit InterlockedMin or InterlockedAdd. The culling shaders use them on a buffer,
+        // and the debug draw mesh shader uses one on groupshared memory, which is a separate
+        // bit again.
+        enabledFeatures.m_vulkan12.shaderBufferInt64Atomics = availableFeatures.m_vulkan12.shaderBufferInt64Atomics;
+        enabledFeatures.m_vulkan12.shaderSharedInt64Atomics = availableFeatures.m_vulkan12.shaderSharedInt64Atomics;
+
+        if ( availableFeatures.m_features2.features.shaderInt64 != VK_TRUE ||
+             availableFeatures.m_vulkan12.shaderSubgroupExtendedTypes != VK_TRUE )
+        {
+            EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "This device is missing 64-bit or extended subgroup shader types (shaderInt64 %s, shaderSubgroupExtendedTypes %s). Shaders that use them will fail to create.",
+                            availableFeatures.m_features2.features.shaderInt64 ? "yes" : "no",
+                            availableFeatures.m_vulkan12.shaderSubgroupExtendedTypes ? "yes" : "no" );
         }
 
         // Optional device extensions
@@ -1093,6 +1139,45 @@ namespace EE::Render::RHI
 
                 pVulkanContext->m_raytracing = true;
                 g_raytracingEnabled = true;
+            }
+        }
+
+        // **Two extensions the engine's shaders need, rather than passes the RHI exposes.**
+        // Neither has an RHI entry point to assert in, so a device without one fails at the
+        // shader that declares it, the way the 16-bit block does.
+        //
+        // InstancePickingResolve.esf reads a R64_UINT texel buffer, which DXC emits as the
+        // Int64ImageEXT capability. MaterialShaderPBR.esh and DebugDrawMesh.esf read
+        // SV_Barycentrics. Direct3D 12 folds both into the shader model.
+        VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT shaderImageAtomicInt64Features = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT };
+        if ( HasExtension( availableDeviceExtensions, VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME ) )
+        {
+            VkPhysicalDeviceFeatures2 shaderImageAtomicInt64Query = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+            shaderImageAtomicInt64Query.pNext = &shaderImageAtomicInt64Features;
+            vkGetPhysicalDeviceFeatures2( pVulkanContext->m_physicalDevice, &shaderImageAtomicInt64Query );
+
+            if ( shaderImageAtomicInt64Features.shaderImageInt64Atomics )
+            {
+                deviceExtensions.emplace_back( VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME );
+                // Sparse is a separate bit and nothing here uses it, so it is left as queried.
+                shaderImageAtomicInt64Features.sparseImageInt64Atomics = VK_FALSE;
+                shaderImageAtomicInt64Features.pNext = enabledFeatures.m_mutableDescriptorType.pNext;
+                enabledFeatures.m_mutableDescriptorType.pNext = &shaderImageAtomicInt64Features;
+            }
+        }
+
+        VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR fragmentShaderBarycentricFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR };
+        if ( HasExtension( availableDeviceExtensions, VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME ) )
+        {
+            VkPhysicalDeviceFeatures2 fragmentShaderBarycentricQuery = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+            fragmentShaderBarycentricQuery.pNext = &fragmentShaderBarycentricFeatures;
+            vkGetPhysicalDeviceFeatures2( pVulkanContext->m_physicalDevice, &fragmentShaderBarycentricQuery );
+
+            if ( fragmentShaderBarycentricFeatures.fragmentShaderBarycentric )
+            {
+                deviceExtensions.emplace_back( VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME );
+                fragmentShaderBarycentricFeatures.pNext = enabledFeatures.m_mutableDescriptorType.pNext;
+                enabledFeatures.m_mutableDescriptorType.pNext = &fragmentShaderBarycentricFeatures;
             }
         }
 
@@ -1482,6 +1567,14 @@ namespace EE::Render::RHI
         }
 
         if ( pVulkanContext->m_vkSetDebugUtilsObjectName == nullptr )
+        {
+            return;
+        }
+
+        // A resource the device could not accept has a null handle. CreateShader skips a mesh
+        // stage that way. Naming VK_NULL_HANDLE is a validation error, so the guard lives here
+        // rather than at each call site.
+        if ( objectHandle == 0 )
         {
             return;
         }
@@ -3158,6 +3251,10 @@ namespace EE::Render::RHI
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
         VulkanPipeline* pVulkanPipeline = static_cast<VulkanPipeline*>( pPipeline );
         VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanPipeline->m_pRootSignature );
+
+        // Null when CreatePipeline skipped a mesh pipeline on a device without VK_EXT_mesh_shader.
+        // This is where the pass that needs one is named.
+        EE_ASSERT( pVulkanPipeline->m_pipeline != VK_NULL_HANDLE );
 
         vkCmdBindPipeline( pVulkanCommandBuffer->m_commandBuffer, pVulkanPipeline->m_bindPoint, pVulkanPipeline->m_pipeline );
 
@@ -6321,12 +6418,25 @@ namespace EE::Render::RHI
             EE_ASSERT( !byteCode.empty() );
             EE_ASSERT( ( byteCode.size() % sizeof( uint32_t ) ) == 0 ); // SPIR-V is a stream of 32 bit words
 
-            VkShaderModuleCreateInfo moduleCreateInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-            moduleCreateInfo.codeSize = byteCode.size();
-            moduleCreateInfo.pCode = reinterpret_cast<uint32_t const*>( byteCode.data() );
+            // **A module the device cannot accept is not created at all.** Shaders::Initialize
+            // creates every shader in the engine at startup, whatever the device supports, and a
+            // task or mesh stage carries the MeshShadingEXT capability. vkCreateShaderModule
+            // rejects a capability the device did not enable, so on a device without
+            // VK_EXT_mesh_shader the module is skipped and the handle stays VK_NULL_HANDLE.
+            // Direct3D 12 has no equivalent step: a shader blob is data until it reaches a
+            // pipeline. Reflection still runs, because it reads the SPIR-V and not the module,
+            // so the root signature is built either way, and CmdSetPipeline is where the pass
+            // that needed the module is named.
+            bool const isMeshStage = ( stage == ShaderStage::Task ) || ( stage == ShaderStage::Mesh );
+            if ( !isMeshStage || pVulkanContext->m_meshShader )
+            {
+                VkShaderModuleCreateInfo moduleCreateInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+                moduleCreateInfo.codeSize = byteCode.size();
+                moduleCreateInfo.pCode = reinterpret_cast<uint32_t const*>( byteCode.data() );
 
-            VkResult const result = vkCreateShaderModule( pVulkanContext->m_device, &moduleCreateInfo, nullptr, &pVulkanShader->m_shaderModules[shaderIndex] );
-            EE_ASSERT( result == VK_SUCCESS );
+                VkResult const result = vkCreateShaderModule( pVulkanContext->m_device, &moduleCreateInfo, nullptr, &pVulkanShader->m_shaderModules[shaderIndex] );
+                EE_ASSERT( result == VK_SUCCESS );
+            }
 
             pVulkanShader->m_stageReflections[shaderIndex] = ExtractReflection( TArrayView<uint8_t const>( byteCode.data(), byteCode.size() ), stage );
 
@@ -6867,10 +6977,23 @@ namespace EE::Render::RHI
 
     Pipeline* CreatePipeline( Context* pContext, MeshPipelineParameters const& parameters )
     {
-        // The device has to have been created with VK_EXT_mesh_shader, which is optional. The
-        // engine has no capability flag to check first, so this is where a device without it is
-        // named. CreateContext warns at startup as well.
-        EE_ASSERT( static_cast<VulkanContext*>( pContext )->m_meshShader );
+        // The device has to have been created with VK_EXT_mesh_shader, which is optional.
+        //
+        // **A device without it gets an empty pipeline rather than a halt**, for the reason
+        // CreateShader skips a mesh module: SurfaceShader's constructor builds this pipeline at
+        // startup for every shader in the engine, so halting here stops the engine before it has
+        // a frame loop, over a pass it may never run. CmdSetPipeline halts instead, which names
+        // the pass. CreateContext warns at startup as well.
+        VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
+        if ( !pVulkanContext->m_meshShader )
+        {
+            VulkanPipeline* pVulkanPipeline = pVulkanContext->CreateObject<VulkanPipeline>();
+            pVulkanPipeline->m_device = pVulkanContext->m_device;
+            pVulkanPipeline->m_pRootSignature = parameters.m_pRootSignature;
+            pVulkanPipeline->m_pipelineType = PipelineType::Graphics;
+            pVulkanPipeline->m_bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            return pVulkanPipeline;
+        }
 
         return CreateGraphicsOrMeshPipeline( pContext, parameters, true );
     }
