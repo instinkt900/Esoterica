@@ -134,6 +134,112 @@ typedef uint Color;
 #define GetRWBuffer( index )                        ResourceDescriptorHeap[index]
 #define GetRWTexture( index )                       ResourceDescriptorHeap[index]
 
+// Indirect root arguments
+//-------------------------------------------------------------------------
+// **A Direct3D 12 command signature sets root constants and binds a root CBV per command, and
+// no Vulkan indirect draw can rebind anything per command.** So on SPIR-V the shader reads its
+// own command out of the argument buffer instead. `CmdExecuteIndirect` pushes the address, the
+// stride and the two block offsets; the shader adds its own command index.
+//
+// The command index is `DrawIndex` for a draw or a mesh dispatch, which Vulkan supplies as a
+// builtin, and `m_commandIndexBase` for an indirect compute dispatch, which has no such builtin
+// and is recorded one dispatch at a time.
+//
+// `RootConstants` and `RootCBV` keep their names and stay plain variables, so **no shader body
+// changes**. They become statics loaded once at the top of the entry point rather than uniform
+// buffers bound by a descriptor. The entry point pays for that with two macros in its signature
+// and one in its first line.
+//
+// Everything here is inside `__spirv__`, which DXC defines only when it targets SPIR-V. The
+// Direct3D 12 path keeps its command signature and compiles to identical DXIL.
+
+#ifdef __spirv__
+
+// Mirrors IndirectRootPushConstants in RHI_Vulkan.cpp. The two must agree.
+struct EE_IndirectRootPushConstants
+{
+    uint64_t    m_argumentBufferAddress;
+    uint        m_stride;
+    uint        m_commandIndexBase;
+    uint        m_rootConstantOffset;
+    uint        m_rootCbvOffset;
+};
+
+[[vk::push_constant]] EE_IndirectRootPushConstants EE_IndirectRoot;
+
+// Written by the entry init macro, because `DrawIndex` is a stage input and DXC only accepts
+// [[vk::builtin]] on a parameter. A static keeps the index reachable from the loaders.
+static uint EE_g_commandIndex = 0;
+
+#define EE_INDIRECT_COMMAND_ADDRESS ( EE_IndirectRoot.m_argumentBufferAddress + uint64_t( EE_g_commandIndex ) * uint64_t( EE_IndirectRoot.m_stride ) )
+
+// **The `ConstantBuffer` declaration stays.** It is not read on this path, but the engine builds
+// its command signature from the shader's reflected bindings - `EngineShader.cpp` walks
+// `m_descriptorReflections` - so deleting the binding deletes the argument buffer layout that
+// both backends agree on. DXC strips a resource nothing references, so the direct read below is
+// what keeps it: `m_stride` is a push constant, so nothing can prove the branch dead.
+//
+// It is also a real fallback. A shader declared this way and then bound directly rather than
+// through an indirect draw still reads the descriptor the engine wrote.
+
+#define EE_DECLARE_INDIRECT_ROOT_CONSTANTS( Type, Register, Space )                                                     \
+    EE_DECLARE_ROOT_CONSTANTS( Type, Register, Space );                                                                 \
+    static Type EE_g_RootConstants;                                                                                     \
+    void EE_InitIndirectRootConstants()                                                                                 \
+    {                                                                                                                   \
+        if ( EE_IndirectRoot.m_stride == 0 )                                                                            \
+        {                                                                                                               \
+            EE_g_RootConstants = RootConstants;                                                                         \
+        }                                                                                                               \
+        else                                                                                                            \
+        {                                                                                                               \
+            EE_g_RootConstants = vk::RawBufferLoad<Type>( EE_INDIRECT_COMMAND_ADDRESS + uint64_t( EE_IndirectRoot.m_rootConstantOffset ), 8 ); \
+        }                                                                                                               \
+    }
+
+// Two loads on the indirect path: the command holds the CBV's device address, and the CBV is at
+// that address. The address is read as a uint2 so its alignment cannot be wrong.
+#define EE_DECLARE_INDIRECT_ROOT_CBV( Type, Register, Space )                                                           \
+    EE_DECLARE_ROOT_CBV( Type, Register, Space );                                                                       \
+    static Type EE_g_RootCBV;                                                                                           \
+    void EE_InitIndirectRootCBV()                                                                                       \
+    {                                                                                                                   \
+        if ( EE_IndirectRoot.m_stride == 0 )                                                                            \
+        {                                                                                                               \
+            EE_g_RootCBV = RootCBV;                                                                                     \
+        }                                                                                                               \
+        else                                                                                                            \
+        {                                                                                                               \
+            uint2 addressWords = vk::RawBufferLoad<uint2>( EE_INDIRECT_COMMAND_ADDRESS + uint64_t( EE_IndirectRoot.m_rootCbvOffset ), 4 ); \
+            EE_g_RootCBV = vk::RawBufferLoad<Type>( PackUint64( addressWords ), 8 );                                    \
+        }                                                                                                               \
+    }
+
+// **Each indirect shader writes these two lines itself, after its declarations.** A macro cannot
+// emit a `#define`, and putting them here would rename `RootConstants` in every shader in the
+// engine rather than in the four an indirect draw reaches:
+//
+//     #ifdef __spirv__
+//     #define RootConstants EE_g_RootConstants
+//     #define RootCBV       EE_g_RootCBV
+//     #endif
+
+#define EE_INDIRECT_DRAW_ENTRY_ARGS         , [[vk::builtin( "DrawIndex" )]] int EE_drawIndex : EE_DRAWINDEX
+#define EE_INDIRECT_DRAW_ENTRY_INIT         EE_g_commandIndex = EE_IndirectRoot.m_commandIndexBase + uint( EE_drawIndex ); EE_InitIndirectRootConstants(); EE_InitIndirectRootCBV();
+#define EE_INDIRECT_DISPATCH_ENTRY_ARGS
+#define EE_INDIRECT_DISPATCH_ENTRY_INIT     EE_g_commandIndex = EE_IndirectRoot.m_commandIndexBase; EE_InitIndirectRootConstants(); EE_InitIndirectRootCBV();
+
+#else
+
+#define EE_INDIRECT_DRAW_ENTRY_ARGS
+#define EE_INDIRECT_DRAW_ENTRY_INIT
+#define EE_INDIRECT_DISPATCH_ENTRY_ARGS
+#define EE_INDIRECT_DISPATCH_ENTRY_INIT
+#define EE_DECLARE_INDIRECT_ROOT_CONSTANTS( Type, Register, Space )  EE_DECLARE_ROOT_CONSTANTS( Type, Register, Space )
+#define EE_DECLARE_INDIRECT_ROOT_CBV( Type, Register, Space )        EE_DECLARE_ROOT_CBV( Type, Register, Space )
+
+#endif
+
 BufferHandle RWBufferToBuffer( uint handle )
 {
     return BufferHandle( int( handle ) - 1 );
