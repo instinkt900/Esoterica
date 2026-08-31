@@ -60,35 +60,31 @@ namespace EE::Platform::Linux
                 continue;
             }
 
-            char commandPath[64];
-            snprintf( commandPath, sizeof( commandPath ), "/proc/%ld/comm", processID );
+            // The executable name, not /proc/<pid>/comm. comm is truncated to 15 characters, and
+            // this fork's binaries are named "Esoterica.Applications.ResourceServer" and
+            // "...ResourceCompiler", which both truncate to "Esoterica.Appli" and so compare
+            // equal to each other. /proc/<pid>/exe is the full path and needs no truncation.
+            //
+            // readlink fails with EACCES for a process owned by another user, which is the
+            // correct answer here: every caller is looking for a process it started itself.
+            char linkPath[64];
+            snprintf( linkPath, sizeof( linkPath ), "/proc/%ld/exe", processID );
 
-            FILE* pCommandFile = fopen( commandPath, "r" );
-            if ( pCommandFile == nullptr )
+            char resolvedPath[PATH_MAX] = { 0 };
+            ssize_t const length = readlink( linkPath, resolvedPath, sizeof( resolvedPath ) - 1 );
+            if ( length < 0 )
             {
                 continue;
             }
 
-            char commandName[256] = { 0 };
-            if ( fgets( commandName, sizeof( commandName ), pCommandFile ) != nullptr )
+            resolvedPath[length] = 0;
+
+            char const* pExecutableName = strrchr( resolvedPath, '/' );
+            pExecutableName = ( pExecutableName != nullptr ) ? pExecutableName + 1 : resolvedPath;
+
+            if ( strcmp( pExecutableName, processName ) == 0 )
             {
-                // /proc/<pid>/comm is newline terminated, and truncated to 15 characters
-                size_t const length = strlen( commandName );
-                if ( length > 0 && commandName[length - 1] == '\n' )
-                {
-                    commandName[length - 1] = 0;
-                }
-
-                if ( strcmp( commandName, processName ) == 0 )
-                {
-                    foundProcessID = (uint32_t) processID;
-                }
-            }
-
-            fclose( pCommandFile );
-
-            if ( foundProcessID != 0 )
-            {
+                foundProcessID = (uint32_t) processID;
                 break;
             }
         }

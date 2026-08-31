@@ -20,13 +20,18 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 > second machine has a discrete NVIDIA GPU and rendering is exactly what should be chased there.
 > See [[dev-machines]] in the 2026-08-31 entries.
 
-**Phase 7 is in flight. P7.0 and P7.1 are done, and the editor runs.**
-`Esoterica.Applications.Editor` builds, links, launches and reaches the frame loop. **The
-ResourceServer is the only thing in the tree that still fails to build**, which makes P7.3 the
-next task. The editor has not been re-run since the rendering fixes landed, so what it shows now
-is unmeasured.
+**Phase 7 is in flight. P7.0, P7.1 and P7.3 are done. The whole tree builds.**
+`Esoterica.Applications.Editor` and `Esoterica.Applications.ResourceServer` both build, link and
+launch. **Nothing in the tree fails to compile any more.** The Resource Server serves on
+127.0.0.1:5556, spawns its compiler workers and draws its full UI. P7.2, P7.4, P7.5 and P7.6 are
+what is left in the phase.
+
+**The engine and the editor no longer need `-packaged`.** `EnsureResourceServerIsRunning` was
+Windows-only and returned false, so the network resource provider could never start. P7.3 opened
+it to Linux; see the entry below for the one piece of local configuration it needs.
 
 **`Path::Split` asserted on every absolute Linux path**, and the editor could not initialise.
+
 Escalated, approved and fixed in P7.1: one character in
 `Code/Base/FileSystem/FileSystemPath.cpp`, registered in [TouchedFiles.md](TouchedFiles.md).
 
@@ -422,11 +427,14 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 
 ## In flight
 
-> ### **Everything through PR #55 is merged. Phase 7 is the work to do next.**
+> ### **P7.3 is open as a PR. The whole tree compiles.**
 >
-> A session that checks out `main` finds Phase 6 complete as written, P5.17 done, and the engine
-> recording a full frame. **Start from [Phase7-EditorTools.md](Phases/Phase7-EditorTools.md)**;
-> its "Start here" block names the three translation units that still fail and nothing else does.
+> **Start from [Phase7-EditorTools.md](Phases/Phase7-EditorTools.md).** Its "Start here" block
+> names three translation units that still fail; that is stale, all three are fixed. What is left
+> in the phase is P7.2 (the file dialogs, which are still halting stubs), P7.4, P7.5 and P7.6.
+>
+> **P7.5 is now reachable.** The Resource Server runs and the engine can reach it, so resource
+> hot reload end to end is the next real test.
 
 ---
 
@@ -554,6 +562,129 @@ startup. `RHI.esh` documents that hazard. Keep every declared resource reference
 - Files changed: `Code/Base/Render/RHI_Vulkan.cpp`. The port owns it.
 - Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
 - Acceptance criteria: no change. Phase 6 criterion 2 is still not met.
+
+### 2026-08-31 - P7.3 Resource Server. **It builds, serves, spawns workers and draws its UI**
+
+`Build/Linux_Release/Esoterica.Applications.ResourceServer` runs. It creates its window, listens
+on `127.0.0.1:5556`, spawns three `Esoterica.Applications.ResourceCompiler -worker N` processes,
+and draws the whole docked UI: the server panel, the connected worker list, the requests table,
+packaging and recompilation blockers, with the custom title bar. **`ninja -k 0` over the whole
+tree now fails nowhere.**
+
+- Files added: `Code/Applications/ResourceServer/Linux/ResourceServerApplication_Linux.{h,cpp}`,
+  listed in `LinuxSources.txt` under a new `[Esoterica.Applications.ResourceServer]` section.
+- `Code/Applications/ResourceServer/ResourceServerApplication.cpp` is excluded in
+  `Exclusions.txt`. It is `_tWinMain`, a `NOTIFYICONDATA` tray icon, an `ITaskbarList3` progress
+  overlay and a named mutex. Its header is the only place `<shellapi.h>` and
+  `Application_Win32.h` come in, and only that `.cpp` includes it, so one exclusion drops both.
+- Upstream files edited: `ResourceServerUI.cpp` (the 3-line `PlatformUtils_Linux.h` include) and
+  `Code/Base/_Module/BaseModule.cpp`. Both in [TouchedFiles.md](TouchedFiles.md).
+
+#### Decision (a): GUI, not headless - and the phase document's reasoning held
+
+`LinuxApplication` and the imgui backend already existed, so the GUI cost almost nothing. The
+whole `.cpp` is 200 lines and most of it is copied from the Win32 sibling unchanged.
+
+#### Decision (b): worker processes needed no new code at all
+
+`ResourceServerWorker.cpp` already uses the vendored `subprocess` library
+(`Code/EngineTools/ThirdParty/subprocess/`), not `CreateProcess`. It compiled and ran on Linux
+with no platform split and no change. The phase document asked for this to be checked before
+writing `fork` and `execv` by hand; the check paid off.
+
+#### What the Win32 application has that the Linux one does not
+
+| Win32 | Linux | Why |
+|---|---|---|
+| System tray icon, `Shell_NotifyIcon` | Nothing | A tray needs libayatana-appindicator or a StatusNotifierItem over D-Bus. Neither is present, and several desktops have no tray at all |
+| `StartMinimized`, and `HideApplicationWindow` on first show | Neither | Both only make sense with a tray to restore from. Without one they strand the user in an invisible process |
+| `WM_CLOSE` hides the window | Close exits | Same reason |
+| `ITaskbarList3` progress and busy overlay icons | Nothing | No portable equivalent. The busy state is already on screen in the request list, and the window is visible now |
+| A named single-instance mutex | An `flock` on a lock file | **Kept, and it turned out to be load bearing.** See below |
+| `MessageBox` confirming exit with clients connected | A logged warning, and the exit proceeds | `MessageDialog::Confirmation` on Linux logs and returns false until P7.2. Asking would refuse every exit and trap the user in a window that will not close |
+
+#### The single-instance guard is not a nicety, and cutting it was the wrong call
+
+It was cut first, on the reasoning that a second server fails to bind port 5556 and reports
+`Cant open network connection on port: 5556`, which is the message the mutex existed to give.
+**Running it disproved that.** The second instance reports the error, then dies in an assert:
+`ResourceServerContext::Initialize` allocates its `CompilerRegistry` before it opens the socket
+and does not delete it on the failure path, so `~ResourceServerContext` asserts on
+`m_pCompilerRegistry == nullptr`. The Windows mutex is what stops that path ever being reached.
+
+The guard is `flock( LOCK_EX | LOCK_NB )` on `$XDG_RUNTIME_DIR/EsotericaResourceServer.lock`,
+falling back to `/tmp/EsotericaResourceServer.<uid>.lock`. **`flock`, not a PID file:** the
+kernel drops the lock however the process dies, so a crashed server leaves nothing stale behind.
+
+#### `IsMainWindowMinimized`, added to `LinuxApplication`
+
+The Win32 loop skips its render work under `IsIconic( m_windowHandle )`. Rather than put SDL3 on
+the Resource Server's include path for one flag test, `LinuxApplication` grew
+`bool IsMainWindowMinimized() const`, defined out of line in `Application_Linux.cpp`. Both are
+this fork's own files. `Toolchain.py`'s `LINUX_ONLY_SHEETS` is unchanged, and the Resource Server
+still reaches SDL only through `Esoterica.Base`.
+
+#### `EnsureResourceServerIsRunning` was the real blocker, and it is not in the Resource Server
+
+`Code/Base/_Module/BaseModule.cpp:22` gated the whole function behind `#if _WIN32` and returned
+false otherwise. So building the Resource Server would have changed nothing for the engine or the
+editor: both still failed at `Couldn't start resource server` and still needed `-packaged`.
+
+The body needed no rewriting. Every call in it - `GetProcessID`, `GetProcessPath`,
+`GetCurrentModulePath`, `KillProcess`, `StartProcess` - is `Platform::Win32::`, and
+`PlatformUtils_Linux.h` aliases `namespace Win32 = Linux` over working implementations. The edit
+is two lines. **`BaseModule.cpp` was not on the survey list, so this was escalated and approved
+before the edit**, per Conventions rule 2.
+
+#### `GetProcessID` could never have matched, and it would have matched the wrong process
+
+Fixed in `Code/Base/Platform/PlatformUtils_Linux.cpp`, this fork's own Phase 1 file. It compared
+the requested name against `/proc/<pid>/comm`, **which the kernel truncates to 15 characters**.
+`Esoterica.Applications.ResourceServer` and `Esoterica.Applications.ResourceCompiler` both
+truncate to `Esoterica.Appli`, so the comparison could never succeed and, had the names been
+shorter, would have confused the server with the compiler. It now reads the basename of
+`/proc/<pid>/exe`, which is the full path. `readlink` fails with `EACCES` for another user's
+process, which is the right answer: every caller is looking for a process it started itself.
+
+#### One piece of local configuration, and it is not in the repository
+
+The default executable names are `EsotericaResourceServer.exe` and
+`EsotericaResourceCompiler.exe`. `Build/Linux_<configuration>/Esoterica.ini` is untracked and
+hand written, so add:
+
+```ini
+[Resource]
+Resource_Server_Exe_Name = Esoterica.Applications.ResourceServer
+Resource_Compiler_Exe_Name = Esoterica.Applications.ResourceCompiler
+```
+
+The key names are the reflected `FriendlyName` with spaces replaced by underscores, which is what
+`Settings::GenerateSectionAndKeyIDs` builds. Without them the editor spawns nothing and reports
+`Couldn't start resource server (.../EsotericaResourceServer.exe)`.
+
+#### What is not verified
+
+- **The title bar buttons.** Minimize, maximize and close are drawn and were not clicked.
+- **Serving a resource to a client.** The server listens and the editor connects, but no resource
+  has travelled the wire yet. That is P7.5.
+- **The `OpenInExplorer` context menu items** at `ResourceServerUI.cpp:799` and `:811` compile and
+  were not exercised. That is P7.4.
+- **Windows.** `ResourceServerApplication.cpp` and its header are untouched, the `ResourceServerUI.cpp`
+  and `BaseModule.cpp` edits are `#elif` branches, and no `.vcxproj` changed - but no Windows
+  build has been run.
+
+#### This machine still cannot render, and that is unrelated
+
+Both the Resource Server and the editor halt at
+`vkCreateShaderModule(): SPIR-V contains an 16-bit OpVariable with Input Storage Class, but
+storageInputOutput16 was not enabled` **when host validation is on**. This machine's Intel UHD
+620 lacks `storageInputOutput16`, and its NVIDIA MX250 is skipped for missing
+`VK_EXT_mutable_descriptor_type`. It is the shared render path, identical for both applications,
+and it has nothing to do with P7.3. With `Enable_Host_Validation = false` the Resource Server runs
+and draws correctly, which is how everything above was measured. Chase this on the RTX 3090
+machine or not at all.
+
+---
 
 ### 2026-08-31 - P7.1 `EditorApplication_Linux`. **The editor runs, and one assert blocked it**
 
@@ -5560,6 +5691,22 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `ResourceServerContext::Initialize` leaks its `CompilerRegistry` on every failure path
+
+Found in P7.3, and true on both platforms by inspection. `Initialize` allocates
+`m_pCompilerRegistry` with `EE::New<CompilerRegistry>`, then returns false if the network server
+cannot bind, if the compiled resource DB will not connect, or on any later step. Nothing deletes
+it, so `~ResourceServerContext` asserts on `m_pCompilerRegistry == nullptr`. Windows never sees
+it because the single-instance mutex in `_tWinMain` stops a second server reaching the bind.
+
+### `ResourceServerApplication::Shutdown` asserts that the application was initialized
+
+Same shape as the `Engine::Shutdown` entry below, and the same on both platforms.
+`Win32Application::Run` and `LinuxApplication::Run` both call `Shutdown()` when `Initialize()`
+returns false, before setting `m_initialized`. `Shutdown` opens with `EE_ASSERT( WasInitialized() )`,
+so a failed start asserts instead of reporting the real error. The Linux sibling returns early
+instead of asserting; the upstream file is untouched.
 
 ### `Engine::Shutdown` crashes when `Engine::Initialize` failed
 

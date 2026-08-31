@@ -15,7 +15,7 @@ Status values: `planned` · `done` · `not needed` (checked, and confirmed unnec
 
 | Category | Count |
 |---|---|
-| Files needing a 2-line `#elif` or `\|\|` addition | 7 |
+| Files needing a 2-line `#elif` or `\|\|` addition | 8 |
 | Files needing a whole-body guard wrap (2 lines) | 0 - the one candidate is an exclusion instead |
 | Files needing a real edit | 6 |
 | Shader files edited for both platforms | 10 |
@@ -95,6 +95,7 @@ Each of these files already has a platform guard. Add a sibling branch, and noth
 | `Code/Base/Render/RHI.h` | 31 | `MaxPendingFrames = 2` | A `#if defined( __linux__ )` branch setting it to 3, with the existing line kept verbatim in the `#else`. **`minImageCount` is a hard minimum and several Linux drivers report 3** - the Intel UHD 620 and llvmpipe both do, measured during P6.6 bring-up - and `Swapchain::m_renderTargets` is a fixed `TArray<Texture*, MaxPendingFrames>` that `AcquireNextImage` indexes, so the backend cannot absorb it. Windows is bit for bit unchanged and stays double buffered. **4 added, 0 modified.** Escalated and approved before the edit; see the P6.6 entry in [Progress.md](Progress.md). | 6 | **done** |
 | `Code/Engine/Render/ResourceLoaders/ResourceLoader_RenderMesh.cpp` | 64 | `clusterTriangleBufferParameters` sets a stride and no format | A `#if defined( __linux__ )` branch adding `m_format = RHI::DataFormat::R32_UInt`. **`DefaultMeshShader.esh` declares this buffer as `Buffer<uint>`, a typed buffer.** With no format the RHI cannot tell `Buffer<T>` from `StructuredBuffer<T>`, so Vulkan wrote a storage-buffer descriptor where the shader wanted a uniform texel buffer. The mutable descriptor heap swaps one for the other in silence: every triangle index read back as 0, so every primitive was degenerate. Direct3D 12 creates a structured SRV here and tolerates reading it as `Buffer<uint>`, which is why it was never noticed. Windows is bit for bit unchanged. **8 added, 0 modified.** | 5 | **done** |
 | `Code/Base/Imgui/ImguiSystem.cpp` | 12 | `#if _WIN32` includes `imgui_freetype.h` | `#if _WIN32 \|\| defined( __linux__ )`. Linux uses Freetype too. | 6 | **done** (1 modified, 0 added). Cosmetic in practice: `imconfig.h` defines `IMGUI_ENABLE_FREETYPE` unconditionally, so `imgui_freetype.cpp` was already compiled and linked on Linux before this. |
+| `Code/Base/_Module/BaseModule.cpp` | 9, 22 | `#ifdef _WIN32` includes `PlatformUtils_Win32.h`; `EnsureResourceServerIsRunning` opens with `#if _WIN32` and its `#else` returns false | `#elif defined( __linux__ )` for `PlatformUtils_Linux.h`, and `#if _WIN32` to `#if _WIN32 \|\| defined( __linux__ )`. The body needs nothing else: `GetProcessID`, `GetProcessPath`, `GetCurrentModulePath`, `KillProcess` and `StartProcess` all alias to the Linux implementation. Without this the function returned false, so any engine or editor run without `-packaged` failed at `Couldn't start resource server`. **Not on the original survey list; escalated and approved in P7.3.** **2 added, 1 modified.** | 7 | **done** |
 | `Code/Base/_Module/API.h` | 5 | `__declspec(dllexport)` and `dllimport` | A `#if defined( __linux__ )` branch using `__attribute__(( visibility( "default" ) ))`, placed first so the existing `#if`/`#ifdef` becomes an `#elif`. 2 added, 1 modified. | 1 | **done** |
 | `Code/Engine/_Module/API.h` | - | as above | as above | 1 | **done** |
 | `Code/EngineTools/_Module/API.h` | - | as above | as above | 1 | **done** |
@@ -119,6 +120,7 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 | `Code/Base/Threading/Threading.h` | Add `#include <thread>` and `#include <condition_variable>`. The file uses `std::thread` and `std::condition_variable` but includes only `<mutex>` and `<shared_mutex>`. | 1 | done |
 | `Code/Base/Render/HandleAllocator.h` | Wrap `#include <intrin.h>` in `#if _WIN32`, with an `#else` including `<immintrin.h>`. The MSVC header is where `_tzcnt_u64` and `_lzcnt_u64` come from on Windows; clang has them in `<immintrin.h>`. Guarded rather than deleted, per Conventions rule 3. | 1 | done |
 | `Code/Applications/Editor/EditorUI.h` | Add `#include "EngineTools/Core/EditorTool.h"`. The `IsToolOpen`, `GetTool` and `CreateTool` templates use `EE::EditorTool` as a complete type, and the header only forward-declares it. MSVC supplies the definition through another include; clang does not. 1 line added. | 7 | done |
+| `Code/Applications/ResourceServer/ResourceServerUI.cpp` | Add a 3-line `#if defined( __linux__ )` include of `PlatformUtils_Linux.h` next to the existing `PlatformUtils_Win32.h` include. Same fix and same reason as the four EngineTools files below: the two `Platform::Win32::OpenInExplorer` call sites at `:799` and `:811` are left alone, because `PlatformUtils_Linux.h` aliases `namespace Win32 = Linux`. **Not on the original survey list; Phase7-EditorTools.md P7.3 predicted it.** | 7 | done |
 
 ## Phase 3 - Resource Compiler
 
