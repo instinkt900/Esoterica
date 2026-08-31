@@ -58,10 +58,10 @@ VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
 **With validation off**, at `CmdExecuteIndirect`. That is P5.17, and it is now the only thing
 between this port and a drawn frame.
 
-**With validation on**, earlier, at `vkCmdPushDescriptorSetKHR`: a buffer bound as a root CBV was
-never created with `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT`, because Direct3D 12 needs no descriptor
-for a root CBV and so the caller asks for no descriptor types. **A P5.5 design question**, not a
-typo. See the open question 8 entry.
+**With validation on**, earlier, at `vkCmdPushDescriptorSetKHR`: P5.4's root constant ring is
+created with `BufferFlags::NoDescriptors`, and `CreateBuffer` reads that as "not a constant
+buffer either", so it loses `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT`. **A small fix**, diagnosed in
+the open question 8 entry.
 
 ### What this machine still cannot do
 
@@ -395,13 +395,21 @@ but descriptorType is VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
 [VUID-VkWriteDescriptorSet-descriptorType-00330]
 ```
 
-**This is a P5.5 defect and it is a design question, not a typo.** `CreateBuffer` derives its
-`VkBufferUsageFlags` from the `DescriptorTypeFlags` the caller asked for
-(`RHI_Vulkan.cpp:5256`). A buffer bound as a **root CBV** is asked for with no descriptor types
-at all, because Direct3D 12 needs no descriptor for one - a root CBV is a raw GPU address. So the
-buffer never gets `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT`, and `CmdSetRootParameter`'s push
-descriptor write is invalid. The RHI has to learn that a buffer may become a root CBV. **Not
-started.**
+**This is P5.4's own root constant ring, and it is a small fix rather than a design question.**
+`CreateCommandBuffer` builds the ring at `RHI_Vulkan.cpp:2772` with
+`m_descriptorTypes = ConstantBuffer` and `BufferFlags::NoDescriptors`, which is exactly right:
+it **is** a constant buffer, and `CmdSetRootConstants` pushes a descriptor at an offset into it
+rather than giving it a heap slot.
+
+**`CreateBuffer` conflates the two.** At `:5243` it clears `descriptorTypes` outright when
+`NoDescriptors` is set, and the usage flags are derived from the cleared copy at `:5256`. So the
+ring loses `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT` and every push descriptor write against it is
+invalid. On Direct3D 12 "no descriptors" means "no heap slots" and says nothing about what the
+buffer is; on Vulkan the usage flags are what the buffer *is*, and the two are separate
+questions.
+
+The descriptor-heap allocation at `:5360` already tests `NoDescriptors` on its own, so the clear
+at `:5243` buys nothing and only damages the usage. **Not started.**
 
 ### 2026-08-31 - P6.8 First light. **The `VK_ERROR_UNKNOWN` is explained, and it is not P5.7's**
 
