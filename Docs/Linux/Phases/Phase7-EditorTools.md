@@ -7,52 +7,137 @@ Server runs, and resource hot-reloading works end to end. **The binaries are nam
 projects on Linux**, as the Reflector, the ResourceCompiler and now the Engine are; this document
 originally wrote `EsotericaEditor`.
 
-**Prerequisites:** Phase 6 complete.
+**Prerequisites: Phase 6 is written, and it does not meet its goal.** Read the block below before
+anything else. **Phase 7 does not depend on the part that is missing**, which is why it is the
+work to do next.
 
 **Rough cost:** 3-4 weeks.
 
 **Read first:** [00-Conventions.md](../00-Conventions.md),
 [TouchedFiles.md](../TouchedFiles.md).
 
+---
+
+> ## Start here
+>
+> ```bash
+> python3 Code/Scripts/NinjaGen/NinjaGen.py
+> ninja -f Build/Linux/Esoterica.ninja -k 0
+> ```
+>
+> **Three translation units fail, and nothing else does.** That is the whole of Phase 7's build
+> problem as of 2026-08-31:
+>
+> | File | Error | Task |
+> |---|---|---|
+> | `ResourceServerApplication.h:13` | `'shellapi.h' file not found` | P7.3 |
+> | `ResourceServerUI.cpp:799` and `:811` | `no member named 'Win32' in namespace 'EE::Platform'` | P7.3, P7.4 |
+> | `EditorUI.h:141`, `:157`, `:189` | `member access into incomplete type 'EE::EditorTool'` | P7.0 |
+>
+> The last one is **not** an editor problem. `EditorUI.h` uses `EE::EditorTool` in a template and
+> never includes `EngineTools/Core/EditorTool.h`; MSVC supplies it transitively and clang does
+> not. It is the "Missing includes that MSVC supplies transitively" category that
+> [TouchedFiles.md](../TouchedFiles.md) already has a section for. **Fix it first** - it is one
+> line and it unblocks the editor's own build.
+>
+> To run anything, see the "Start here" block in [Progress.md](../Progress.md). Two things there
+> are not obvious and each cost a session: host validation has to be switched on by hand in
+> `Esoterica.ini`, and `VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true` is what makes the
+> Ubuntu 24.04 validation layers usable.
 
 > ## What Phase 6 hands you, and how it shapes this phase
 >
-> **imgui multi-viewport does not work under Wayland, and cannot be made to.**
-> `ImGui_ImplSDL3_Init` enables `ImGuiBackendFlags_PlatformHasViewports` only for video drivers
-> on its global-mouse white list, and `wayland` is not on it. **The editor's docking UI depends
-> on viewports**, so an editor session on Wayland gets everything merged into one window. That is
-> upstream imgui's own gate, not a port defect. Verified working on X11: three imgui windows
-> became three live SDL windows. See the P6.3 entry in [Progress.md](../Progress.md).
+> ### The editor will not render on this machine, and that is not your bug
+>
+> **No GPU in the development machine can run the engine's geometry path.** The engine's whole
+> geometry path is mesh shaders; neither real GPU here has `VK_EXT_mesh_shader`, the software
+> rasteriser crashes compiling the shaders, and the NVIDIA part is refused for a missing
+> extension. The RHI **drops every mesh draw** on such a device and says so once in the log, so a
+> frame completes without its geometry.
+>
+> **The engine records and submits a complete frame with zero validation errors, and then the GPU
+> hangs executing it.** That hang is unresolved. Some part of it is likely an artefact of the
+> dropped mesh draws rather than a real defect, and **the two cannot be told apart without mesh
+> shader hardware.**
+>
+> **So do not chase rendering on this machine.** Phase 7 is compile, link and tools work, and
+> almost none of it needs a working frame. If the editor comes up with a blank or broken
+> viewport, that is expected and already explained. Record it and move on. See the image layouts
+> entry in [Progress.md](../Progress.md).
+>
+> ### What is genuinely ready
 >
 > **`LinuxApplication` is written and its interface is settled.** `EditorApplication_Linux` and
 > the ResourceServer both derive from it. Read the P6.2 entry before you subclass it; in
 > particular, `ProcessEvent` deliberately ignores what imgui's handler returns, and the window
 > size it reports is in pixels while the position is in logical coordinates.
 >
-> **The ResourceServer is what the engine is waiting on too.** Until it builds, the engine has to
-> be run with `-packaged`, which reads `Build/Linux_<configuration>/CompiledData` directly instead
-> of going through the network resource provider.
+> **The imgui platform backend works, with multi-viewport verified on X11** - three imgui windows
+> became three live SDL windows. Nothing has yet rendered imgui through the engine's own
+> renderer.
+>
+> **imgui multi-viewport does not work under Wayland, and cannot be made to.**
+> `ImGui_ImplSDL3_Init` enables `ImGuiBackendFlags_PlatformHasViewports` only for video drivers
+> on its global-mouse white list, and `wayland` is not on it. **The editor's docking UI depends
+> on viewports**, so an editor session on Wayland gets everything merged into one window. That is
+> upstream imgui's own gate, not a port defect. This machine runs i3 on X11 and has no Wayland
+> compositor, so Wayland is untested either way.
+>
+> **All four configurations link.** Debug, Release and Shipping all produce an engine binary;
+> Shipping only started to on 2026-08-31.
+>
+> ### The ResourceServer is what the engine is waiting on too
+>
+> Until it builds, the engine has to be run with `-packaged`, which reads
+> `Build/Linux_<configuration>/CompiledData` directly instead of going through the network
+> resource provider. **That makes P7.3 the highest-value task in this phase**, and a reasonable
+> place to start once the one-line `EditorUI.h` fix is in.
+>
+> Note also that `CompiledData` exists for `Linux_Release` only. A Shipping or Debug run has no
+> data and fails at initialisation.
 
 ---
 
 ## What is actually left
 
-Less than the phase's position in the list suggests. The substance of the editor,
-`Code/Applications/Editor/EditorUI.cpp` and all of `Code/EngineTools/`, is platform-neutral, and
-it has compiled since Phase 3. `EditorApplication_Win32.cpp` is only 127 lines, because the real
-logic lives in `EditorUI`.
+Less than the phase's position in the list suggests, and **measured rather than estimated**: a
+whole-tree `ninja -k 0` on 2026-08-31 failed in **three translation units and no others**. The
+substance of the editor, `Code/Applications/Editor/EditorUI.cpp` and all of `Code/EngineTools/`,
+is platform-neutral and has compiled since Phase 3. `EditorApplication_Win32.cpp` is only 127
+lines, because the real logic lives in `EditorUI`.
 
 What remains:
 
-1. Native file dialogs, `SystemDialogs.cpp`, 552 lines of COM. This is the biggest item.
-2. `EditorApplication_Linux`, which is thin and mirrors the Phase 6 engine app.
-3. The Resource Server, a Win32 GUI app that spawns worker processes.
+0. **One missing include in `EditorUI.h`.** A few minutes, and the editor's own build is then
+   clean. See P7.0.
+1. The Resource Server, a Win32 GUI app that spawns worker processes. **Start here after P7.0**:
+   it is what lets the engine and the editor stop running with `-packaged`.
+2. Native file dialogs, `SystemDialogs.cpp`, 552 lines of COM. This is the biggest *new* code.
+3. `EditorApplication_Linux`, which is thin and mirrors the Phase 6 engine app.
 4. The `OpenInExplorer` call sites. They have resolved since Phase 1, so this is about checking
    that they behave.
+
+**Two of these do not need a window at all**, let alone a working frame: P7.0 and the compiling
+half of P7.3. That is most of the value in this phase, and it is all reachable on this machine.
 
 ---
 
 ## Tasks
+
+### P7.0 - The `EditorUI.h` include - **do this first**
+
+`Code/Applications/Editor/EditorUI.h` uses `EE::EditorTool` in the `IsToolOpen` and
+`GetToolOfType` templates and never includes `EngineTools/Core/EditorTool.h`. MSVC supplies it
+transitively through another header; clang does not, so all three uses fail with `member access
+into incomplete type`.
+
+**One include, in the existing block.** It is the "Missing includes that MSVC supplies
+transitively" category, which [TouchedFiles.md](../TouchedFiles.md) already has a section and a
+precedent for - register it there in the same commit. Windows is unaffected: the header was
+already being included, just not by name.
+
+This is the only thing between here and a clean editor compile, so it is worth doing on its own
+before the phase proper starts.
 
 ### P7.1 - `EditorApplication_Linux`
 
@@ -178,8 +263,15 @@ platform-neutral upstream bugs. See Conventions rule 3.
 
 ## Acceptance criteria
 
+**Criteria 3, 5, 8 and 9 need a window that draws, and criterion 10 needs a frame.** No GPU in
+the current development machine renders the engine's geometry path; see the Phase 6 block at the
+top. **Say which of these you could not check, rather than marking them met or failed.** The rest
+- the builds, the Resource Server, hot reload, the file dialogs - do not need a rendered frame.
+
 1. `Build/Linux_Release/Esoterica.Applications.Editor` builds, links, and launches.
-2. `Build/Linux_Release/EsotericaResourceServer` builds, links, and runs.
+2. `Build/Linux_Release/Esoterica.Applications.ResourceServer` builds, links, and runs. **The
+   binary is named after its project**, like every other Linux binary in this port; this document
+   originally wrote `EsotericaResourceServer`.
 3. The editor's borderless window works: drag, resize from all edges, maximize, restore, and
    minimize.
 4. Native file dialogs open, filter by extension, and return correct paths for open, save, and
@@ -206,6 +298,10 @@ platform-neutral upstream bugs. See Conventions rule 3.
 - Claim the editor works because it launched. Criterion 8 means opening the tools.
 
 ## Notes for the next agent
+
+**Phase 6 left deliberate debt, and it is listed in
+[Progress.md](../Progress.md#deferred-on-purpose).** Those are known, chosen shortcuts, not
+things to rediscover. If you hit one, check that list before investigating.
 
 This is the last planned phase. Record this in [Progress.md](../Progress.md):
 

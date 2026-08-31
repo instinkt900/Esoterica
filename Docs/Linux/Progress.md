@@ -10,7 +10,13 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 6. The engine reaches its frame loop.** Open question 8 is answered and the
+**Phase 7 is the work to do next.** Start from
+[Phase7-EditorTools.md](Phases/Phase7-EditorTools.md); its "Start here" block names the three
+translation units that still fail and nothing else does. **Do not chase rendering on this
+machine** - see "What this machine still cannot do" below, and
+[Deferred on purpose](#deferred-on-purpose).
+
+**Phase 6 is written and does not meet its goal. The engine reaches its frame loop.** Open question 8 is answered and the
 `VK_ERROR_UNKNOWN` is gone. `Shaders::Initialize` runs to the end, every compute and graphics
 pipeline is created, and the engine stops at **`CmdExecuteIndirect`**, which is P5.13's refusal
 and [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)'s
@@ -56,8 +62,10 @@ VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
 ### Where it stops, and it depends on validation
 
 **The whole frame records and submits with zero validation errors, and the GPU hangs executing
-it.** `VK_ERROR_DEVICE_LOST` is the only thing left between this port and a picture. See the image
-layouts entry for the two candidates and how to bisect it.
+it.** `VK_ERROR_DEVICE_LOST`. **Deliberately not chased**: the mesh draws are dropped on this
+hardware, so later passes read what the geometry path never wrote, and a real defect cannot be
+told apart from an artefact of that without mesh shader hardware. The image layouts entry records
+the two candidates and how to bisect it when there is hardware to bisect on.
 
 
 **With validation on**, in the same place, with **zero validation messages** on the way there
@@ -256,15 +264,37 @@ Linux build status: `libEsoterica.Base.so`, `libEsoterica.Engine.Runtime.so`,
 `Applications/BuildGenerator` is excluded permanently.
 Windows build status: **not run.** 69 upstream files carry `+494 -71` lines across Phases 0-3.
 
+## Deferred on purpose
+
+**Known shortcuts, chosen rather than missed.** Priorities were set explicitly on 2026-08-31:
+blockers before correctness, because the port could not draw anything at all. Each of these is
+correct-enough to keep going and wrong enough to sweep before the port is called done.
+
+**Do not rediscover these. Check here first when something looks wrong.**
+
+| What | Where | Why it was deferred | What it costs |
+|---|---|---|---|
+| The cluster culling argument buffer is never cleared | `Renderer_ForwardShading.cpp:730`, beside the two counter clears | One line in an **upstream engine file**, and Direct3D 12 never needed it because its indirect count stops the walk | The indirect compute loop is only correct while `maxNumCommands` is 1, which is what the pbrdemo scene happens to pass. Beyond that a command past the GPU-written count reads a stale slot |
+| Attachment transitions use `ALL_COMMANDS` and all-access masks | `TransitionAttachmentIfNeeded`, `RHI_Vulkan.cpp` | Nothing at the call site says what last touched the image or what the pass will do to it | Over-synchronisation. Correct, slow. Belongs with the other `ALL_COMMANDS` sites above |
+| Mesh draws are dropped instead of halting | `CmdSetPipeline`, `RHI_Vulkan.cpp` | No GPU here has `VK_EXT_mesh_shader`, and halting stopped the frame before anything else could be exercised | **A frame missing its geometry is not a rendered frame.** It warns once. On hardware with mesh shaders the branch never runs |
+| An indirect `RootSRV` cannot be read | `CreateCommandSignature`, `RHI_Vulkan.cpp` | Only `RootConstants` and `RootCBV` have indirect declarations. `DebugDrawMesh.esf` declares a `RootSRV`, so a signature can carry one | Nothing indexes it yet. A shader that did would need a third declaration macro |
+| The `GPU hang` after a full frame | See the image layouts entry | Unresolvable here: part of it is likely an artefact of the dropped mesh draws, and the two cannot be told apart without mesh hardware | The frame records and submits clean and never presents |
+
+**Five upstream shader files are unverified on Windows.** `RHI.esh` and the four shaders changed
+by open question 8 and P5.17 compile for both platforms and have only ever been built on Linux.
+They are guarded by `#ifdef __spirv__`, so the Direct3D path should be untouched - "should" is
+the word that needs a Windows build. This is the highest-risk item in the port right now, and it
+needs a **Windows machine**, not new GPU hardware. The two waits are different.
+
+---
+
 ## In flight
 
-> ### **Phase 6 is merged. P6.8 is the one branch open.**
+> ### **Everything through PR #55 is merged. Phase 7 is the work to do next.**
 >
-> PRs #43 to #49 all landed, so a session that checks out `main` finds P6.1 to P6.7.
-
-| Branch | PR | What |
-|---|---|---|
-| `linux/p6.8-first-light` | open | The `VK_ERROR_UNKNOWN` root cause, five `CreateContext` feature defects, and the mesh-shader startup path |
+> A session that checks out `main` finds Phase 6 complete as written, P5.17 done, and the engine
+> recording a full frame. **Start from [Phase7-EditorTools.md](Phases/Phase7-EditorTools.md)**;
+> its "Start here" block names the three translation units that still fail and nothing else does.
 
 ---
 
