@@ -6,8 +6,15 @@
 
 ESF_PARAMETER string ShaderType = "Compute";
 
-EE_DECLARE_ROOT_CONSTANTS( ClusterCullingRootConstants, b0, space0 );
-EE_DECLARE_ROOT_CBV( GlobalParameters, b1, space0 );
+EE_DECLARE_INDIRECT_ROOT_CONSTANTS( ClusterCullingRootConstants, b0, space0 );
+EE_DECLARE_INDIRECT_ROOT_CBV( GlobalParameters, b1, space0 );
+
+// Reached only by an indirect dispatch, so the root arguments are read out of the argument
+// buffer. See EE_DECLARE_INDIRECT_ROOT_CONSTANTS in RHI.esh; the bodies below do not change.
+#ifdef __spirv__
+#define RootConstants EE_g_RootConstants
+#define RootCBV       EE_g_RootCBV
+#endif
 
 bool IsConeBackface( float3 clusterCenter, float3 coneAxis, float coneCutoff, float3 cameraPosition, float radius )
 {
@@ -16,8 +23,10 @@ bool IsConeBackface( float3 clusterCenter, float3 coneAxis, float coneCutoff, fl
 
 [RootSignature( ClusterCullingRootSignature )]
 [numthreads( 64, 1, 1 )]
-void CS_main( uint groupID : SV_GroupID, uint groupThreadID :  SV_GroupThreadID, uint3 dispatchThreadID : SV_DispatchThreadID )
+void CS_main( uint groupID : SV_GroupID, uint groupThreadID :  SV_GroupThreadID, uint3 dispatchThreadID : SV_DispatchThreadID EE_INDIRECT_DISPATCH_ENTRY_ARGS )
 {
+    EE_INDIRECT_DISPATCH_ENTRY_INIT
+
     StructuredBuffer<RenderView>                    renderViewBuffer                = GetBuffer( RootCBV.m_renderViewBuffer );
     StructuredBuffer<MeshInstance>                  meshInstanceBuffer              = GetBuffer( RootCBV.m_meshInstanceBuffer );
     ByteAddressBuffer                               meshInstanceRootBuffer          = GetBuffer( RootCBV.m_meshInstanceRootBuffer );
