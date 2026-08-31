@@ -6,14 +6,15 @@
 opens a window and renders. The binary is named after its project, like the Reflector and the
 ResourceCompiler, and `-packaged` is needed until the ResourceServer builds in Phase 7.
 
-> ## Status: P6.1 to P6.8 are written. **The phase does not meet its goal, and cannot on this
-> machine.**
+> ## Status: P6.1 to P6.8 are written. **The engine reaches its frame loop and stops at
+> `CmdExecuteIndirect`.**
 >
-> The engine binary builds, links, starts and creates every shader in the engine. It renders no
-> map. Two things stop it: **open question 8**, which needs a shader change and stops any Vulkan
-> device, and **four hardware gaps** that no GPU in the development machine clears. Both are
-> measured in the P6.8 entry in [Progress.md](../Progress.md). Read the P6.x entries there
-> first; they carry every measurement and every decision this phase made.
+> Open question 8 is answered, so every shader and every pipeline now builds. The one thing
+> between this port and a drawn frame is
+> [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started).
+> Four hardware gaps remain, and the driver tolerates all of them with validation off. Read the
+> P6.x and open question 8 entries in [Progress.md](../Progress.md) first; they carry every
+> measurement and every decision this phase made.
 
 **Prerequisites:** Phase 5, all sixteen groups, which are written and merged. **This phase is
 where the Vulkan backend ran for the first time**, and doing so found four real defects in it.
@@ -26,9 +27,10 @@ which is deliberately scheduled after this phase.** Every engine render pass dra
 line. The window, the input, the swapchain and imgui all come up without it. **Geometry does
 not.** Read acceptance criterion 2 with that in mind.
 
-**And [open question 8](../Progress.md#open-questions) now sits in front of P5.17.** The
-engine's `Buffer<uint64_t>` has no Vulkan spelling, and one sits in every material pixel shader.
-P6.8 found it and escalated it. Nothing in the frame runs until it is answered.
+**[Open question 8](../Progress.md#open-questions) is answered and out of the way.** The
+engine's `Buffer<uint64_t>` had no Vulkan spelling; the shaders now read `Buffer<uint2>` and
+pack. No C++ changed, because the RHI already created every one of those buffers as `RG32_UInt`.
+P5.17 is now the only thing left in front of a drawn frame.
 
 **Rough cost:** 3-4 weeks.
 

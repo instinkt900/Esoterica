@@ -1053,6 +1053,12 @@ namespace EE::Render::RHI
         enabledFeatures.m_vulkan12.shaderBufferInt64Atomics = availableFeatures.m_vulkan12.shaderBufferInt64Atomics;
         enabledFeatures.m_vulkan12.shaderSharedInt64Atomics = availableFeatures.m_vulkan12.shaderSharedInt64Atomics;
 
+        // CreateGraphicsOrMeshPipeline sets depthClampEnable from the engine's rasterizer state,
+        // which is the inverse of Direct3D 12's DepthClipEnable and so is on for any pass that
+        // does not clip. Direct3D 12 has no feature bit for it. Found by running with validation
+        // once the engine reached graphics pipeline creation, in open question 8's verification.
+        enabledFeatures.m_features2.features.depthClamp = availableFeatures.m_features2.features.depthClamp;
+
         if ( availableFeatures.m_features2.features.shaderInt64 != VK_TRUE ||
              availableFeatures.m_vulkan12.shaderSubgroupExtendedTypes != VK_TRUE )
         {

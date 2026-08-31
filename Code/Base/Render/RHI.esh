@@ -144,6 +144,22 @@ BufferHandle BufferToRWBuffer( uint handle )
     return BufferHandle( int( handle ) + 1 );
 }
 
+// A 64-bit page mask is stored in a typed buffer as two 32-bit words, low word first, because
+// no typed buffer format is 64 bits wide. The RHI creates every one of these buffers as
+// RG32_UInt, so a `Buffer<uint2>` names what the view already is. `Buffer<uint64_t>` does not:
+// DXC's SPIR-V back end turns it into a 64-bit sampled image with format R64ui, which no view
+// the RHI creates can match and Mesa refuses outright. See open question 8 in
+// Docs/Linux/Progress.md.
+uint64_t PackUint64( uint2 value )
+{
+    return uint64_t( value.x ) | ( uint64_t( value.y ) << 32 );
+}
+
+uint2 UnpackUint64( uint64_t value )
+{
+    return uint2( uint( value & 0xFFFFFFFF ), uint( value >> 32 ) );
+}
+
 // Convenience macro for common loop unrolling work in compute shaders.
 //
 // Applies expression X to each element in the 0..C range using all threads in the thread group

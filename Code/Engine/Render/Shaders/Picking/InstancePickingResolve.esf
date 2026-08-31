@@ -13,12 +13,12 @@ EE_DECLARE_ROOT_CBV( GlobalParameters, b0, space0 );
 [numthreads( 64, 1, 1 )]
 void CS_main( uint groupID : SV_GroupID, uint groupThreadID : SV_GroupThreadID, uint3 dispatchThreadID : SV_DispatchThreadID )
 {
-    Buffer<uint64_t>                    meshInstancePageBuffer          = GetBuffer( RootCBV.m_meshInstancePageBuffer );
+    Buffer<uint2>                       meshInstancePageBuffer          = GetBuffer( RootCBV.m_meshInstancePageBuffer );
     
     RWBuffer<uint>                      instancePickingDistancesBuffer  = GetBuffer( RootCBV.m_instancePickingDistancesBuffer );   
     AppendBuffer<PickingResult>         pickingResultsBuffer            = CreateAppendBuffer<PickingResult>( RootCBV.m_instancePickingResultsBuffer );
     
-    uint64_t meshInstancePage = meshInstancePageBuffer[groupID];
+    uint64_t meshInstancePage = PackUint64( meshInstancePageBuffer[groupID] );
     uint64_t meshInstancePageMask = ( 1ULL << groupThreadID );
         
     if ( meshInstancePage & meshInstancePageMask )
