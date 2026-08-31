@@ -150,31 +150,49 @@ def format_define( define ):
 #-------------------------------------------------------------------------
 
 def topological_order( solution, project ):
-    """Returns `project`'s dependencies, closest first.
+    """Returns `project`'s dependencies, dependents before the things they depend on.
 
-    A static archive has to appear on the link line after everything that needs it, so link
-    order is the reverse topological order of the reference graph.
+    A static archive is scanned once, in order, and only pulls out the symbols that are
+    undefined at the moment the linker reaches it. So every archive has to appear *before* the
+    archives it needs, and link order is the reverse topological order of the reference graph.
+
+    This used to be a pre-order walk, which is right for a chain and wrong for a fan: given
+    references [Engine.Runtime, Game.Runtime], it emitted Engine.Runtime first, and
+    Game.Runtime's references into it were then already past. The Shipping configuration is the
+    only one built as static archives, and it failed to link for exactly that reason - undefined
+    references to EE::Animation::GraphController from the Game module. Debug and Release build
+    shared libraries, where the loader resolves the graph and order does not matter, which is why
+    nothing noticed.
     """
 
     ordered = []
-    seen = set()
+    visiting = set()
+    visited = set()
 
     def visit( name ):
-        if name in seen:
+        # A cycle between two archives cannot be fixed by ordering. Nothing in the solution has
+        # one today; the guard is here so a future one is a wrong link rather than a hang.
+        if name in visited or name in visiting:
             return
-        seen.add( name )
+
+        visiting.add( name )
 
         dependency = solution.get_project( name )
-        if dependency is None:
-            return
+        if dependency is not None:
+            for reference in dependency.references:
+                visit( reference )
 
-        ordered.append( dependency )
-        for reference in dependency.references:
-            visit( reference )
+            # Post-order: appended once everything it needs is already in the list.
+            ordered.append( dependency )
+
+        visiting.discard( name )
+        visited.add( name )
 
     for reference in project.references:
         visit( reference )
 
+    # Reversed, so each archive precedes the ones it needs.
+    ordered.reverse()
     return ordered
 
 def library_path( project, configuration ):
