@@ -720,25 +720,6 @@ namespace EE::Render::RHI
         void* pContextMemory = Memory::Allocators::g_RHI.Alloc( sizeof( VulkanContext ), alignof( VulkanContext ) );
         VulkanContext* pVulkanContext = new ( pContextMemory ) VulkanContext();
 
-        // RenderDoc
-        //-------------------------------------------------------------------------
-        // dlopen with RTLD_NOLOAD, so this attaches to a RenderDoc that already injected itself
-        // and never loads one that is not there. That mirrors GetModuleHandleA on Windows,
-        // which also only finds an already-loaded module.
-
-        if ( parameters.m_enableRenderDoc )
-        {
-            pVulkanContext->m_pRenderDocLibrary = dlopen( "librenderdoc.so", RTLD_NOW | RTLD_NOLOAD );
-            if ( pVulkanContext->m_pRenderDocLibrary != nullptr )
-            {
-                pRENDERDOC_GetAPI renderdoc_GetAPI = reinterpret_cast<pRENDERDOC_GetAPI>( dlsym( pVulkanContext->m_pRenderDocLibrary, "RENDERDOC_GetAPI" ) );
-                if ( renderdoc_GetAPI != nullptr && renderdoc_GetAPI( eRENDERDOC_API_Version_1_0_0, reinterpret_cast<void**>( &pVulkanContext->m_pRenderDocAPI ) ) == 1 )
-                {
-                    EE_LOG_MESSAGE( LogCategory::Render, "RHI/CreateContext", "RenderDoc connected" );
-                }
-            }
-        }
-
         // Instance
         //-------------------------------------------------------------------------
 
@@ -839,6 +820,30 @@ namespace EE::Render::RHI
             pVulkanContext->~VulkanContext();
             Memory::Allocators::g_RHI.Free( (void*&) pVulkanContext );
             return nullptr;
+        }
+
+        // RenderDoc
+        //-------------------------------------------------------------------------
+        // **After vkCreateInstance, and that is the whole point.**
+        //
+        // dlopen with RTLD_NOLOAD attaches to a RenderDoc that is already loaded and never loads
+        // one that is not there. On Windows RenderDoc injects itself into the process before
+        // main, so GetModuleHandleA finds it whenever this runs. On Linux it arrives as an
+        // implicit Vulkan layer, and the loader only maps librenderdoc.so while servicing
+        // vkCreateInstance. Probing before that call always missed it, so the API was never
+        // connected and in-app capture could not work at all.
+
+        if ( parameters.m_enableRenderDoc )
+        {
+            pVulkanContext->m_pRenderDocLibrary = dlopen( "librenderdoc.so", RTLD_NOW | RTLD_NOLOAD );
+            if ( pVulkanContext->m_pRenderDocLibrary != nullptr )
+            {
+                pRENDERDOC_GetAPI renderdoc_GetAPI = reinterpret_cast<pRENDERDOC_GetAPI>( dlsym( pVulkanContext->m_pRenderDocLibrary, "RENDERDOC_GetAPI" ) );
+                if ( renderdoc_GetAPI != nullptr && renderdoc_GetAPI( eRENDERDOC_API_Version_1_0_0, reinterpret_cast<void**>( &pVulkanContext->m_pRenderDocAPI ) ) == 1 )
+                {
+                    EE_LOG_MESSAGE( LogCategory::Render, "RHI/CreateContext", "RenderDoc connected" );
+                }
+            }
         }
 
         // Debug messenger
