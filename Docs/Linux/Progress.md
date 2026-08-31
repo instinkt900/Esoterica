@@ -17,9 +17,9 @@ fails to build**, which makes P7.3 the next task. **Do not chase rendering on th
 see "What this machine still cannot do" below, and
 [Deferred on purpose](#deferred-on-purpose).
 
-**One escalation is open**: `Path::Split` asserts on every absolute Linux path, and
-`Code/Base/FileSystem/FileSystemPath.cpp` is not in [TouchedFiles.md](TouchedFiles.md). See the
-P7.1 entry. The editor cannot initialise until it is decided.
+**`Path::Split` asserted on every absolute Linux path**, and the editor could not initialise.
+Escalated, approved and fixed in P7.1: one character in
+`Code/Base/FileSystem/FileSystemPath.cpp`, registered in [TouchedFiles.md](TouchedFiles.md).
 
 **Phase 6 is written and does not meet its goal. The engine reaches its frame loop.** Open question 8 is answered and the
 `VK_ERROR_UNKNOWN` is gone. `Shaders::Initialize` runs to the end, every compute and graphics
@@ -385,8 +385,10 @@ and both callers index with `m_dataDirectoryPathDepth + 1`, which `GetDirectoryD
 from the same delimiter count. Windows is unaffected: no Windows path it accepts today produces
 two delimiters in a row.
 
-**`Code/Base/FileSystem/FileSystemPath.cpp` is not in [TouchedFiles.md](TouchedFiles.md), so this
-is escalated and not committed with P7.1.**
+**`Code/Base/FileSystem/FileSystemPath.cpp` was not in [TouchedFiles.md](TouchedFiles.md), so it
+was escalated rather than changed. Approved, made, and registered there.** It is the second
+upstream file this port edits for a reason other than an include switch, after
+`RHI::MaxPendingFrames`.
 
 **With the assert relaxed the editor runs to the frame loop.** It loads compiled data, creates
 the Vulkan device, builds the tools UI, drops the mesh draws with the usual warning, and dies on

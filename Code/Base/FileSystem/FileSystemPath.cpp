@@ -253,7 +253,7 @@ namespace EE::FileSystem
         size_t currentDelimiterIdx = m_fullpath.find( s_pathDelimiter );
         while ( currentDelimiterIdx != String::npos )
         {
-            EE_ASSERT( currentDelimiterIdx > previousDelimiterIdx );
+            EE_ASSERT( currentDelimiterIdx >= previousDelimiterIdx );
             split.emplace_back( m_fullpath.substr( previousDelimiterIdx, currentDelimiterIdx - previousDelimiterIdx ) );
 
             previousDelimiterIdx = currentDelimiterIdx + 1;
