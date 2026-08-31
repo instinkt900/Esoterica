@@ -38,6 +38,12 @@ Code/EngineTools/Core/SystemDialogs.cpp
 # left to compile to nothing. Sibling: FileSystemWatcher_Linux.cpp, on inotify.
 Code/EngineTools/FileSystem/FileSystemWatcher.cpp
 
+# The Resource Server entry point: _tWinMain, a NOTIFYICONDATA system tray icon, an ITaskbarList3
+# progress overlay, and a named single-instance mutex. Its header includes <shellapi.h> and
+# Application_Win32.h, and only this .cpp includes that header, so dropping the .cpp drops both.
+# Sibling: Linux/ResourceServerApplication_Linux.cpp. See P7.3.
+Code/Applications/ResourceServer/ResourceServerApplication.cpp
+
 #-------------------------------------------------------------------------
 # Direct3D 12
 #-------------------------------------------------------------------------

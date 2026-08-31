@@ -171,6 +171,16 @@ namespace EE
         SDL_ShowWindow( m_pWindow );
     }
 
+    bool LinuxApplication::IsMainWindowMinimized() const
+    {
+        if ( m_pWindow == nullptr )
+        {
+            return false;
+        }
+
+        return ( SDL_GetWindowFlags( m_pWindow ) & SDL_WINDOW_MINIMIZED ) != 0;
+    }
+
     bool LinuxApplication::TryCreateSplashScreen()
     {
         if ( m_splashScreenFilePath.empty() )
