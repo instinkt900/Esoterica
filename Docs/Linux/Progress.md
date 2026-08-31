@@ -55,9 +55,9 @@ VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
 
 ### Where it stops, and it depends on validation
 
-**Past `CmdExecuteIndirect`**, which P5.17 finished. The engine now stops in
-`CmdSetRenderTargets`, on a depth texture still in `VK_IMAGE_LAYOUT_UNDEFINED` - a texture layout
-defect in P5.6 and P5.9 territory. See the P5.17 entry.
+**The whole frame records and submits with zero validation errors, and the GPU hangs executing
+it.** `VK_ERROR_DEVICE_LOST` is the only thing left between this port and a picture. See the image
+layouts entry for the two candidates and how to bisect it.
 
 
 **With validation on**, in the same place, with **zero validation messages** on the way there
@@ -308,6 +308,85 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-31 - Image layouts, dropped mesh draws and the swapchain spelling. **The whole frame records**
+
+**The engine records and submits a complete frame with zero validation errors.** Every pass runs:
+cluster culling, the depth pass, the environment map capture, forward shading, post process,
+imgui, the swapchain. **The GPU then hangs executing it** - `VK_ERROR_DEVICE_LOST` - which is the
+one thing left between this port and a picture.
+
+Priorities for this run were set explicitly: **blockers before correctness.** Several things below
+are deliberately blunt, and each says so.
+
+#### The RHI transitions attachments the engine never barriers
+
+Direct3D 12 has no image layouts, so the engine binds a render target it has not transitioned and
+nothing there is wrong. Vulkan needs the layout to match the use. A texture arrived at
+`CmdSetRenderTargets` in one of two wrong states: still `UNDEFINED`, because `vkCreateImage` can
+only start it there, or in whatever its last read left it, usually `SHADER_READ_ONLY_OPTIMAL`.
+
+`CmdSetRenderTargets` now transitions it. The masks are `ALL_COMMANDS` and all-access on both
+sides, because nothing at that call site says what last touched the image or what the pass will
+do with it. **Blunt on purpose**; it belongs with the other `ALL_COMMANDS` sites.
+
+#### One layout per subresource, not per image
+
+`VulkanTexture::m_currentLayout` was a single layout. `RenderPass_GlobalEnvironmentMap` broke it:
+it draws each cube face in turn, so face 1 is a colour attachment while face 0 has already been
+transitioned to be sampled. One variable cannot describe that, and Vulkan rejected the barrier
+that tried.
+
+It is now `m_subresourceLayouts`, one entry per mip and array layer. **`RecordTextureBarrier`
+splits a barrier** when the subresources it covers do not agree: the engine barriers whole
+textures - `DeviceResourceStates::FlushBarriers` passes an empty region - and after a face-by-face
+pass they legitimately disagree.
+
+The old assert that the caller's belief matched the truth is gone. With the RHI transitioning
+images on its own the two differ as a matter of course, and the barrier reads the truth anyway.
+
+#### Mesh draws are dropped rather than halted
+
+No GPU here has `VK_EXT_mesh_shader` and the engine's whole geometry path is mesh shaders, so
+`CmdSetPipeline` used to halt. It now binds nothing, warns once, and every draw against that
+pipeline is skipped - as are the push descriptor writes, which crashed the Intel driver when they
+were made against a layout that was never bound.
+
+**A frame missing its geometry is not a rendered frame.** This exists so everything either side of
+the mesh path can be exercised on hardware that cannot run it at all, and it says so in the log.
+
+#### The swapchain spelling reaches the pipelines
+
+Every Linux surface measured offers only `VK_FORMAT_B8G8R8A8_*`. The engine hardcodes the RGBA
+spelling for its present path - `ImguiRenderer.cpp:115` and `:236`,
+`RenderPass_DebugDraw.cpp:487`, `RenderPass_PostProcess.cpp:19` and `:58` - because DXGI hands out
+RGBA and nothing there has to ask. Dynamic rendering demands the pipeline's attachment format
+match the image exactly.
+
+`SubstituteSwapchainColorFormat` relabels **render targets only**: `RGBA8_sRGB` becomes
+`BGRA8_sRGB` in `CreateTexture`, in the pipeline's colour formats and in the swapchain's own
+candidate order, so all three agree. It is a relabel and not a swizzle - a shader's red output
+lands in the format's red component wherever that byte sits - so the picture is unchanged. **A
+sampled texture keeps the spelling it was given**, because its bytes really are in the order the
+engine says.
+
+It is unconditional rather than driven by what the swapchain chose, because pipelines are built in
+`Shaders::Initialize`, before there is a window to make a surface from.
+
+#### Where it stops
+
+**`VK_ERROR_DEVICE_LOST`.** The frame is validation-clean, so this is the GPU faulting on
+something validation cannot see: an out-of-bounds access, an unbounded loop, or a dispatch reading
+uninitialised memory. Two candidates, in order:
+
+1. **The cluster culling argument buffer is never cleared**, so its slots are uninitialised on the
+   first frame. This is the clear that was deliberately deferred - see the P5.17 entry - and it is
+   the first thing to try, because a garbage dispatch size hangs a GPU exactly like this.
+   Skipping the indirect dispatch entirely did **not** stop the hang, so it is not the only cause.
+2. Any of the compute shaders reading a buffer nothing wrote this frame.
+
+`VK_EXT_device_fault` is not present on this driver, so `VK_LAYER_LUNARG_crash_diagnostic`
+produces nothing. Bisecting by disabling passes is the tool that is left.
 
 ### 2026-08-31 - P5.17. **`CmdExecuteIndirect` executes, and the frame runs past it**
 
