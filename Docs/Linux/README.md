@@ -134,13 +134,18 @@ registered in [TouchedFiles.md](TouchedFiles.md).
 `Build/Linux_Release/Esoterica.Applications.Engine -map data://... -packaged` reads its settings,
 loads compiled data, opens a window and creates a Vulkan device. **Criterion 1 is met.**
 
-**P6.8 is written, and Phase 6 does not meet its goal.** The engine now creates every shader in
-the engine, up from fourteen of twenty-eight, and it still renders no map. Two things stop it.
-**Open question 8**: `Buffer<uint64_t>` has no Vulkan spelling, DXC emits a 64-bit sampled image
-for it, and one sits in every material pixel shader. That was the `VK_ERROR_UNKNOWN`, and it
-needs a shader change like P5.17. **And four hardware gaps** that no GPU in the development
-machine clears. P6.8 also fixed five more shader feature bits `CreateContext` never enabled. See
-the P6.8 entry in [Progress.md](Progress.md).
+**Phase 6 is written and does not meet its goal, and Phase 7 is the work to do next.** The
+engine builds every shader and every pipeline, enters its frame loop, and **records and submits a
+complete frame with zero validation errors**. The GPU then hangs executing it, and that is
+deliberately not being chased: no GPU in the development machine has `VK_EXT_mesh_shader`, the
+RHI drops every mesh draw as a result, and a real defect cannot be told apart from an artefact of
+that without different hardware.
+
+**Phase 7 needs none of it.** It is compile, link and tools work: a whole-tree build fails in
+three translation units and no others. Start from
+[Phase7-EditorTools.md](Phases/Phase7-EditorTools.md), and read
+[Deferred on purpose](Progress.md#deferred-on-purpose) before investigating anything that looks
+wrong.
 
 **Run the engine with validation on.** The Ubuntu 24.04 layers are usable after all:
 `VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true` turns off only the layer's bundled
