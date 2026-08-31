@@ -31,10 +31,13 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 > | P6.6 | `MaxPendingFrames` was 2 and Linux drivers report a `minImageCount` of 3. |
 > | P6.7 | `CreateContext` never enabled the 16-bit shader feature bits. Direct3D 12 has nothing to mirror. |
 > | P6.8 | `CreateContext` missed five more shader feature bits, and mesh modules were created on devices without `VK_EXT_mesh_shader`. |
+> | OQ8 | `CreateContext` never enabled `depthClamp`, which every non-clipping pass turns on. |
 >
-> **The `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines` was not P5.7's.** P6.8 traced it to
-> `Buffer<uint64_t>`, which DXC emits as a 64-bit sampled image and Mesa refuses to lower. It is
-> [open question 8](../Progress.md#open-questions), and it needs a shader change.
+> **The `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines` was not P5.7's.** It was
+> `Buffer<uint64_t>`, now [answered](../Progress.md#open-questions) as `Buffer<uint2>`.
+> **The engine now reaches `CmdExecuteIndirect`, so P5.17 is the only wall left before a drawn
+> frame.** With validation on it stops earlier, on a P5.5 defect: a root CBV buffer is created
+> without `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT`.
 >
 > **Criteria 5 to 10 are now checkable.** They were not before.
 
@@ -259,11 +262,9 @@ approach is decided: the shader reads its own command's root data out of the arg
 Read the decision entry in [Progress.md](../Progress.md) before starting; it records why the two
 alternatives were rejected.
 
-**Phase 6 bring-up has now happened, and the door is still shut.** The engine binary exists,
-starts and creates every shader. It reaches no frame loop, because
-[open question 8](../Progress.md#open-questions) stops the first pipeline that reads a
-`Buffer<uint64_t>` - and one is in every material pixel shader. **P5.17 is still not testable,
-and open question 8 now comes before it.**
+**Phase 6 bring-up has happened and the door is open.** The engine builds every shader and
+every pipeline, enters its frame loop, and halts in `CmdExecuteIndirect` - this refusal.
+**P5.17 is now testable, and it is the last thing between this port and a drawn frame.**
 
 **Do this after Phase 6 bring-up, not before.** Nothing here can be tested until the engine runs,
 and this is a change to shaders that Windows also compiles. Bring the window, the input and the

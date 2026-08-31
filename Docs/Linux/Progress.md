@@ -10,13 +10,18 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-**Phase: 6. P6.1 to P6.8 are written. The phase does not meet its acceptance criteria and
-cannot on this machine.** P6.8 root-caused the `VK_ERROR_UNKNOWN`, fixed five real defects in
-`CreateContext`, and found a wall that needs a shader change. See the P6.8 entry.
+**Phase: 6. The engine reaches its frame loop.** Open question 8 is answered and the
+`VK_ERROR_UNKNOWN` is gone. `Shaders::Initialize` runs to the end, every compute and graphics
+pipeline is created, and the engine stops at **`CmdExecuteIndirect`**, which is P5.13's refusal
+and [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)'s
+job. That is the wall this port has been aiming at since Phase 5.
 
 ### Start here
 
 ```bash
+python3 Code/Scripts/NinjaGen/NinjaGen.py
+ninja -f Build/Linux/Esoterica.ninja Build/Linux_Release/Esoterica.Applications.Reflector
+./CompileShaders.sh
 python3 Code/Scripts/NinjaGen/NinjaGen.py
 ninja -f Build/Linux/Esoterica.ninja Build/Linux_Release/Esoterica.Applications.Engine
 
@@ -27,11 +32,13 @@ VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
   -map data://demo/render/pbr/pbrdemo.map -packaged
 ```
 
-**Four things about that, each of which cost a session to find:**
+**Five things about that, each of which cost a session to find:**
 
 - **`-packaged` is required.** Without it the engine uses the network resource provider and tries
   to start `EsotericaResourceServer.exe`, which is Phase 7. `-packaged` reads
   `Build/Linux_<configuration>/CompiledData` directly, which is what Phase 3 filled.
+- **Run `CompileShaders.sh` and then `NinjaGen.py` again after any shader change.** The generated
+  `.cpp` files are picked up by a glob, so the build will not see a new one otherwise.
 - **Validation is off unless the ini says otherwise.** `RenderSettings::m_enableHostValidation`
   defaults to false and only a Debug build forces it on. The generated `Esoterica.ini` is empty
   because `Settings::SaveSettings` skips every property still at its default, so the section has
@@ -41,29 +48,34 @@ VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
   `VK_LOADER_LAYERS_DISABLE='*'`.** It turns off only the validation layer's bundled spirv-val,
   which is where the stale SPIRV-Tools lives, and leaves every other check on. P6.7 turned the
   layers off entirely and lost validation with them. No newer layer package is needed.
-  `VK_LAYER_MESSAGE_ID_FILTER=<vuid>[,<vuid>]` silences one VUID at a time, which is how P6.8
-  surveyed several walls in one run.
+  `VK_LAYER_MESSAGE_ID_FILTER=<vuid>[,<vuid>]` silences one VUID at a time, which is how several
+  walls were surveyed in one run.
 - **The binary is `Esoterica.Applications.Engine`**, named after its project like the Reflector
   and the ResourceCompiler, not `EsotericaEngine` as the phase document originally wrote.
 
-**Where it stops: the first shader that declares a capability this hardware does not have.**
-On the Intel UHD 620 that is `storageInputOutput16`, in `DebugDraw`'s pixel stage. Behind it are
-three more hardware gaps and one wall that no hardware fixes; see the table in the P6.8 entry.
+### Where it stops, and it depends on validation
 
-### The one that needs a decision
+**With validation off**, at `CmdExecuteIndirect`. That is P5.17, and it is now the only thing
+between this port and a drawn frame.
 
-**`Buffer<uint64_t>` cannot be expressed in Vulkan as the engine uses it.** DXC's SPIR-V backend
-emits `OpTypeImage %ulong Buffer 2 0 0 1 R64ui`, a 64-bit sampled image. The RHI creates the
-matching buffer view with `RG32_UInt` (`DeviceRenderWorld.cpp:604`), which is what Direct3D 12
-wants: a typed buffer load there returns two 32-bit words and HLSL packs them into a `uint64_t`.
-The two do not agree in Vulkan, `VK_FORMAT_R64_UINT` is not a uniform texel buffer format on this
-hardware, and Mesa's `spirv_to_nir` refuses the type outright. **This was the `VK_ERROR_UNKNOWN`.**
+**With validation on**, earlier, at `vkCmdPushDescriptorSetKHR`: a buffer bound as a root CBV was
+never created with `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT`, because Direct3D 12 needs no descriptor
+for a root CBV and so the caller asks for no descriptor types. **A P5.5 design question**, not a
+typo. See the open question 8 entry.
 
-**The fix is a shader change, like [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started).**
-Six sites read one: `SpatialHash.esh:185` and `:207`, `LightCulling_CullLights.esf:125` and
-`:126`, `InstanceCulling.esf:45`, `InstancePickingResolve.esf:16`, and `MaterialShaderPBR.esh:117`.
-The last puts it in every material pixel shader, so the whole frame is on it. **Escalated, not
-started.** It is open question 8.
+### What this machine still cannot do
+
+Four gaps, all hardware. **ANV accepts every one of these modules with validation off**, so the
+engine runs past them; they are shaders that are invalid by the spec and tolerated by the driver,
+which is not the same as correct.
+
+| Gap | Modules that declare it | Intel UHD 620 | NVIDIA MX250 | llvmpipe |
+|---|---|---|---|---|
+| `VK_KHR_fragment_shader_barycentric` | 13 | no | no | no |
+| `storageInputOutput16` | 1 | no | no | no |
+| `shaderSharedInt64Atomics` | 1 | no | yes | yes |
+| `VK_EXT_mesh_shader` | debug draw | no | no | yes |
+| `VK_EXT_mutable_descriptor_type` | all of them | yes | **no** | yes |
 
 ### What is behind that
 
@@ -295,6 +307,101 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-08-31 - Open question 8 answered: `Buffer<uint2>`. **The engine reaches its frame loop**
+
+**The engine now runs every shader in the engine, creates every pipeline, and enters its frame
+loop.** It stops at `CmdExecuteIndirect`, which is P5.13's refusal and P5.17's job. That is the
+wall the port has been aiming at since Phase 5.
+
+#### The change
+
+`Buffer<uint64_t>` becomes `Buffer<uint2>`, and the shader packs. Six files, listed in
+[TouchedFiles.md](TouchedFiles.md#shader-edits), with two helpers added to `RHI.esh` next to the
+existing `RWBufferToBuffer` pair.
+
+**This is not a behaviour change on Direct3D 12, and that is the point.** The RHI already
+creates all five of these buffers as `RG32_UInt` - `DeviceRenderWorld.cpp:604`, `:628`, `:649`,
+`:670` and `SpatialHash.cpp:50` - and both backends hand that straight to the view
+(`RHI_Direct3D12.cpp:4171`, `RHI_Vulkan.cpp:5394`). The bytes were always two 32-bit words, low
+word first. `Buffer<uint2>` names what the view already is. `Buffer<uint64_t>` did not: DXC's
+SPIR-V back end turned it into a 64-bit sampled image with format `R64ui`, which no view the RHI
+creates can match, which needs a capability the shader has no other use for, and which Mesa
+refuses to lower at all. DXIL, given the same HLSL, just read 64 bits and said nothing.
+
+**No C++ changed.** That was the test of the approach: if the fix had needed the RHI to create a
+different kind of buffer, the abstraction really was wrong. It did not.
+
+**No atomics were lost.** The only atomic in `SpatialHash.esh` is an `InterlockedCompareExchange`
+on `m_keys`, a 32-bit `RWBuffer<uint>`, untouched. The 64-bit payload buffer is only read and
+written by index, which is what made the cheap fix legal. `LoadMetadata` and `StoreMetadata` got
+simpler rather than more complex: they always returned and took a `uint2`, and the element is
+now that `uint2`, so their packing is gone.
+
+#### Measured
+
+Before, three compute pipelines failed with `VK_ERROR_UNKNOWN`, named in that run's log:
+`InstancePickingResolve`, `InstanceCulling` and `LightCulling_CullLights` - exactly the three
+compute shaders that read a `Buffer<uint64_t>`.
+
+After:
+
+- **`Int64ImageEXT` is gone from all 48 shader modules**, checked by dumping every module the
+  engine creates and running `spirv-dis` over the lot.
+- **Zero `spirv_to_nir` failures.**
+- **The engine reaches `CmdExecuteIndirect`**, so `Shaders::Initialize`, every compute pipeline
+  and every graphics pipeline now succeed.
+
+The full capability inventory across those 48 modules, which is worth having:
+
+| Capability | Modules |
+|---|---|
+| `RuntimeDescriptorArray`, `SPV_EXT_descriptor_indexing` | 38 |
+| `Int16` | 31 |
+| `Int64` | 18 |
+| `SampledBuffer` | 18 |
+| `StorageImageExtendedFormats` | 16 |
+| `FragmentBarycentricKHR` | 13 |
+| `StorageBuffer16BitAccess`, `GroupNonUniformArithmetic` | 13 |
+| `DemoteToHelperInvocation` | 11 |
+| `StorageInputOutput16` | 1 |
+| `Int64Atomics` | 1 |
+
+#### A sixth `CreateContext` feature defect, found on the way
+
+`depthClamp`. `CreateGraphicsOrMeshPipeline` sets `depthClampEnable` from the engine's rasterizer
+state - it is the inverse of Direct3D 12's `DepthClipEnable`, so it is on for any pass that does
+not clip - and the feature was never enabled. Direct3D 12 has no bit for it. Fixed the same way
+as the other five. It only became visible once pipelines started being created at all.
+
+#### Correction to the P6.8 entry
+
+P6.8 said no GPU here can run the engine's shaders. **Too strong.** With validation off, ANV
+accepts every module and the engine runs to `CmdExecuteIndirect`. What the four gaps mean is that
+those shaders are invalid by the spec and the driver tolerates them; a stricter driver would not,
+and tolerated is not the same as correct. Three of the four are now much smaller than P6.8
+measured, because that count was of validation messages rather than modules: **13 modules declare
+barycentrics, 1 declares `StorageInputOutput16`, and 1 declares `Int64Atomics`.**
+
+#### The next wall, and it is not P5.17's
+
+With validation on, the engine now stops earlier than `CmdExecuteIndirect`, in
+`vkCmdPushDescriptorSetKHR`:
+
+```
+pDescriptorWrites[0].pBufferInfo[0].buffer was created with
+VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT|VK_BUFFER_USAGE_2_TRANSFER_DST_BIT|VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT,
+but descriptorType is VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+[VUID-VkWriteDescriptorSet-descriptorType-00330]
+```
+
+**This is a P5.5 defect and it is a design question, not a typo.** `CreateBuffer` derives its
+`VkBufferUsageFlags` from the `DescriptorTypeFlags` the caller asked for
+(`RHI_Vulkan.cpp:5256`). A buffer bound as a **root CBV** is asked for with no descriptor types
+at all, because Direct3D 12 needs no descriptor for one - a root CBV is a raw GPU address. So the
+buffer never gets `VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT`, and `CmdSetRootParameter`'s push
+descriptor write is invalid. The RHI has to learn that a buffer may become a root CBV. **Not
+started.**
 
 ### 2026-08-31 - P6.8 First light. **The `VK_ERROR_UNKNOWN` is explained, and it is not P5.7's**
 
@@ -4610,7 +4717,7 @@ question to "Decisions made" once you answer it.
 | 5 | ~~Does `GameNetworkingSockets` block the first `Base` link?~~ | Phase 1 | **answered: yes, and at compile time, not link** |
 | 6 | ~~Does the `VirtualAlloc` region in `Memory.cpp` have a working non-Windows path?~~ | Phase 1 | **answered: no** |
 | 7 | ~~How do the engine's indirect draws reach Vulkan?~~ | Phase 5, and the whole frame | **answered 2026-08-29: the shader reads its own command's root data out of the argument buffer, indexed by `DrawIndex`.** Scheduled as P5.17, after Phase 6 bring-up. See the decision entry |
-| 8 | How does `Buffer<uint64_t>` reach Vulkan? | Phase 6, and the whole frame | **open, raised 2026-08-31.** DXC emits a 64-bit sampled image; the RHI creates the view as `RG32_UInt` because that is what Direct3D 12 wants, and Mesa refuses the type. Six shader sites, one of them in every material pixel shader. See the P6.8 entry |
+| 8 | ~~How does `Buffer<uint64_t>` reach Vulkan?~~ | Phase 6, and the whole frame | **answered 2026-08-31: it does not, so the shader reads `Buffer<uint2>` and packs.** The RHI already creates every one of these buffers as `RG32_UInt`, so no C++ changed. The engine now reaches its frame loop. See the decision entry |
 
 Answered:
 
