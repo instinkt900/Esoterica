@@ -99,6 +99,19 @@ namespace EE::Render::RHI
     static constexpr uint32_t g_resourceHeapSize = 64 * 1023;
     static constexpr uint32_t g_samplerHeapSize = 2048;
 
+    // P5.17's indirect root block. **The only push constant range the backend uses.**
+    // CmdExecuteIndirect fills it and the shader reads its own command out of the argument
+    // buffer with it, because no Vulkan indirect draw rebinds a descriptor per command. The
+    // layout is mirrored in RHI.esh as EE_IndirectRootPushConstants; the two must agree.
+    struct IndirectRootPushConstants
+    {
+        uint64_t                                            m_argumentBufferAddress = 0;
+        uint32_t                                            m_stride = 0;
+        uint32_t                                            m_commandIndexBase = 0;
+        uint32_t                                            m_rootConstantOffset = 0;
+        uint32_t                                            m_rootCbvOffset = 0;
+    };
+
     static constexpr uint32_t g_rootParameterSet = 0;
     static constexpr uint32_t g_heapSet = 1;
     static constexpr uint32_t g_resourceHeapBinding = 0;
@@ -186,6 +199,40 @@ namespace EE::Render::RHI
     // One context at a time, which is what the engine creates. CreateContext sets it and
     // DestroyContext clears it.
     static bool g_meshShaderEnabled = false;
+
+    // Said once, not once per dropped draw. See CmdSetPipeline.
+    static bool g_warnedAboutDroppedMeshDraws = false;
+
+    // **Every Linux surface measured offers only the BGRA spelling of the 8-bit formats** - Intel
+    // UHD 620, NVIDIA MX250 and llvmpipe all do. The engine hardcodes the RGBA spelling for the
+    // pipelines and
+    // the offscreen targets on its present path - ImguiRenderer.cpp:115 and :236,
+    // RenderPass_DebugDraw.cpp:487, RenderPass_PostProcess.cpp:19 and :58 - because DXGI hands
+    // out RGBA and nothing there has to ask. Dynamic rendering demands the pipeline's attachment
+    // format match the image exactly, so the two spellings cannot meet in the middle.
+    //
+    // SubstituteSwapchainColorFormat is what makes them agree: every *render target* named in
+    // the RGBA spelling is created and drawn into in the BGRA one. It is a relabel, not a
+    // swizzle - a shader's red output lands in the format's red component wherever that byte
+    // sits - so the picture is identical. See the swapchain surface format note in
+    // CreateSwapchain for the same argument.
+    //
+    // **Render targets only.** A sampled texture uploaded from CPU bytes really is in the order
+    // the engine says, and relabelling one would swap its channels on screen.
+    //
+    // **Unconditional rather than driven by what the swapchain chose.** Pipelines are built in
+    // Shaders::Initialize, which runs before there is a window to make a surface from, so a flag
+    // set at swapchain creation is still false when the pipelines that need it are made.
+    // CreateSwapchain asks for the same substituted spelling first, so the two cannot disagree.
+    static DataFormat SubstituteSwapchainColorFormat( DataFormat format )
+    {
+        switch ( format )
+        {
+            case DataFormat::RGBA8_sRGB:  return DataFormat::BGRA8_sRGB;
+            case DataFormat::RGBA8_UNorm: return DataFormat::BGRA8_UNorm;
+            default: return format;
+        }
+    }
 
     // **The pipeline dynamic state list has the same problem**, and no Context either.
     // CreateGraphicsOrMeshPipeline declares VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR only when
@@ -1053,6 +1100,12 @@ namespace EE::Render::RHI
         enabledFeatures.m_vulkan12.shaderBufferInt64Atomics = availableFeatures.m_vulkan12.shaderBufferInt64Atomics;
         enabledFeatures.m_vulkan12.shaderSharedInt64Atomics = availableFeatures.m_vulkan12.shaderSharedInt64Atomics;
 
+        // P5.17's indirect draws read their own command index out of the DrawIndex builtin, which
+        // carries the DrawParameters capability. VK_KHR_shader_draw_parameters is core in Vulkan
+        // 1.1, but the feature bit still has to be asked for. Direct3D 12 has no equivalent: a
+        // command signature pushes the data instead, so nothing there needs an index.
+        enabledFeatures.m_vulkan11.shaderDrawParameters = availableFeatures.m_vulkan11.shaderDrawParameters;
+
         // CreateGraphicsOrMeshPipeline sets depthClampEnable from the engine's rasterizer state,
         // which is the inverse of Direct3D 12's DepthClipEnable and so is on for any pass that
         // does not clip. Direct3D 12 has no feature bit for it. Found by running with validation
@@ -1690,6 +1743,10 @@ namespace EE::Render::RHI
         VkPipelineLayout                                    m_boundPipelineLayout = VK_NULL_HANDLE;
         VkPipelineBindPoint                                 m_boundBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 
+        // True while the bound pipeline has no VkPipeline, which is a mesh pipeline on a device
+        // without VK_EXT_mesh_shader. Every draw against it is dropped. See CmdSetPipeline.
+        bool                                                m_boundPipelineIsNull = false;
+
         // Root constants are not Vulkan push constants; see CmdSetRootConstants. Each set of
         // them is copied into this ring and a descriptor is pushed at the copy. One ring per
         // command buffer, reset in BeginCommandBuffer, which is safe because Vulkan already
@@ -1864,7 +1921,36 @@ namespace EE::Render::RHI
         // initial layout directly. So the engine believes this texture is already in
         // m_initialState and the image is not, and P5.9 has to transition from what is recorded
         // here rather than from the state the caller passes to the first barrier.
-        VkImageLayout                                       m_currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        // **One layout per subresource, not one per image.** It used to be one, and a cubemap
+        // capture broke it: RenderPass_GlobalEnvironmentMap draws each face in turn, so face 1 is
+        // a colour attachment while face 0 has already been transitioned to be sampled. Vulkan
+        // tracks a layout per mip and per array layer, and so does this. Indexed
+        // mipLevel * m_arrayLayers + arrayLayer.
+        TInlineVector<VkImageLayout, 6>                     m_subresourceLayouts;
+
+        // The layout of the whole image when every subresource agrees, and UNDEFINED when they
+        // do not. Only the barrier path needs the distinction; everything else asks about one
+        // subresource.
+        VkImageLayout CurrentLayout( uint32_t mipLevel = 0, uint32_t arrayLayer = 0 ) const
+        {
+            uint32_t const index = mipLevel * m_arrayLayers + arrayLayer;
+            return ( index < m_subresourceLayouts.size() ) ? m_subresourceLayouts[index] : VK_IMAGE_LAYOUT_UNDEFINED;
+        }
+
+        void SetLayout( VkImageLayout layout, uint32_t baseMip, uint32_t numMips, uint32_t baseLayer, uint32_t numLayers )
+        {
+            for ( uint32_t mip = baseMip; mip < baseMip + numMips; ++mip )
+            {
+                for ( uint32_t layer = baseLayer; layer < baseLayer + numLayers; ++layer )
+                {
+                    uint32_t const index = mip * m_arrayLayers + layer;
+                    if ( index < m_subresourceLayouts.size() )
+                    {
+                        m_subresourceLayouts[index] = layout;
+                    }
+                }
+            }
+        }
 
         // The layout the sampled-image descriptor in the heap was written with, and therefore
         // the layout P5.9 has to put this texture in before a shader reads it. GENERAL for a
@@ -2407,7 +2493,9 @@ namespace EE::Render::RHI
         // components in memory order, and a shader's red output always lands in the format's red
         // component wherever that byte sits, so a BGRA swapchain displays exactly as an RGBA one
         // does. The sRGB preference is preserved: the sRGB spelling of each pair comes first.
-        for ( DataFormat const candidate : { parameters.m_renderTargetFormat, parameters.m_colorFormat, DataFormat::BGRA8_sRGB, DataFormat::BGRA8_UNorm } )
+        for ( DataFormat const candidate : { SubstituteSwapchainColorFormat( parameters.m_renderTargetFormat ),
+                                             SubstituteSwapchainColorFormat( parameters.m_colorFormat ),
+                                             parameters.m_renderTargetFormat, parameters.m_colorFormat } )
         {
             VkFormat const candidateVulkanFormat = VulkanFormat( candidate );
 
@@ -3007,6 +3095,51 @@ namespace EE::Render::RHI
         return VK_ATTACHMENT_STORE_OP_STORE;
     }
 
+    // **The engine binds render targets it has not transitioned.** Direct3D 12 has no image
+    // layouts, so nothing there is wrong: a texture is a texture and the view decides how it is
+    // read. Vulkan needs the layout to match what the attachment is used as, and a texture
+    // arrives here in one of two wrong states - still `UNDEFINED`, because `vkCreateImage` can
+    // only start it there and nothing has moved it, or in whatever layout its last *read* left
+    // it, typically `SHADER_READ_ONLY_OPTIMAL`.
+    //
+    // Both are corrected here rather than asserted, because the engine has no barrier to add:
+    // the state it tracks is the Direct3D one, and it is already correct in those terms.
+    // `PrepareDraw` flushes this before `vkCmdBeginRendering`.
+    //
+    // The masks are `ALL_COMMANDS` and all-access on both sides. Narrowing them needs to know
+    // what last touched the image and what the pass will do to it, and neither is passed here;
+    // it is recorded with the other `ALL_COMMANDS` sites in Progress.md.
+    static void TransitionAttachmentIfNeeded( VulkanCommandBuffer* pVulkanCommandBuffer, VulkanTexture* pVulkanTexture, VkImageLayout attachmentLayout, uint32_t arraySlice, uint32_t mipSlice )
+    {
+        if ( pVulkanTexture->CurrentLayout( mipSlice, arraySlice ) == attachmentLayout )
+        {
+            return;
+        }
+
+        VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        // The truth, so the contents survive unless there were none. Only an image still in
+        // UNDEFINED loses anything, and there was nothing there to lose.
+        barrier.oldLayout = pVulkanTexture->CurrentLayout( mipSlice, arraySlice );
+        barrier.newLayout = attachmentLayout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = pVulkanTexture->m_image;
+        // **Only the subresource being bound.** The rest of the image may legitimately be in
+        // another layout: a cubemap capture samples the faces it has already drawn.
+        barrier.subresourceRange.aspectMask = pVulkanTexture->m_aspectMask;
+        barrier.subresourceRange.baseMipLevel = mipSlice;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = arraySlice;
+        barrier.subresourceRange.layerCount = 1;
+
+        pVulkanCommandBuffer->m_imageBarriers.emplace_back( barrier );
+        pVulkanTexture->SetLayout( attachmentLayout, mipSlice, 1, arraySlice, 1 );
+    }
+
     void CmdSetRenderTargets( CommandBuffer* pCommandBuffer, TArrayView<Texture* const> renderTargets, Texture* pDepthStencil, LoadAction* pLoadAction, TArrayView<uint32_t const> colorArraySlices, TArrayView<uint32_t const> colorMipSlices, uint32_t depthArraySlice, uint32_t depthMipSlice )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
@@ -3047,10 +3180,8 @@ namespace EE::Render::RHI
             VkRenderingAttachmentInfo attachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
             attachment.imageView = pVulkanTexture->RenderTargetView( colorArraySlice, colorMipSlice );
             // The layout the texture is actually in, not the one an attachment is usually in.
-            // The engine transitions a render target before binding it, and a caller that did
-            // not is a bug worth naming here rather than a validation message later.
-            EE_ASSERT( pVulkanTexture->m_currentLayout != VK_IMAGE_LAYOUT_UNDEFINED );
-            attachment.imageLayout = pVulkanTexture->m_currentLayout;
+            TransitionAttachmentIfNeeded( pVulkanCommandBuffer, pVulkanTexture, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, colorArraySlice, colorMipSlice );
+            attachment.imageLayout = pVulkanTexture->CurrentLayout( colorMipSlice, colorArraySlice );
             attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
@@ -3084,8 +3215,8 @@ namespace EE::Render::RHI
             // Read from the texture for the same reason as the colour targets, and it matters
             // more here: RenderPass_DebugDraw.cpp:1342 binds a depth target it only reads, which
             // is DEPTH_STENCIL_READ_ONLY_OPTIMAL rather than the attachment layout.
-            EE_ASSERT( pVulkanTexture->m_currentLayout != VK_IMAGE_LAYOUT_UNDEFINED );
-            depthAttachment.imageLayout = pVulkanTexture->m_currentLayout;
+            TransitionAttachmentIfNeeded( pVulkanCommandBuffer, pVulkanTexture, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, depthArraySlice, depthMipSlice );
+            depthAttachment.imageLayout = pVulkanTexture->CurrentLayout( depthMipSlice, depthArraySlice );
             depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
@@ -3258,9 +3389,28 @@ namespace EE::Render::RHI
         VulkanPipeline* pVulkanPipeline = static_cast<VulkanPipeline*>( pPipeline );
         VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanPipeline->m_pRootSignature );
 
-        // Null when CreatePipeline skipped a mesh pipeline on a device without VK_EXT_mesh_shader.
-        // This is where the pass that needs one is named.
-        EE_ASSERT( pVulkanPipeline->m_pipeline != VK_NULL_HANDLE );
+        // **Null when CreatePipeline skipped a mesh pipeline on a device without
+        // VK_EXT_mesh_shader.** Nothing is bound and every draw against it is dropped, so the
+        // rest of the frame still records, submits and presents.
+        //
+        // Dropping draws is a development convenience and it says so once: a frame missing its
+        // geometry is not a rendered frame. It exists so the passes either side of the mesh path
+        // - the environment map, post process, imgui, the swapchain - can be exercised on
+        // hardware that cannot run the geometry path at all. See the P5.14 and P6.8 entries.
+        // On hardware that has mesh shaders this branch never runs.
+        pVulkanCommandBuffer->m_boundPipelineIsNull = ( pVulkanPipeline->m_pipeline == VK_NULL_HANDLE );
+        if ( pVulkanCommandBuffer->m_boundPipelineIsNull )
+        {
+            if ( !g_warnedAboutDroppedMeshDraws )
+            {
+                g_warnedAboutDroppedMeshDraws = true;
+                EE_LOG_WARNING( LogCategory::Render, "RHI/CmdSetPipeline", "This device has no VK_EXT_mesh_shader, so every mesh draw is being dropped. The frame will present without its geometry." );
+            }
+
+            pVulkanCommandBuffer->m_pBoundPipeline = pVulkanPipeline;
+            pVulkanCommandBuffer->m_pBoundRootSignature = pVulkanRootSignature;
+            return;
+        }
 
         vkCmdBindPipeline( pVulkanCommandBuffer->m_commandBuffer, pVulkanPipeline->m_bindPoint, pVulkanPipeline->m_pipeline );
 
@@ -3285,6 +3435,14 @@ namespace EE::Render::RHI
     void CmdSetRootConstants( CommandBuffer* pCommandBuffer, uint32_t constantIndex, void const* pConstantData, size_t constantSize )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        // Nothing is bound when the pipeline was dropped, so there is no layout to push against
+        // and the write would be made against a stale one. See CmdSetPipeline.
+        if ( pVulkanCommandBuffer->m_boundPipelineIsNull )
+        {
+            return;
+        }
+
         VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanCommandBuffer->m_pBoundRootSignature );
 
         DescriptorReflection const& descriptorReflection = pVulkanRootSignature->m_descriptorReflections[constantIndex];
@@ -3334,6 +3492,14 @@ namespace EE::Render::RHI
     void CmdSetRootParameter( CommandBuffer* pCommandBuffer, uint32_t parameterIndex, Buffer* pBuffer, size_t bufferOffset )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
+
+        // Nothing is bound when the pipeline was dropped, so there is no layout to push against
+        // and the write would be made against a stale one. See CmdSetPipeline.
+        if ( pVulkanCommandBuffer->m_boundPipelineIsNull )
+        {
+            return;
+        }
+
         VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanCommandBuffer->m_pBoundRootSignature );
         VulkanBuffer* pVulkanBuffer = static_cast<VulkanBuffer*>( pBuffer );
 
@@ -3391,37 +3557,42 @@ namespace EE::Render::RHI
     // have to reach the device before the pass opens, because a barrier may not run inside one
     // and because they are what put the attachments into the layouts the pass names. Then the
     // pass opens, which CmdSetRenderTargets deliberately did not do.
-    static void PrepareDraw( VulkanCommandBuffer* pVulkanCommandBuffer )
+    // Returns false when the draw has to be dropped, which is a mesh pipeline on a device without
+    // VK_EXT_mesh_shader and nothing else. The barriers and the render pass are still recorded,
+    // so the rest of the frame is unaffected by the gap.
+    static bool PrepareDraw( VulkanCommandBuffer* pVulkanCommandBuffer )
     {
         FlushBarriers( pVulkanCommandBuffer );
         BeginRenderingIfPending( pVulkanCommandBuffer );
+
+        return !pVulkanCommandBuffer->m_boundPipelineIsNull;
     }
 
     void CmdDraw( CommandBuffer* pCommandBuffer, uint32_t numVertices, uint32_t firstVertex )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
-        PrepareDraw( pVulkanCommandBuffer );
+        if ( !PrepareDraw( pVulkanCommandBuffer ) ) { return; }
         vkCmdDraw( pVulkanCommandBuffer->m_commandBuffer, numVertices, 1, firstVertex, 0 );
     }
 
     void CmdDrawInstanced( CommandBuffer* pCommandBuffer, uint32_t numVertices, uint32_t numInstances, uint32_t firstVertex, uint32_t firstInstance )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
-        PrepareDraw( pVulkanCommandBuffer );
+        if ( !PrepareDraw( pVulkanCommandBuffer ) ) { return; }
         vkCmdDraw( pVulkanCommandBuffer->m_commandBuffer, numVertices, numInstances, firstVertex, firstInstance );
     }
 
     void CmdDrawIndexed( CommandBuffer* pCommandBuffer, uint32_t numIndices, uint32_t firstIndex )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
-        PrepareDraw( pVulkanCommandBuffer );
+        if ( !PrepareDraw( pVulkanCommandBuffer ) ) { return; }
         vkCmdDrawIndexed( pVulkanCommandBuffer->m_commandBuffer, numIndices, 1, firstIndex, 0, 0 );
     }
 
     void CmdDrawIndexedInstanced( CommandBuffer* pCommandBuffer, uint32_t numIndices, uint32_t numInstances, uint32_t firstIndex, uint32_t firstInstance )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
-        PrepareDraw( pVulkanCommandBuffer );
+        if ( !PrepareDraw( pVulkanCommandBuffer ) ) { return; }
         vkCmdDrawIndexed( pVulkanCommandBuffer->m_commandBuffer, numIndices, numInstances, firstIndex, 0, firstInstance );
     }
 
@@ -3448,11 +3619,10 @@ namespace EE::Render::RHI
         // **A mesh dispatch is a draw, not a dispatch.** DispatchMesh is Direct3D's name for it;
         // it rasterises, it runs inside a render pass, and it wants exactly what an ordinary
         // draw wants. Leaving the pass here, the way CmdDispatchCompute does, would be wrong.
-        PrepareDraw( pVulkanCommandBuffer );
+        if ( !PrepareDraw( pVulkanCommandBuffer ) ) { return; }
 
-        // Null when the device has no VK_EXT_mesh_shader. CreateContext warns about it and this
-        // is where it bites, because the engine has no capability check and no fallback:
-        // RenderPass_DebugDraw calls this outright.
+        // Null when the device has no VK_EXT_mesh_shader. The dropped-pipeline check above
+        // returns first on such a device, so reaching this means the pipeline was real.
         EE_ASSERT( pVulkanCommandBuffer->m_vkCmdDrawMeshTasks != nullptr );
 
         EE_ASSERT( numGroupsX <= MaxDispatchSize && numGroupsY <= MaxDispatchSize && numGroupsZ <= MaxDispatchSize );
@@ -3559,8 +3729,14 @@ namespace EE::Render::RHI
         uint32_t                                            m_drawArgumentOffset = 0;
 
         // True when the signature also sets root constants or binds root descriptors per
-        // command, which is the part Vulkan has no command for. See the note above.
+        // command. Direct3D 12 has a command for that and Vulkan does not, so P5.17 turns the
+        // push into a pull: the shader reads its own command out of the argument buffer.
         bool                                                m_hasRootArguments = false;
+
+        // Byte offsets of the two root blocks inside one command, for the shader to index with.
+        // -1 when the signature has no such block. CmdExecuteIndirect pushes both.
+        int32_t                                             m_rootConstantOffset = -1;
+        int32_t                                             m_rootCbvOffset = -1;
     };
 
     void CmdExecuteIndirect( CommandBuffer* pCommandBuffer, CommandSignature const* pCommandSignature, uint32_t maxNumCommands, Buffer const* pIndirectBuffer, uint64_t indirectBufferOffset, Buffer const* pCounterBuffer, uint64_t counterBufferOffset )
@@ -3573,11 +3749,29 @@ namespace EE::Render::RHI
         EE_ASSERT( ( pVulkanIndirectBuffer->m_stride % IndirectCommandAlignment ) == 0 );
         EE_ASSERT( pVulkanIndirectBuffer->m_stride == pVulkanCommandSignature->m_stride );
 
+        // **The push becomes a pull.** A Direct3D 12 command signature writes root constants and
+        // binds a root CBV as the GPU walks the argument buffer, and no Vulkan indirect draw
+        // rebinds anything per command. So the shader reads its own command instead, and this is
+        // where it is told where to look. See P5.17 and the open question 7 decision entry.
+        //
+        // Pushed for every signature, not only the ones with root arguments, so a shader built
+        // from an indirect-capable declaration reads a defined block either way.
         if ( pVulkanCommandSignature->m_hasRootArguments )
         {
-            EE_LOG_ERROR( LogCategory::Render, "RHI/CmdExecuteIndirect", "This command signature sets root constants or binds root descriptors per command, which no Vulkan indirect draw can do. See the note above CmdExecuteIndirect in RHI_Vulkan.cpp." );
-            EE_UNIMPLEMENTED_FUNCTION();
-            return;
+            EE_ASSERT( pVulkanIndirectBuffer->m_deviceAddress != 0 );
+
+            VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanCommandBuffer->m_pBoundRootSignature );
+            EE_ASSERT( pVulkanRootSignature != nullptr );
+
+            IndirectRootPushConstants pushConstants = {};
+            pushConstants.m_argumentBufferAddress = pVulkanIndirectBuffer->m_deviceAddress + indirectBufferOffset;
+            pushConstants.m_stride = pVulkanCommandSignature->m_stride;
+            pushConstants.m_commandIndexBase = 0;
+            pushConstants.m_rootConstantOffset = uint32_t( Math::Max( pVulkanCommandSignature->m_rootConstantOffset, 0 ) );
+            pushConstants.m_rootCbvOffset = uint32_t( Math::Max( pVulkanCommandSignature->m_rootCbvOffset, 0 ) );
+
+            vkCmdPushConstants( pVulkanCommandBuffer->m_commandBuffer, pVulkanRootSignature->m_pipelineLayout,
+                                VK_SHADER_STAGE_ALL, 0, sizeof( pushConstants ), &pushConstants );
         }
 
         // **A draw stays inside the render pass and a dispatch may not.** This corrects what
@@ -3589,7 +3783,7 @@ namespace EE::Render::RHI
 
         if ( isDraw )
         {
-            PrepareDraw( pVulkanCommandBuffer );
+            if ( !PrepareDraw( pVulkanCommandBuffer ) ) { return; }
         }
         else
         {
@@ -3634,12 +3828,44 @@ namespace EE::Render::RHI
             case IndirectArgumentType::DispatchCompute:
             {
                 // **vkCmdDispatchIndirect runs exactly one dispatch and reads no count buffer**,
-                // where Direct3D 12 runs min( maxNumCommands, count ) of them. A caller that
-                // passes either would silently get one dispatch, so both are refused instead.
-                EE_ASSERT( pVulkanCounterBuffer == nullptr );
-                EE_ASSERT( maxNumCommands == 1 );
+                // where Direct3D 12 runs min( maxNumCommands, count ) of them. There is no
+                // indirect dispatch count in Vulkan at all, so the count is spent on the CPU:
+                // one dispatch is recorded per possible command, each at its own offset, each
+                // with its own command index pushed. A draw gets its index from DrawIndex; a
+                // dispatch has no such builtin, which is why this is the loop and the draws are
+                // not. See P5.17.
+                //
+                // **A command past the GPU-written count reads a stale slot**, because nothing
+                // resets the argument buffer between frames - Direct3D 12 never needed it to,
+                // since the count stops it there. The engine clears the buffer for us; see the
+                // clear next to the counter clears in Renderer_ForwardShading.cpp. An unwritten
+                // slot is then a (0,0,0) dispatch, which is a legal no-op.
+                if ( maxNumCommands <= 1 )
+                {
+                    vkCmdDispatchIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset );
+                }
+                else
+                {
+                    VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanCommandBuffer->m_pBoundRootSignature );
+                    EE_ASSERT( pVulkanRootSignature != nullptr );
 
-                vkCmdDispatchIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset );
+                    IndirectRootPushConstants pushConstants = {};
+                    pushConstants.m_argumentBufferAddress = pVulkanIndirectBuffer->m_deviceAddress + indirectBufferOffset;
+                    pushConstants.m_stride = pVulkanCommandSignature->m_stride;
+                    pushConstants.m_rootConstantOffset = uint32_t( Math::Max( pVulkanCommandSignature->m_rootConstantOffset, 0 ) );
+                    pushConstants.m_rootCbvOffset = uint32_t( Math::Max( pVulkanCommandSignature->m_rootCbvOffset, 0 ) );
+
+                    for ( uint32_t commandIndex = 0; commandIndex < maxNumCommands; ++commandIndex )
+                    {
+                        pushConstants.m_commandIndexBase = commandIndex;
+
+                        vkCmdPushConstants( pVulkanCommandBuffer->m_commandBuffer, pVulkanRootSignature->m_pipelineLayout,
+                                            VK_SHADER_STAGE_ALL, 0, sizeof( pushConstants ), &pushConstants );
+
+                        vkCmdDispatchIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer,
+                                               argumentOffset + VkDeviceSize( commandIndex ) * pVulkanCommandSignature->m_stride );
+                    }
+                }
             }
             break;
 
@@ -3703,7 +3929,7 @@ namespace EE::Render::RHI
     // copy destination and unordered access view clear target. Vulkan needs GENERAL or one of
     // the TRANSFER layouts, and the image is still in the VK_IMAGE_LAYOUT_UNDEFINED that
     // vkCreateImage gave it, because nothing has barriered it yet. See
-    // VulkanTexture::m_currentLayout, which P5.6 wrote for this.
+    // VulkanTexture's subresource layout table, which P5.6 wrote for this.
     //
     // GENERAL, not TRANSFER_DST_OPTIMAL, so that the engine's belief stays true. The next
     // barrier the engine records on this texture names TextureState::Common as its source,
@@ -3713,21 +3939,21 @@ namespace EE::Render::RHI
     // is not part of what the caller sees, so recording the change is not a change to it.
     static void TransitionTextureForTransfer( VulkanCommandBuffer* pVulkanCommandBuffer, VulkanTexture const* pVulkanTexture )
     {
-        if ( pVulkanTexture->m_currentLayout == VK_IMAGE_LAYOUT_GENERAL )
+        if ( pVulkanTexture->CurrentLayout() == VK_IMAGE_LAYOUT_GENERAL )
         {
             return;
         }
 
         // Any other layout means the engine moved this texture somewhere and then copied it with
         // no barrier in between, which Direct3D 12 would not accept either.
-        EE_ASSERT( pVulkanTexture->m_currentLayout == VK_IMAGE_LAYOUT_UNDEFINED );
+        EE_ASSERT( pVulkanTexture->CurrentLayout() == VK_IMAGE_LAYOUT_UNDEFINED );
 
         VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
         barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
         barrier.srcAccessMask = VK_ACCESS_2_NONE;
         barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
         barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.oldLayout = pVulkanTexture->m_currentLayout;
+        barrier.oldLayout = pVulkanTexture->CurrentLayout();
         barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -3740,7 +3966,7 @@ namespace EE::Render::RHI
 
         pVulkanCommandBuffer->m_imageBarriers.emplace_back( barrier );
 
-        const_cast<VulkanTexture*>( pVulkanTexture )->m_currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+        const_cast<VulkanTexture*>( pVulkanTexture )->SetLayout( VK_IMAGE_LAYOUT_GENERAL, 0, pVulkanTexture->m_mipLevels, 0, pVulkanTexture->m_arrayLayers );
     }
 
     // **A Direct3D 12 clear is a shader write and a Vulkan clear is a transfer write, and the
@@ -4182,11 +4408,18 @@ namespace EE::Render::RHI
         // engine believes is already in its m_initialState is in fact in UNDEFINED until the
         // first barrier moves it. The caller's belief is asserted against the truth below rather
         // than used, so the two cannot drift silently.
-        barrier.oldLayout = pVulkanTexture->m_currentLayout;
+        barrier.oldLayout = pVulkanTexture->CurrentLayout();
         barrier.newLayout = VulkanImageLayout( destinationState, pVulkanTexture );
 
-        EE_ASSERT( pVulkanTexture->m_currentLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
-                   pVulkanTexture->m_currentLayout == VulkanImageLayout( sourceState, pVulkanTexture ) );
+        // **The caller's belief is allowed to differ now.** It used to be asserted against the
+        // truth, and CmdSetRenderTargets breaking that was how this was found: it transitions an
+        // attachment the engine never barriered, so the engine's DeviceResourceStates still
+        // believes the old state while the image has moved. The barrier is correct either way,
+        // because oldLayout is read from the texture rather than from sourceState. Direct3D 12
+        // has no layouts for the two to disagree about.
+        //
+        // Left as a note rather than a check: with the RHI transitioning images on its own, a
+        // mismatch is expected traffic and not a bug worth halting on.
 
         // Direct3D's discard flag says the old contents are not needed. UNDEFINED as the old
         // layout says exactly that, and it lets the driver skip decompressing what it is about
@@ -4200,7 +4433,9 @@ namespace EE::Render::RHI
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = pVulkanTexture->m_image;
         // Every aspect the image has. A barrier that moved the depth and left the stencil behind
-        // would put one image in two layouts, which is the thing m_currentLayout cannot express.
+        // would put one image in two layouts, which the per-subresource table does express, but
+        // the aspect mask is still all of them: a depth barrier that left the stencil behind is
+        // not something the engine ever asks for.
         barrier.subresourceRange.aspectMask = pVulkanTexture->m_aspectMask;
         barrier.subresourceRange.baseMipLevel = region.m_mipLevel;
         barrier.subresourceRange.levelCount = region.m_numMipLevels ? region.m_numMipLevels : pVulkanTexture->m_mipLevels;
@@ -4210,13 +4445,56 @@ namespace EE::Render::RHI
         NormalizeBarrierMasks( barrier.srcStageMask, barrier.srcAccessMask );
         NormalizeBarrierMasks( barrier.dstStageMask, barrier.dstAccessMask );
 
-        pVulkanCommandBuffer->m_imageBarriers.emplace_back( barrier );
+        // **One barrier per old layout, not one per barrier call.** The engine barriers a whole
+        // texture - DeviceResourceStates::FlushBarriers passes an empty TextureBarrierRegion -
+        // and its subresources can legitimately be in different layouts by then, because
+        // CmdSetRenderTargets transitions the one face it is about to draw into. A single
+        // barrier naming one old layout would then be wrong for every other face, which Vulkan
+        // rejects outright. Direct3D 12 has no layouts, so the engine has no reason to split it.
+        uint32_t const baseMip = barrier.subresourceRange.baseMipLevel;
+        uint32_t const numMips = barrier.subresourceRange.levelCount;
+        uint32_t const baseLayer = barrier.subresourceRange.baseArrayLayer;
+        uint32_t const numLayers = barrier.subresourceRange.layerCount;
 
-        // One layout for the whole image, which is exact only while callers barrier the whole
-        // texture. Every engine barrier does: DeviceResourceStates::FlushBarriers passes an empty
-        // TextureBarrierRegion. A caller that barriers one mip would leave this describing the
-        // rest of the image wrongly, and the assert above is what would catch it.
-        pVulkanTexture->m_currentLayout = barrier.newLayout;
+        bool layoutsAgree = true;
+        for ( uint32_t mip = baseMip; mip < baseMip + numMips && layoutsAgree; ++mip )
+        {
+            for ( uint32_t layer = baseLayer; layer < baseLayer + numLayers; ++layer )
+            {
+                if ( pVulkanTexture->CurrentLayout( mip, layer ) != barrier.oldLayout )
+                {
+                    layoutsAgree = false;
+                    break;
+                }
+            }
+        }
+
+        if ( layoutsAgree )
+        {
+            pVulkanCommandBuffer->m_imageBarriers.emplace_back( barrier );
+        }
+        else
+        {
+            for ( uint32_t mip = baseMip; mip < baseMip + numMips; ++mip )
+            {
+                for ( uint32_t layer = baseLayer; layer < baseLayer + numLayers; ++layer )
+                {
+                    VkImageMemoryBarrier2 subresourceBarrier = barrier;
+                    subresourceBarrier.oldLayout = flags.IsFlagSet( TextureBarrierFlags::Discard ) ? VK_IMAGE_LAYOUT_UNDEFINED : pVulkanTexture->CurrentLayout( mip, layer );
+                    subresourceBarrier.subresourceRange.baseMipLevel = mip;
+                    subresourceBarrier.subresourceRange.levelCount = 1;
+                    subresourceBarrier.subresourceRange.baseArrayLayer = layer;
+                    subresourceBarrier.subresourceRange.layerCount = 1;
+
+                    if ( subresourceBarrier.oldLayout != subresourceBarrier.newLayout )
+                    {
+                        pVulkanCommandBuffer->m_imageBarriers.emplace_back( subresourceBarrier );
+                    }
+                }
+            }
+        }
+
+        pVulkanTexture->SetLayout( barrier.newLayout, baseMip, numMips, baseLayer, numLayers );
     }
 
     //-------------------------------------------------------------------------
@@ -4610,19 +4888,40 @@ namespace EE::Render::RHI
                 {
                     EE_ASSERT( argument.m_byteSize == sizeof( uint32_t ) * pDescriptorReflection->m_numConstants );
 
+                    // P5.17: the shader reads this block itself, so where it sits is no longer
+                    // just bookkeeping for the stride.
+                    EE_ASSERT( pVulkanCommandSignature->m_rootConstantOffset == -1 );
+                    pVulkanCommandSignature->m_rootConstantOffset = int32_t( commandStride );
+
                     commandStride += sizeof( uint32_t ) * pDescriptorReflection->m_numConstants;
                     pVulkanCommandSignature->m_hasRootArguments = true;
                 }
                 break;
 
                 case IndirectArgumentType::ConstantBufferView:
+                {
+                    // A GPU virtual address. RendererTypes.esh:268 calls it "device address of
+                    // this CBV, workaround for lack of HLSL buffer address support". A Vulkan
+                    // descriptor takes a buffer and an offset rather than an address, so there is
+                    // nothing to turn one back into - but a shader can dereference the address
+                    // directly, which is what P5.17's EE_DECLARE_INDIRECT_ROOT_CBV does.
+                    EE_ASSERT( pVulkanCommandSignature->m_rootCbvOffset == -1 );
+                    pVulkanCommandSignature->m_rootCbvOffset = int32_t( commandStride );
+
+                    commandStride += 8;
+                    pVulkanCommandSignature->m_hasRootArguments = true;
+                }
+                break;
+
                 case IndirectArgumentType::ShaderResourceView:
                 case IndirectArgumentType::UnorderedAccessView:
                 {
-                    // A GPU virtual address. RendererTypes.esh:268 calls it "device address of
-                    // this CBV, workaround for lack of HLSL buffer address support", and a
-                    // Vulkan descriptor takes a buffer and an offset rather than an address, so
-                    // there is nothing to turn one back into.
+                    // Also an address, and **P5.17 does not read these**. Only RootConstants and
+                    // RootCBV have indirect declarations, because only those two appear in the
+                    // shaders an indirect draw reaches. DebugDrawMesh.esf declares a RootSRV as
+                    // well, so a signature can carry one; its stride still has to be counted,
+                    // and a shader that actually indexed it would need a third declaration
+                    // macro. Nothing does yet.
                     commandStride += 8;
                     pVulkanCommandSignature->m_hasRootArguments = true;
                 }
@@ -5688,7 +5987,14 @@ namespace EE::Render::RHI
         EE_ASSERT( parameters.m_width > 0 && parameters.m_height > 0 && parameters.m_depth > 0 );
         EE_ASSERT( parameters.m_mipLevels > 0 && parameters.m_arrayLayers > 0 );
 
-        VkFormat const vulkanFormat = VulkanFormat( parameters.m_format );
+        // A render target the engine named in the RGBA spelling follows the surface into the
+        // BGRA one, so its pipeline and the swapchain agree with it. See
+        // SubstituteSwapchainColorFormat; a sampled texture keeps the spelling it was given.
+        bool const isRenderTargetFormat = parameters.m_descriptorTypes.IsFlagSet( DescriptorTypeFlags::RenderTarget ) ||
+                                          parameters.m_textureFlags.IsFlagSet( TextureFlags::AllowDisplayTarget );
+        DataFormat const textureFormat = isRenderTargetFormat ? SubstituteSwapchainColorFormat( parameters.m_format ) : parameters.m_format;
+
+        VkFormat const vulkanFormat = VulkanFormat( textureFormat );
         EE_ASSERT( vulkanFormat != VK_FORMAT_UNDEFINED );
 
         VkImageAspectFlags const aspectMask = VulkanImageAspect( vulkanFormat );
@@ -5746,7 +6052,7 @@ namespace EE::Render::RHI
         imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         SetSharingMode( pVulkanContext, imageCreateInfo.sharingMode, imageCreateInfo.queueFamilyIndexCount, imageCreateInfo.pQueueFamilyIndices );
         // vkCreateImage accepts UNDEFINED or PREINITIALIZED and nothing else, and the second is
-        // for linear tiling. See VulkanTexture::m_currentLayout for what that costs P5.9.
+        // for linear tiling. See VulkanTexture::m_subresourceLayouts for what that costs P5.9.
         imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if ( parameters.m_pNativeHandle != nullptr )
@@ -5798,7 +6104,9 @@ namespace EE::Render::RHI
         pVulkanTexture->m_depth = parameters.m_depth;
         pVulkanTexture->m_arrayLayers = parameters.m_arrayLayers;
         pVulkanTexture->m_mipLevels = parameters.m_mipLevels;
-        pVulkanTexture->m_format = parameters.m_format;
+        // Every subresource starts UNDEFINED, which is the only layout vkCreateImage accepts.
+        pVulkanTexture->m_subresourceLayouts.resize( size_t( Math::Max( parameters.m_mipLevels, uint32_t( 1 ) ) ) * size_t( Math::Max( parameters.m_arrayLayers, uint32_t( 1 ) ) ), VK_IMAGE_LAYOUT_UNDEFINED );
+        pVulkanTexture->m_format = textureFormat;
         pVulkanTexture->m_numSamples = parameters.m_numSamples;
         pVulkanTexture->m_sampleQuality = parameters.m_sampleQuality;
         pVulkanTexture->m_nodeIndex = parameters.m_nodeIndex;
@@ -6595,10 +6903,14 @@ namespace EE::Render::RHI
             if ( descriptorReflection.m_descriptorTypeFlags.IsFlagSet( DescriptorTypeFlags::RootConstant ) )
             {
                 // Not Vulkan push constants. RHI.esh declares the block through
-                // EE_DECLARE_ROOT_CONSTANTS as a ConstantBuffer, so DXC emits a uniform buffer,
-                // and making it a push constant block needs [[vk::push_constant]] in RHI.esh,
-                // which Phase 4 rule 4 forbids. CmdSetRootConstants copies into a per-frame
-                // upload ring and pushes a descriptor at it. See the binding model entry.
+                // EE_DECLARE_ROOT_CONSTANTS as a ConstantBuffer, so DXC emits a uniform buffer.
+                // CmdSetRootConstants copies into a per-frame upload ring and pushes a descriptor
+                // at it. See the binding model entry.
+                //
+                // P5.17 does now add a [[vk::push_constant]] block to RHI.esh, which Phase 4's
+                // criterion 4 ruled out at the time and which was escalated and approved for
+                // P5.17. It carries the indirect argument address, not this block: a directly
+                // bound root constant still arrives as a descriptor write.
                 descriptorReflection.m_numConstants = constantSizes[shaderResourceIndex] / sizeof( uint32_t );
                 binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             }
@@ -6661,9 +6973,22 @@ namespace EE::Render::RHI
         // Both sets, in order. Set 1 is the same layout for every pipeline in the engine.
         VkDescriptorSetLayout const setLayouts[2] = { pVulkanRootSignature->m_rootParameterSetLayout, pVulkanContext->m_heapSetLayout };
 
+        // **The one push constant range, on every pipeline layout.** P5.17's indirect draws read
+        // their own command through it. It is given to every layout rather than only to the
+        // signatures that need it, because a root signature does not know whether a command
+        // signature will later be built from it, and 24 bytes of a guaranteed 128 costs nothing.
+        // Nothing else in the backend uses push constants: CmdSetRootConstants and
+        // CmdSetRootParameter are push descriptor writes into set 0.
+        VkPushConstantRange indirectPushConstantRange = {};
+        indirectPushConstantRange.stageFlags = VK_SHADER_STAGE_ALL;
+        indirectPushConstantRange.offset = 0;
+        indirectPushConstantRange.size = sizeof( IndirectRootPushConstants );
+
         VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         pipelineLayoutCreateInfo.setLayoutCount = 2;
         pipelineLayoutCreateInfo.pSetLayouts = setLayouts;
+        pipelineLayoutCreateInfo.pushConstantRangeCount = 1;
+        pipelineLayoutCreateInfo.pPushConstantRanges = &indirectPushConstantRange;
 
         result = vkCreatePipelineLayout( pVulkanContext->m_device, &pipelineLayoutCreateInfo, nullptr, &pVulkanRootSignature->m_pipelineLayout );
         EE_ASSERT( result == VK_SUCCESS );
@@ -6951,7 +7276,9 @@ namespace EE::Render::RHI
         TInlineVector<VkFormat, MaxRenderTargets> colorFormats;
         for ( DataFormat colorFormat : parameters.m_colorFormats )
         {
-            colorFormats.push_back( VulkanFormat( colorFormat ) );
+            // The same relabel CreateTexture applies to a render target, so the pipeline and the
+            // image it draws into agree. See SubstituteSwapchainColorFormat.
+            colorFormats.push_back( VulkanFormat( SubstituteSwapchainColorFormat( colorFormat ) ) );
         }
 
         VkPipelineRenderingCreateInfo renderingCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };

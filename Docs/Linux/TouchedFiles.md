@@ -18,7 +18,7 @@ Status values: `planned` · `done` · `not needed` (checked, and confirmed unnec
 | Files needing a 2-line `#elif` or `\|\|` addition | 7 |
 | Files needing a whole-body guard wrap (2 lines) | 0 - the one candidate is an exclusion instead |
 | Files needing a real edit | 5 |
-| Shader files edited for both platforms | 6 |
+| Shader files edited for both platforms | 10 |
 | Files confirmed to need **no** change | 3 |
 | **New** files added (no upstream conflict possible) | ~40 |
 
@@ -56,6 +56,11 @@ HLSL means. The fix is to write HLSL both back ends read the same way.
 | File | Change | Phase | Status |
 |---|---|---|---|
 | `Code/Base/Render/RHI.esh` | Adds `PackUint64( uint2 )` and `UnpackUint64( uint64_t )` next to the existing `RWBufferToBuffer` helpers. 18 lines added, 0 modified. | 6 (open question 8) | **done, unverified on Windows** |
+| `Code/Base/Render/RHI.esh` | P5.17's indirect root arguments: the `[[vk::push_constant]]` block, the `DrawIndex` entry macros, and `EE_DECLARE_INDIRECT_ROOT_CONSTANTS` / `_CBV`. **All inside `#ifdef __spirv__`**, with an `#else` that falls back to the existing declarations. Additions only. | 5 (P5.17) | **done, unverified on Windows** |
+| `Code/Engine/Render/Shaders/Renderer/ClusterCulling.esf` | The two declarations become the indirect variants, a `#define` pair maps the names onto the statics, and the entry point gains `EE_INDIRECT_DISPATCH_ENTRY_ARGS` and `_INIT`. **Bodies unchanged.** | 5 (P5.17) | **done, runs on Linux** |
+| `Code/Engine/Render/Shaders/Renderer/DefaultMeshShader.esh` | As above, with the `DRAW` entry macros. | 5 (P5.17) | **done, compiles and validates, never run** |
+| `Code/Engine/Render/Shaders/Debug/DebugDraw.esf` | As above. | 5 (P5.17) | **done, compiles and validates, never run** |
+| `Code/Engine/Render/Shaders/Debug/DebugDrawMesh.esf` | As above. | 5 (P5.17) | **done, compiles and validates, never run** |
 | `Code/Engine/Render/Shaders/SpatialHash.esh` | `SpatialHashBase`'s payload buffer becomes `Buffer<uint2>` / `RWBuffer<uint2>`. `LoadPayload` and `StorePayload` pack through the new helpers; `LoadMetadata` and `StoreMetadata` lose their packing entirely, because the element is now the `uint2` they always returned. | 6 (open question 8) | **done, unverified on Windows** |
 | `Code/Engine/Render/Shaders/Picking/InstancePickingResolve.esf` | `Buffer<uint64_t>` to `Buffer<uint2>`, one read wrapped in `PackUint64`. | 6 (open question 8) | **done, unverified on Windows** |
 | `Code/Engine/Render/Shaders/Renderer/InstanceCulling.esf` | As above. | 6 (open question 8) | **done, unverified on Windows** |
