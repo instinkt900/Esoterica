@@ -548,6 +548,73 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-01 - P7.3 follow-up. The Resource Server asks before it exits, as Windows does
+
+**`OnUserExitRequest` confirms again.** P7.3 had to give it up: `MessageDialog::Confirmation`
+returned `Cancel` unconditionally, so asking would have refused every exit and trapped the user in
+a window that would not close. P7.2 made the dialogs real, and this restores the behaviour.
+
+- Files changed: `Code/Applications/ResourceServer/Linux/ResourceServerApplication_Linux.cpp`.
+  The port owns it.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- The row for this in [Blocked.md](Blocked.md) is removed.
+
+#### `ShowEx`, not `Confirmation`, and the reason is the old trap
+
+`Confirmation` collapses two different answers into one `false`: **the user said No**, and **no
+dialog could be shown**. A server that cannot show a dialog would then refuse every exit - which
+is exactly the failure P7.3 avoided by not asking at all.
+
+`ShowEx` returns the three cases apart, so the call site can say what it means:
+
+| Result | What happened | What the server does |
+|---|---|---|
+| `Yes` | the user confirmed | exit |
+| `No` | the user declined | stay open |
+| `Cancel` | no dialog was shown; the message went to the log instead | **exit** |
+
+`return result != MessageDialog::Result::No;` is the whole rule.
+
+#### Verified, all four paths
+
+| Case | Result |
+|---|---|
+| No clients connected | Exits immediately, no dialog |
+| A client connected, **No** | The dialog closes and **the server stays open**, window and all |
+| A client connected, **Yes** | The server exits |
+| A client connected, no `zenity` on `PATH` | No dialog, `[Warning][Tools][Dialog] Resource Server: There are still connected clients!` in the log, and the server exits |
+
+**`SIGTERM` is a much better test trigger than clicking the title bar.** SDL turns it into
+`SDL_EVENT_QUIT`, which reaches `OnUserExitRequest` by exactly the same path as the window
+manager's close. Clicking the imgui close button with `xdotool` works but is flaky: the button
+fires on release while hovered, and a fast synthetic click can fall inside one frame.
+
+#### Three things found while testing, none of them this change
+
+**`ninja` with no target builds Debug only.** The generated `default` rule lists the nine
+`Linux_Debug` outputs and nothing else. So `ninja -f Build/Linux/Esoterica.ninja -k 0` - the
+command in [/AGENTS.md](../../AGENTS.md#definition-of-done), and the one several entries above
+call a whole-tree build - **never rebuilds `Linux_Release`**. This cost half an hour: the code
+change was in, the build was green, and the running Release binary was a day old. Name the
+configuration you want, or check the timestamp.
+
+**The Resource Server does not shut down cleanly.** On exit it prints
+
+```
+Shutting down low level socket/threading support.
+Memory leak detected (span->list_size == span->used_count) at Code/Base/ThirdParty/rpmalloc/rpmalloc.c:1424
+```
+
+and traps. **Reproduced with zero clients and no dialog shown**, so it is not this change, and not
+P7.2's. It contradicts Phase 6 criterion 8 for this application; the engine's own shutdown is
+clean.
+
+**Destroying the window out from under the application asserts.** `xdotool windowclose` sends
+`XDestroyWindow` rather than `WM_DELETE_WINDOW`, and the next swapchain acquire fails:
+`result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR`. There is no Windows equivalent to compare
+against and no user path that does it, so it is recorded rather than fixed. It also means
+`xdotool windowclose` is **not** a way to test an exit path.
+
 ### 2026-09-01 - P7.5 Hot reload. **Four links of five are proved. The fifth needs a working GPU**
 
 **A source edit reaches a connected client as a `ResourceUpdated` message, with a fresh compiled
