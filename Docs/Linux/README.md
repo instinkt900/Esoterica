@@ -120,7 +120,7 @@ and nothing in it fails to compile.
 | Phase | State |
 |---|---|
 | 0 - 4 | Done. `ninja` builds the tree, reflection and resource compilation run, DXC builds from source, and all 46 shader stages compile and validate as SPIR-V |
-| 5 - Vulkan RHI | Written, merged and **run**. All seventeen groups including P5.17. Debug names, markers and variable rate shading are now verified from a frame capture, and criterion 8 is met for forward shading, cascaded shadows, GTAO and SMAA. **Query pools and raytracing have still never executed**, and they are rows in [Blocked.md](Blocked.md) |
+| 5 - Vulkan RHI | Written, merged and **run**. All seventeen groups including P5.17. Debug names, markers and variable rate shading are now verified from a frame capture, and criterion 8 is met for forward shading, cascaded shadows, GTAO and SMAA. Query pools are verified too. **Raytracing has still never executed**, and it is a row in [Blocked.md](Blocked.md) |
 | 6 - Windowing and input | Written. SDL3, `LinuxApplication`, the imgui platform backend, keyboard, mouse and gamepad, the surface and the swapchain. The engine opens a window and renders a map |
 | 7 - Editor and tools | In flight. The editor and the Resource Server build, link and run; the server serves resources over the network and the editor no longer needs `-packaged`. The editor shakedown is what is left |
 

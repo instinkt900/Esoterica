@@ -30,8 +30,8 @@ them; that file is how they are found. A task that leaves something unverified a
 > last link of P7.5 machine-blocked; see [Blocked.md](Blocked.md).
 >
 > **The GPU-blocked queue is being worked through on the 3090.** P5.12, P5.15 and four of the
-> seven features in criterion 8 are verified. What is left there is P5.11 query pools, P5.16
-> raytracing, and the rows that need the editor rather than the engine.
+> seven features in criterion 8 are verified, and so is P5.11. What is left there is **P5.16
+> raytracing** and the rows that need the editor rather than the engine.
 
 **Phase 7 is in flight, and P7.6 is what is left in it.** The whole tree builds in Debug and
 Release, and **nothing in it fails to compile.** `Esoterica.Applications.Editor` and
@@ -540,10 +540,11 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 ---
 
 **Phase 5 is merged, has run, and the frame it produces is correct.** All seventeen groups went
-in through PRs #24 to #41 and then P5.17 to P5.20. **Two groups have still never executed** -
-P5.11 query pools and P5.16 raytracing. P5.12 and P5.15 were verified on 2026-09-01 from a frame
-capture; every other group's "Not verified" list is historical, because the correct frame
-exercised P5.1 to P5.10, P5.13 and P5.17. [Blocked.md](Blocked.md) is the list that matters now.
+in through PRs #24 to #41 and then P5.17 to P5.20. **One group has still never executed - P5.16
+raytracing.** P5.12 and P5.15 were verified on 2026-09-01 from a frame capture and P5.11 from a
+temporary in-engine harness; every other group's "Not verified" list is historical, because the
+correct frame exercised P5.1 to P5.10, P5.13 and P5.17. [Blocked.md](Blocked.md) is the list that
+matters now.
 
 ---
 
@@ -575,6 +576,59 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-01 - P5.11 query pools. The frequency is the right way up, and the whole path runs
+
+**The group had never executed, and it could not be made to by running the engine.**
+`RHI::CreateQueryPool` and `RHI::GetQueryTimestampFrequency` have **zero callers anywhere in
+`Code/`** - the engine's profiling path went out with Optick - so there was nothing to observe.
+
+Exercised instead with a temporary harness inside `RHI_Vulkan.cpp`, **reverted before commit**: a
+timestamp pool created at present 1400, a query pair opened in `BeginCommandBuffer` and closed in
+`EndCommandBuffer` for every graphics command buffer of frame 1500, resolved into a
+`DeviceToHost` + `PersistentMap` buffer, and read back at present 1560.
+
+#### What it measured
+
+```
+timestampPeriod = 1.000000 ns/tick, validBits = 64, GetQueryTimestampFrequency = 1000000000.0 Hz
+
+graphics command buffer 0:     928 ticks -> 0.0009 ms
+graphics command buffer 1:  152576 ticks -> 0.1526 ms
+graphics command buffer 2:  427232 ticks -> 0.4272 ms
+graphics command buffer 3: 1107136 ticks -> 1.1071 ms
+graphics command buffer 4:    1120 ticks -> 0.0011 ms
+```
+
+**The inversion is correct.** Vulkan reports `timestampPeriod` in nanoseconds per tick and
+Direct3D 12's `GetTimestampFrequency` reports ticks per second, and `GetQueryTimestampFrequency`
+returns `1.0e9 / period` - 1,000,000,000 Hz here, which is the Direct3D sense. **This is the
+failure the row warned about and it is worth saying how loud it would have been**: get it the
+wrong way up and command buffer 3 reports 1.1e15 ms instead of 1.1 ms. It is not a subtle
+constant-factor error after all, at least on a device whose period is 1.0.
+
+**The numbers are not a fixed offset.** They span three orders of magnitude and track how much
+work each command buffer carries - two are near-empty, three do real work, and the total of about
+1.7 ms of GPU time is plausible for pbrdemo on an RTX 3090. That is what separates "the path runs"
+from "the path returns two adjacent timestamps".
+
+Everything in the group ran: `CreateQueryPool`, `CmdResetQueryPool`, `CmdEndQuery` on a timestamp
+pool, `CmdResolveQuery` and `GetQueryTimestampFrequency`. Host validation was on throughout and
+said nothing. `CmdBeginQuery` is still unexercised, and it cannot be otherwise - it returns
+immediately for a timestamp pool, and nothing creates a `PipelineStatistics` one.
+
+#### An accidental confirmation
+
+The harness leaked its pool and its readback buffer on purpose-by-omission, and shutdown asserted
+on `pair.second.m_numAllocations == 0`. **`ReportDeviceMemoryLeaks` catches a real leak**, which
+is more than criterion 10 has been able to say from a clean run alone.
+
+#### Files
+
+- Files changed: **none.** Documentation only. The harness in `Code/Base/Render/RHI_Vulkan.cpp`
+  was reverted.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- Acceptance criteria: no change. P5.11 was never a criterion of its own; it was a Blocked.md row.
 
 ### 2026-09-01 - The GPU-blocked queue, part 1. P5.12, P5.15 and most of criterion 8, from one capture
 
