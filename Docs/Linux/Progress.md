@@ -28,6 +28,10 @@ them; that file is how they are found. A task that leaves something unverified a
 > **The laptop cannot run the editor at all.** It dies about three seconds into its frame loop,
 > on the device loss its Intel UHD 620 has had since Phase 6. That is what makes P7.6 and the
 > last link of P7.5 machine-blocked; see [Blocked.md](Blocked.md).
+>
+> **The GPU-blocked queue is being worked through on the 3090.** P5.12, P5.15 and four of the
+> seven features in criterion 8 are verified. What is left there is P5.11 query pools, P5.16
+> raytracing, and the rows that need the editor rather than the engine.
 
 **Phase 7 is in flight, and P7.6 is what is left in it.** The whole tree builds in Debug and
 Release, and **nothing in it fails to compile.** `Esoterica.Applications.Editor` and
@@ -328,6 +332,11 @@ messages** over 30 seconds:
   `<612,1,1>` workgroups in a full frame.
 - **The frame is correct.** Geometry, UVs, textures, normals, image-based lighting, direct
   lighting, shadows, the sky and the reflective ground plane all render.
+- **Named passes, from a frame capture**: light culling, instance culling, cluster culling,
+  forward shading (depth only, opaque + alpha test, alpha blend), 4 shadow cascades, XeGTAO
+  (prefilter, main, denoise), SMAA (3 draws), post processing and debug draw (3 depth modes).
+  **GTAO and SMAA are each verified by an A/B**, not just by the pass being recorded.
+- **Debug names and markers work.** 75 nested label scopes and 834 named objects in one capture.
 
 ### What the two stage-interface defects looked like, and why they hid
 
@@ -439,6 +448,17 @@ LD_LIBRARY_PATH=~/renderdoc_1.45/lib ENABLE_VULKAN_RENDERDOC_CAPTURE=1 \
 The ini key is `Enable_Render_Doc`. Nothing in the engine calls `TriggerCapture`, so a capture
 needs the capture key or a temporary call to it.
 
+> **Turn host validation off for any RenderDoc run.** With `Enable_Host_Validation = true` the
+> engine segfaults about a second in, inside `librenderdoc.so`, at the `vkCmdPushDescriptorSetKHR`
+> in `CmdSetRootConstants` (`RHI_Vulkan.cpp:3595`). It needs only the layer to be loaded, not any
+> RenderDoc API call, so **it is not a port defect** - it is the two layers together. Use
+> RenderDoc's own `--opt-api-validation` if you want validation inside a capture.
+
+**There is no `xdotool` on either machine**, so the capture key cannot be pressed from a script on
+an `Xvfb` display. The 2026-09-01 capture used a temporary `TriggerCapture()` in `QueuePresent`
+gated on a present counter, reverted afterwards. Installing `xdotool` would remove the need for
+that, and would also let the editor's title bar buttons and menus be driven from a script in P7.6.
+
 **A capture can be read without the GUI.** `renderdoccmd convert -f cap.rdc -o cap.zip.xml -c
 zip.xml` writes the whole chunk list as XML plus a sibling `.zip` holding every CPU-supplied
 buffer. That is how the push constants, the command signature, the pipeline state, the execution
@@ -463,8 +483,12 @@ read `m_pMappedAddress_WriteCombined` a few hundred frames later. For a texture,
   in `Code/Scripts/DXCPatches`. **Not urgent** - NVIDIA renders correctly without it - but it is a
   real conformance gap and another driver need not be so forgiving.
 - **The same query-as-enable-request pattern** used for the mesh shader features is still in place
-  for the shading rate, acceleration structure and ray tracing blocks. None has a cross-dependency
-  VUID today.
+  for the shading rate, acceleration structure and ray tracing blocks (`RHI_Vulkan.cpp:1157-1232`).
+  Confirmed still present on 2026-09-01, and confirmed that **no VUID fires** for it on the RTX
+  3090 with driver 580.173.02 and host validation on.
+- **OIT is dead code, on both backends.** `OITResolve.esf` compiles, and nothing looks it up or
+  builds a pipeline from it. `OIT.esh` has no consumers at all. Phase 5 criterion 8 asks for OIT
+  parity and there is no OIT to have parity with.
 - **`requirements_gamenetworkingsockets` does not version-check `protoc`.** A stale one earlier on
   `PATH` is accepted and fails deep inside the build.
 
@@ -516,10 +540,10 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 ---
 
 **Phase 5 is merged, has run, and the frame it produces is correct.** All seventeen groups went
-in through PRs #24 to #41 and then P5.17 to P5.20. **Four groups have still never executed** -
-P5.11 query pools, P5.12 debug names and markers, P5.15 variable rate shading and P5.16
-raytracing. Every other group's "Not verified" list is historical: the correct frame exercised
-P5.1 to P5.10, P5.13 and P5.17. [Blocked.md](Blocked.md) is the list that matters now.
+in through PRs #24 to #41 and then P5.17 to P5.20. **Two groups have still never executed** -
+P5.11 query pools and P5.16 raytracing. P5.12 and P5.15 were verified on 2026-09-01 from a frame
+capture; every other group's "Not verified" list is historical, because the correct frame
+exercised P5.1 to P5.10, P5.13 and P5.17. [Blocked.md](Blocked.md) is the list that matters now.
 
 ---
 
@@ -551,6 +575,142 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-01 - The GPU-blocked queue, part 1. P5.12, P5.15 and most of criterion 8, from one capture
+
+**One RenderDoc capture of one pbrdemo frame answered four Blocked.md rows.** Taken on the RTX
+3090 reference machine (driver 580.173.02, Ubuntu 24.04.4, X11). Frame 1501, 645 MB, read as XML
+with `renderdoccmd convert` - no GUI, and no replay needed for any of it.
+
+#### RenderDoc and the validation layer cannot both be on. This costs a session if you hit it
+
+**With `Enable_Host_Validation = true`, the engine segfaults about one second in**, at
+`RHI_Vulkan.cpp:3595` - the `vkCmdPushDescriptorSetKHR` in `CmdSetRootConstants`, reached from the
+light culling dispatch, the first root constant write in the frame. The fault is inside
+`librenderdoc.so`, below it inside the NVIDIA driver, with a null first argument.
+
+**Turn host validation off and RenderDoc is fine.** Same binary, same map, same everything else.
+It is a RenderDoc-plus-validation-layer interaction, **not a port defect**: the crash needs no
+RenderDoc API use at all, only the layer being loaded, so nothing the engine calls is involved.
+
+Do not spend time on it. If you want validation inside a capture, RenderDoc has
+`--opt-api-validation` for exactly that.
+
+#### There is still no way to trigger a capture without editing code
+
+Nothing in the engine calls `TriggerCapture`, `BeginFrameCapture` or `EndFrameCapture` - the two
+RHI entry points have **zero callers anywhere in `Code/`**. The capture here came from a temporary
+`g_pTempRenderDocAPI->TriggerCapture()` in `QueuePresent`, gated on a present counter, **reverted
+before commit**. There is no `xdotool` on this machine either, so the capture key is not reachable
+from a script on an `Xvfb` display.
+
+Phase 5 criterion 9 therefore stays half met, for the same reason as before.
+
+#### P5.12 debug names and markers - **verified**
+
+| Half | Evidence in the capture |
+|---|---|
+| Markers | **75 `vkCmdBeginDebugUtilsLabelEXT` / `vkCmdEndDebugUtilsLabelEXT` pairs**, correctly nested, covering every pass |
+| Object names | **834 `vkSetDebugUtilsObjectNameEXT` chunks, 297 distinct names** - queues, buffers, textures by data path, root signatures and all 30 pipelines |
+
+**The two halves are driven differently, and only one of them has a public caller.** Markers come
+from `EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE`, used at 35 sites across `Code/Engine/Render/`. Object
+names come from the `m_debugName` field on the various `*Parameters` creation structs, which
+`RHI_Vulkan.cpp` forwards to its internal `SetVulkanObjectName` at 25 sites.
+
+**The nine public `RHI::SetDebugName` overloads have zero callers in `Code/`.** That is an
+upstream fact about the engine, not a port gap. Do not go looking for the caller; there isn't one.
+
+#### P5.15 variable rate shading - **verified**
+
+The row's concern was the pipeline change, not the feature. On a device with
+`VK_KHR_fragment_shading_rate`:
+
+- **all 23 graphics and mesh pipelines** in the capture declare
+  `VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR`, which is every one of them,
+- `vkCmdSetFragmentShadingRateKHR` is called 5 times across the frame's 8 command buffers - once
+  per command buffer from a pool with `VK_QUEUE_GRAPHICS_BIT`, and not at all on the other three.
+  That is the guard at `RHI_Vulkan.cpp:2921` doing its job; setting it on a transfer command
+  buffer is what caused the GPU hang that P6.9 fixed,
+- and the frame renders correctly with zero validation messages.
+
+The feature itself still reports `ShadingRate::NotSupported` (`RHI_Vulkan.cpp:625`), matching the
+Direct3D 12 backend, which is deliberate.
+
+#### The debug draw pass records and issues draws
+
+Its pipelines create - `RenderPass_DebugDraw Pipeline Transparent DepthOn_Color` and
+`... DepthOn_Depth` are both named in the capture - and the `Debug Draw` scope contains three
+sub-scopes issuing **5 `vkCmdDrawMeshTasksIndirectEXT`** between them, plus the `DebugDrawResolve`
+dispatch and its copy-backs.
+
+**What is not established is that anything visible comes out.** The draws are indirect with
+GPU-written counts and the pbrdemo scene submits no debug geometry, so the count may be zero. The
+place that settles it is the editor, which draws gizmos and bounds. Left as a narrowed row.
+
+#### Criterion 8, feature parity, named one at a time
+
+| Feature | Verdict | How |
+|---|---|---|
+| Forward shading | **Verified** | Three passes - depth only, opaque + alpha test, alpha blend - 8 `vkCmdDrawMeshTasksIndirectCountEXT` each across 4 material buckets, and the frame is correct |
+| Cascaded shadows | **Verified** | 4 cascades x 4 buckets x 8 indirect mesh draws, and the shadow is visible in the frame |
+| GTAO | **Verified** | 3 sub-passes, 5 dispatches. A/B against `Enable_SSAO = false`: the difference lands on geometry and ground contact and is **exactly zero in the sky**, which is what ambient occlusion should do |
+| SMAA | **Verified** | 3 pipelines, 3 draws, stencil reference set per draw. A/B against `Enable_SMAA = false`: rock silhouettes against the sky are smooth with it on and visibly stair-stepped with it off |
+| Debug draw | **Partly.** Records and draws; visible output unproven | Above |
+| OIT | **Cannot be verified. It is not wired into the engine** | Below |
+| Mesh picking | **Not reachable from the engine. It is editor-gated** | Below |
+
+**Both A/Bs need no rebuild.** `m_enableSSAO` and `m_enableSMAA` are reflected settings in
+`Code/Base/Render/Settings/Settings_Render.h` under `Category = "Render"`, so the ini keys are:
+
+```ini
+[Render:Render]
+Enable_SSAO = false
+Enable_SMAA = false
+```
+
+**OIT is dead code in this engine, on both backends.** `OITResolve.esf` compiles and
+`RenderPass_DebugDraw.cpp:19` includes its generated header, but **nothing anywhere looks up an
+`"OITResolve"` shader or creates a pipeline for it**, and `OIT.esh` has no consumers at all. The
+"Forward Shading Alpha Blend Pass" is ordinary alpha blending, not OIT. So criterion 8 cannot be
+met for OIT by any amount of Linux work - the feature does not run on Direct3D 12 either.
+
+**Mesh picking is gated on `pRenderViewport->IsPickingEnabled()`**, inside `#if
+EE_DEVELOPMENT_TOOLS` at `Renderer_ForwardShading.cpp:1022`. No `InstancePickingResolve` pipeline
+is created in a standalone engine frame. It belongs to P7.6, in the editor viewport, not here.
+
+#### The query-as-enable-request pattern is still in place, and this driver does not catch it
+
+Read all four feature blocks (`RHI_Vulkan.cpp:1157-1232`). **The mesh shader block is the only one
+that clears the bits it does not want** - `multiviewMeshShader`,
+`primitiveFragmentShadingRateMeshShader`, `meshShaderQueries`. The shading rate, acceleration
+structure and ray tracing pipeline blocks each pass the struct `vkGetPhysicalDeviceFeatures2`
+filled straight into `vkCreateDevice`, so **every bit the device supports is being asked for**.
+
+Measured, rather than assumed: on the RTX 3090 with driver 580.173.02 and host validation on,
+**no VUID fires** and device creation succeeds. Raytracing is enabled on this device - RenderDoc's
+own log says "Acceleration structures enabled". So the pattern is latent here, exactly as the row
+said. Narrowed, not deleted.
+
+#### Reproducing any of this
+
+```bash
+export PATH="$PWD/External/LLVM/bin:$PATH"     # or NinjaGen.py cannot find clang++
+Xvfb :77 -screen 0 5120x1440x24 &
+/tmp/shot.sh <ini-file> <out.png>              # the A/B recipe, 25s per frame
+```
+
+The capture and its XML are at `/tmp/RenderDoc/`. They are worth keeping for the session: the
+convert step takes about 90 seconds and the capture itself takes 20 minutes of engine run time to
+reach.
+
+#### Files
+
+- Files changed: **none.** Documentation only. The measurement scaffold in
+  `Code/Base/Render/RHI_Vulkan.cpp` was reverted.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- Acceptance criteria: Phase 5 criterion 8 moves from "not met" to met for four of seven, with
+  three that cannot be met as written. Criterion 9 unchanged.
 
 ### 2026-09-01 - The `storageInputOutput16` startup warning outlived the problem it described
 

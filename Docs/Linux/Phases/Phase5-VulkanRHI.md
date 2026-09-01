@@ -479,13 +479,30 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    **nothing has been compared against Windows**, because no Windows build has been run. The
    comparison is a row in the Windows queue in [Blocked.md](../Blocked.md).
 8. Feature parity is demonstrated for forward shading, cascaded shadows, GTAO, SMAA, OIT, mesh
-   picking, and debug draw. Name each one, and verify each one. **Not met.** Forward shading,
-   cascaded shadows and debug draw are visibly working in the pbrdemo frame; GTAO, SMAA, OIT and
-   mesh picking have not been named and verified one at a time, which is what this asks for.
+   picking, and debug draw. Name each one, and verify each one. **Met for four of seven, and
+   three cannot be met as written.** Named one at a time, from a frame capture on the RTX 3090
+   plus two A/B runs:
+   - **Forward shading** - verified. Three passes, 8 indirect mesh draws each across 4 buckets.
+   - **Cascaded shadows** - verified. 4 cascades, 32 indirect mesh draws, shadow visible.
+   - **GTAO** - verified. A/B against `Enable_SSAO = false` changes geometry and ground contact
+     and leaves the sky untouched.
+   - **SMAA** - verified. A/B against `Enable_SMAA = false` shows stair-stepped silhouettes with
+     it off and smooth ones with it on.
+   - **Debug draw** - the pass records, its pipelines create and it issues 5 indirect mesh draws.
+     Whether a debug primitive is visible is unproven, because pbrdemo submits none. Settles in
+     the editor, under P7.6.
+   - **OIT** - **cannot be met.** `OITResolve.esf` compiles but nothing looks it up or creates a
+     pipeline for it, and `OIT.esh` has no consumers. The feature does not run on Direct3D 12
+     either, so no Linux work can demonstrate it.
+   - **Mesh picking** - **not reachable here.** Gated on `IsPickingEnabled()` inside
+     `#if EE_DEVELOPMENT_TOOLS`, so it only runs from an editor viewport. Belongs to P7.6.
 9. RenderDoc capture works on Linux, through `BeginFrameCapture` and `EndFrameCapture`. **Half
    met.** Captures are taken and read - `renderdoccmd convert` answered most of the questions in
    the render bring-up - but nothing in the engine calls `TriggerCapture`, so a capture needs the
    capture key or a temporary call. RenderDoc also has to attach **before** `vkCreateInstance`.
+   Two more constraints found on 2026-09-01: `BeginFrameCapture` and `EndFrameCapture` have zero
+   callers in `Code/`, and **host validation has to be off** or the engine segfaults inside
+   `librenderdoc.so`.
 10. `ReportDeviceMemoryLeaks` reports zero leaks after a clean shutdown. **Met.**
 11. **The Windows MSBuild build still succeeds**, and the Direct3D 12 renderer is unchanged.
 

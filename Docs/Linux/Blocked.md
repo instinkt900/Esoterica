@@ -51,23 +51,22 @@ so a second process cannot be used to watch the first. Do not try to work around
 
 **Most of Phase 5 is no longer blocked.** The 2026-09-01 run drew the pbrdemo map correctly on an
 RTX 3090 with host validation on and zero validation messages, which exercised P5.1 to P5.10,
-P5.13 and P5.17. **Their individual "Not verified" lists are historical.** Four groups are not
-covered by that run:
+P5.13 and P5.17. **Their individual "Not verified" lists are historical.** A frame capture on the
+same machine then closed P5.12, P5.15 and most of criterion 8; see the "GPU-blocked queue, part 1"
+entry in Progress.md. What is left:
 
 | # | Group | What to check first | Detail in |
 |---|---|---|---|
-| 7 | **P5.12 debug names and markers** | That names appear in a RenderDoc capture. The cheapest check here, and it makes every other row easier | Progress.md, P5.12 entry |
-| 8 | **P5.11 query pools** | The timestamp frequency inversion. A wrong one gives plausible timings that are wrong by a constant factor, which nobody notices | Progress.md, P5.11 entry |
-| 9 | **P5.15 variable rate shading** | The pipeline change, not the feature. Every graphics pipeline declares one more dynamic state on a device with the extension, and a mistake there breaks every draw. The feature itself is deliberately switched off | Progress.md, P5.15 entry |
-| 10 | **P5.16 raytracing** | All of it. No structure built, no ray traced, no raytracing pipeline compiled. **Assume none of it works** | Progress.md, P5.16 entry |
-| 11 | **The debug draw pass** | Its pipelines only started creating with P5.20, which fixed the 16-bit interpolant that made them fail outright. Nothing has checked that it draws | Progress.md, P5.20 entry |
-| 12 | **Phase 5 criterion 8, feature parity, named one at a time** | Forward shading, cascaded shadows and debug draw are visible in the pbrdemo frame. **GTAO, SMAA, OIT and mesh picking have never been named and verified individually**, which is what the criterion asks for | [Phase5-VulkanRHI.md](Phases/Phase5-VulkanRHI.md#acceptance-criteria) |
+| 7 | **P5.11 query pools** | The timestamp frequency inversion. A wrong one gives plausible timings that are wrong by a constant factor, which nobody notices. **Note before you start: `CreateQueryPool` and `GetQueryTimestampFrequency` have zero callers in `Code/`, so running the engine cannot exercise this.** It needs a scratch harness, the way P6.6 proved the swapchain | Progress.md, P5.11 entry |
+| 8 | **P5.16 raytracing** | All of it. No structure built, no ray traced, no raytracing pipeline compiled. **Assume none of it works** | Progress.md, P5.16 entry |
+| 9 | **That the debug draw pass produces something visible.** The pass records, its pipelines create and it issues 5 indirect mesh draws - that much is verified. The counts are GPU-written and pbrdemo submits no debug geometry, so nothing has seen a debug primitive | **The editor is where this settles**, since it draws gizmos and bounds. Fold it into P7.6 | Progress.md, "GPU-blocked queue, part 1" |
+| 10 | **Criterion 8's last live row: mesh picking.** Gated on `IsPickingEnabled()` at `Renderer_ForwardShading.cpp:1022`, so it never runs in a standalone engine frame | **Also P7.6.** Forward shading, cascaded shadows, GTAO and SMAA are verified; OIT is dead code on both backends and cannot be verified at all | [Phase5-VulkanRHI.md](Phases/Phase5-VulkanRHI.md#acceptance-criteria) |
 
 ### One thing only a different driver will find
 
 | # | What to check | Why | Detail in |
 |---|---|---|---|
-| 13 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders | No cross-dependency VUID catches it today | Progress.md, 2026-08-31 NVIDIA entry |
+| 11 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
 
 ---
 
