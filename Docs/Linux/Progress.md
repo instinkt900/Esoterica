@@ -548,6 +548,123 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-01 - P7.5 Hot reload. **Four links of five are proved. The fifth needs a working GPU**
+
+**A source edit reaches a connected client as a `ResourceUpdated` message, with a fresh compiled
+file behind it.** What is not proved is the editor acting on that message, because the editor
+cannot stay alive on this machine's GPU for the three seconds the round trip takes.
+
+- **No code changed.** This task found no defect. The Phase 3 watcher, the Resource Server and
+  the network path all did what they were supposed to.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- Acceptance criteria: **P7.5 is not fully met.** Links 1 to 4 below are verified. Link 5 is not,
+  and cannot be on this machine.
+
+#### The chain, and where the evidence stops
+
+| # | Link | Verified |
+|---|---|---|
+| 1 | A source edit produces an inotify event | **yes**, for four different write patterns |
+| 2 | The Resource Server turns it into a compile request | **yes**, visible in the requests table |
+| 3 | A worker recompiles and the compiled file is rewritten | **yes**, 19-28ms, mtime moves |
+| 4 | The server pushes `ResourceUpdated` to connected clients | **yes**, received by a client |
+| 5 | The client's `ResourceSystem` reloads and its users rebind | **no** - see below |
+
+#### The watcher survives every way an editor writes a file
+
+The phase document expected trouble here, above all with editors that save by writing a temp file
+and renaming it over the original, which produces `IN_MOVED_TO` and not `IN_CLOSE_WRITE`. **There
+is no trouble.** A scratch program watching `Data/` reported, in order:
+
+| What was done | Events reported |
+|---|---|
+| `cat backup > file` (in-place write) | `FileModified` on the file |
+| write a temp in the same directory, `mv` over the file | `FileCreated` + `FileModified` on the temp, then `FileRenamed` with `m_oldPath` set to the temp |
+| `sed -i` (which is a rename, with its own temp name) | the same three, correctly paired |
+| create then delete a file | `FileCreated`, `FileModified`, `FileDeleted` |
+
+The rename pairing works because `ProcessListOfDirectoryChanges` holds an `IN_MOVED_FROM` by its
+cookie until the matching `IN_MOVED_TO` arrives.
+
+**And the rename case would not have mattered even if it were reported as a create.**
+`ResourceServer::UpdateFileSystemWatcher` skips directory events and then treats every file event
+the same, whatever its type. There is no `FileModified`-only path to fall through.
+
+#### Recompilation is correct, including when it does nothing
+
+The first three edits wrote **byte-identical content**. The server logged a request for each and
+reported them **up to date** in 15-16ms with 0ms of compile time. Only the fourth edit, which
+actually changed a byte, compiled: 19.0ms. The compiled file's mtime moved to match.
+
+That is right, and it is worth knowing before someone concludes the watcher is broken: an editor
+that rewrites a file without changing it produces a request that correctly does no work.
+
+#### Link 4, and how it was measured without a renderer
+
+The server sends `NetworkMessageID::ResourceUpdated` to every connected client except the one that
+asked for the compile. The client's `NetworkResourceProvider` puts the ID in
+`m_externallyUpdatedResources`, and `ResourceSystem::UpdateResourceProvider` turns that into
+`RequestResourceHotReload`. **Nothing on that path logs**, so there is nothing to read in a log
+file.
+
+The editor cannot be used to observe it (see below), so a **scratch client with no renderer** was
+built against `libEsoterica.Base.so`: it starts `NetworkResourceProvider`, requests
+`data://demo/render/pbr/boulder/boulder.material`, and prints whatever
+`GetExternallyUpdatedResources()` returns each tick. Editing the material printed
+
+```
+RESOURCE UPDATED: data://demo/render/pbr/boulder/boulder.material
+```
+
+That is the exact value `RequestResourceHotReload` is called with. Everything past that point is
+platform-neutral engine code.
+
+`ResourceProvider`'s virtuals are public on the base and private on the override, so a client like
+this drives them through a `ResourceProvider*`. `ResourceRequest` needs a non-null `ResourceLoader`
+in its constructor but never calls it unless the load stages are driven, so a stub loader is
+enough.
+
+#### Why link 5 cannot be measured here, and it is not a port defect
+
+**The editor dies about three seconds after it reaches its frame loop.** Every time, with or
+without a startup map:
+
+```
+#0  EE::Render::RHI::QueueHostWait (semaphore=64) at Code/Base/Render/RHI_Vulkan.cpp:2232
+#1  EE::Render::RenderSystem::WaitForFrameStart () at Code/Engine/Render/RenderSystem.cpp:321
+#2  EE::Engine::Update () at Code/Engine/Engine.cpp:647
+```
+
+`EE_ASSERT( result == VK_SUCCESS )` on the semaphore wait. This is the device loss this machine's
+Intel UHD 620 has had since Phase 6: it has no `VK_EXT_mesh_shader`, so every mesh draw is dropped
+and later passes read what the geometry path never wrote. [Progress.md](#current-state) already
+says not to chase rendering here.
+
+**The GPU reset takes the Resource Server down with it for about seven seconds.** Both processes
+present through the same GPU, so when the editor hangs it, the server's frame loop stalls and its
+`Update()` stops running. Measured directly: a file edit at `11:37:51.296` produced a compile
+request timestamped `11:37:58`, while the same edit with no editor running was serviced in the
+same second. **The editor was dead before the recompile finished.** That is why racing the crash
+does not work, and it is worth writing down: a seven second lag between an edit and a compile is
+alarming and has nothing to do with the watcher.
+
+**Where to finish P7.5: the RTX 3090 machine.** Open the map, edit a material, and watch the
+viewport. Nothing more is needed, and the four links below it are already proved.
+
+#### Two things this run confirmed for other tasks
+
+- **P7.3's "serving a resource to a client" is no longer unverified.** The editor's own requests
+  are in the server's table, tagged with the client icon: the material, the physics database,
+  three textures and the map, all fetched over the wire with no `-packaged`.
+- **P7.2's message dialogs work in the real editor.** A deliberately broken Vulkan ICD made
+  `SDL_CreateWindow` fail, and the fatal error came up as a zenity dialog rather than a log line.
+
+#### One thing for P7.6
+
+The Resource Server's left panel draws **"Force Recompile" and "Request Compilation" on top of
+each other** in the Test Compile section. It is a layout problem in shared imgui code, not a
+platform one, but P7.6 should record it properly.
+
 ### 2026-09-01 - P7.4 `OpenInExplorer`. It compiled, and it opened the wrong applications
 
 **The eight call sites were fine. The function underneath them was not.** P7.4 was written as a
