@@ -6,31 +6,29 @@
 opens a window and renders. The binary is named after its project, like the Reflector and the
 ResourceCompiler, and `-packaged` is needed until the ResourceServer builds in Phase 7.
 
-> ## Status: P6.1 to P6.8 are written. **The engine reaches its frame loop and stops at
-> `CmdExecuteIndirect`.**
+> ## Status: the phase's goal is met. **The engine opens a window and renders a map.**
 >
-> Open question 8 is answered, so every shader and every pipeline now builds. The one thing
-> between this port and a drawn frame is
-> [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started).
-> Four hardware gaps remain, and the driver tolerates all of them with validation off. Read the
-> P6.x and open question 8 entries in [Progress.md](../Progress.md) first; they carry every
-> measurement and every decision this phase made.
+> `Esoterica.Applications.Engine -map data://demo/render/pbr/pbrdemo.map` draws the map correctly
+> on an RTX 3090, with host validation on, zero validation messages, no device memory leaked and
+> a clean shutdown. P6.1 to P6.9 are written and merged.
+>
+> **The `-packaged` flag is no longer needed.** P7.3 opened `EnsureResourceServerIsRunning` to
+> Linux, so the engine reaches the Resource Server over the network like the Windows build does.
+>
+> **A GPU without `VK_EXT_mesh_shader` cannot run this.** The first development machine's Intel
+> UHD 620 drops every mesh draw and then loses the device a few seconds in. Read the P6.x entries
+> in [Progress.md](../Progress.md) and the queues in [Blocked.md](../Blocked.md) before
+> concluding anything is broken.
 
 **Prerequisites:** Phase 5, all sixteen groups, which are written and merged. **This phase is
 where the Vulkan backend ran for the first time**, and doing so found four real defects in it.
 Expect more. Read the P5.x entries in [Progress.md](../Progress.md) too; each one ends with a
 "Not verified" list.
 
-**A rendered frame still needs [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
-which is deliberately scheduled after this phase.** Every engine render pass draws through
-`CmdExecuteIndirect`, and `CmdExecuteIndirect` refuses the engine's command signatures at the
-line. The window, the input, the swapchain and imgui all come up without it. **Geometry does
-not.** Read acceptance criterion 2 with that in mind.
-
-**[Open question 8](../Progress.md#open-questions) is answered and out of the way.** The
-engine's `Buffer<uint64_t>` had no Vulkan spelling; the shaders now read `Buffer<uint2>` and
-pack. No C++ changed, because the RHI already created every one of those buffers as `RG32_UInt`.
-P5.17 is now the only thing left in front of a drawn frame.
+**[P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change) and
+[open question 8](../Progress.md#open-questions) are both done.** They were the two things in
+front of a drawn frame while this phase was being written, and the text below still reads as if
+they are ahead of you. They are not.
 
 **Rough cost:** 3-4 weeks.
 
@@ -297,24 +295,25 @@ A tiling window manager also makes acceptance criterion 7 and the client-driven 
 
 ## Acceptance criteria
 
-Status as of P6.8, which is the end of the phase's work on this machine. **Only criterion 1 and
-the bookkeeping ones are met.** P6.8 got the engine further without moving any of the rest: it
-now creates every shader in the engine instead of stopping at the fourteenth, and still reaches
-no frame loop.
+**Six of the twelve are met, and the phase's goal with them.** What is left needs either a
+non-tiling window manager, a HiDPI display or a Wayland session, none of which either development
+machine has. Nothing here is waiting on port work.
 
 1. **Met.** `Build/Linux_Release/Esoterica.Applications.Engine` builds and links.
-2. **Not met.** It opens a window but does not render a map. **This one is split.** The
-   window, the swapchain, the frame loop and imgui are this phase's and are done. **Geometry
-   needs [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)
-   and [open question 8](../Progress.md#open-questions)**, and mesh shader hardware, which this
-   machine does not have. Say which half you met.
+2. **Met.** It opens a window and renders the map, correctly, on a GPU with
+   `VK_EXT_mesh_shader`. Geometry needed [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change),
+   [open question 8](../Progress.md#open-questions) and two stage-interface defects after that;
+   all four are done.
 3. **Half met.** Keyboard, mouse and gamepad are implemented and each is tested at the device
-   level. "Works for camera control" needs a running engine.
+   level. "Works for camera control" is now checkable, because the engine runs, and has not been
+   checked.
 4. **Met for the RHI, not for the application.** Resize recreates the swapchain with no
-   validation errors and no leaks, proved by a scratch application. The engine has not reached a
-   frame loop yet, and the client-driven half is untestable under a tiling window manager.
-5. **Not met.** imgui multi-viewport is proved on the platform side - three imgui windows became
-   three live SDL windows - but nothing has rendered imgui through the engine's own renderer.
+   validation errors and no leaks, proved by a scratch application. The client-driven half is
+   untestable under a tiling window manager, which is what both machines run.
+5. **Met.** imgui multi-viewport is proved on the platform side - three imgui windows became
+   three live SDL windows - and the Resource Server draws its whole docked UI through the
+   engine's own renderer, including its custom title bar. Dragging a tool out into its own OS
+   window is Phase 7 criterion 9 and has not been done.
 6. **Not met.** X11 only so far, under i3. **imgui viewports will not be enabled under Wayland
    at all**; see P6.3.
 7. **Not met and not testable here.** A tiling window manager ignores client sizing, and this
@@ -322,7 +321,7 @@ no frame loop.
 8. **Met.** Shutdown is clean with validation on, and `ReportDeviceMemoryLeaks` reports "No
    device memory leaked" through the engine - measured on the Shipping binary once it linked,
    2026-08-31.
-9. **Not met.** No frame loop in the engine yet.
+9. **Met.** The engine runs a continuous frame loop and shuts down clean.
 10. **Met throughout.** One upstream file is edited in this whole phase,
     `Code/Base/Render/RHI.h:31`, and it adds a Linux-only branch that leaves the Windows value
     verbatim. `Code/Base/Imgui/ImguiSystem.cpp:12` is the only other, and it is criterion 12.

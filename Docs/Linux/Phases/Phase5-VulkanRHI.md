@@ -14,35 +14,40 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 [02-Architecture.md, Renderer](../02-Architecture.md#renderer), and
 `Code/Base/Render/RHI_Direct3D12.cpp` in full. All 6,084 lines of it. It is the specification.
 
-> ## Status: all sixteen groups are written and merged, and the backend has now **run**
+> ## Status: written, merged, and **the frame is correct**
 >
-> Phase 6 provided the entry point, and P6.6 and P6.7 executed this backend for the first time.
-> **A scratch application cleared and presented twelve frames with no validation errors**, which
-> covers `CreateContext`, queues, command pools and buffers, the swapchain, `CmdBarrier`,
-> `CmdSetRenderTargets`, `CmdSetViewport`, `QueueSubmit`, `AcquireNextImage` and `QueuePresent`.
+> The engine draws the pbrdemo map on an RTX 3090 with host validation on, **zero validation
+> messages and no message-ID filters at all**, no device memory leaked and a clean shutdown.
+> Geometry, UVs, textures, normals, image-based lighting, direct lighting, shadows, the sky and
+> the reflective ground plane all render. Cluster culling runs on the GPU and is correct, and
+> `vkCmdDrawMeshTasksIndirectCountEXT` executes.
 >
-> **Running it found four defects in this phase's own code**, all now fixed. They are the best
-> evidence available for how much of the rest is still unverified:
+> **P5.17 is done**, and so are the two stage-interface defects that hid behind it. Read
+> [Rendering: where we are](../Progress.md#rendering-where-we-are) before touching anything in the
+> render path: it records what works, the two bugs that each cost a session, and the measurement
+> traps that produced confidently wrong answers.
+>
+> **Four groups have still never executed:** P5.11 query pools, P5.12 debug names and markers,
+> P5.15 variable rate shading and P5.16 raytracing. They are rows in
+> [Blocked.md](../Blocked.md). **Every other group's "Not verified" list is historical** - the
+> correct frame exercised P5.1 to P5.10, P5.13 and P5.17.
+>
+> **Running the backend found eleven defects in this phase's own code**, all fixed. That is the
+> best available evidence for how much a "written but never run" group is worth:
 >
 > | Found | What it was |
 > |---|---|
-> | P6.6 | `CreateSwapchain` asked only for RGBA surface formats. Every surface on Linux offers BGRA. |
-> | P6.6 | `DestroySwapchain` freed command buffers after their pool. P5.4 assumed the other order. |
-> | P6.6 | `MaxPendingFrames` was 2 and Linux drivers report a `minImageCount` of 3. |
-> | P6.7 | `CreateContext` never enabled the 16-bit shader feature bits. Direct3D 12 has nothing to mirror. |
-> | P6.8 | `CreateContext` missed five more shader feature bits, and mesh modules were created on devices without `VK_EXT_mesh_shader`. |
-> | OQ8 | `CreateContext` never enabled `depthClamp`, which every non-clipping pass turns on. |
-> | P5.4 | `BufferFlags::NoDescriptors` stripped a buffer's usage flags along with its heap slot. |
-> | P5.9 | Barriers named tessellation and geometry stages the device never enabled. |
->
-> **The `VK_ERROR_UNKNOWN` from `vkCreateComputePipelines` was not P5.7's.** It was
-> `Buffer<uint64_t>`, now [answered](../Progress.md#open-questions) as `Buffer<uint2>`.
-> **P5.17 is done.** The engine runs past `CmdExecuteIndirect` into
-> `RenderPass_GlobalEnvironmentMap` and stops on a depth texture still in
-> `VK_IMAGE_LAYOUT_UNDEFINED`. The indirect compute loop needs one engine-side buffer clear that
-> is **escalated, not made**; see the P5.17 entry in [Progress.md](../Progress.md).
->
-> **Criteria 5 to 10 are now checkable.** They were not before.
+> | P6.6 | `CreateSwapchain` asked only for RGBA surface formats. Every surface on Linux offers BGRA |
+> | P6.6 | `DestroySwapchain` freed command buffers after their pool. P5.4 assumed the other order |
+> | P6.6 | `MaxPendingFrames` was 2 and Linux drivers report a `minImageCount` of 3 |
+> | P6.7 | `CreateContext` never enabled the 16-bit shader feature bits. Direct3D 12 has nothing to mirror |
+> | P6.8 | `CreateContext` missed five more shader feature bits, and mesh modules were created on devices without `VK_EXT_mesh_shader` |
+> | OQ8 | `CreateContext` never enabled `depthClamp`, which every non-clipping pass turns on |
+> | P5.4 | `BufferFlags::NoDescriptors` stripped a buffer's usage flags along with its heap slot |
+> | P5.9 | Barriers named tessellation and geometry stages the device never enabled |
+> | P6.9 | `BeginCommandBuffer` called `vkCmdSetFragmentShadingRateKHR` on transfer command buffers. **This was the GPU hang** |
+> | P6.9 | A barrier may only name stages its own queue can run |
+> | P5.18 | `frontFace` was inverted, and the cluster triangle buffer had a stride and no format. Either alone gives a black frame |
 
 ---
 
@@ -237,7 +242,7 @@ See the note above on `IndirectArgumentType`.
 and `CmdExecuteIndirect` handles a signature that carries only a draw or dispatch argument and
 refuses the rest at the line. See the P5.13 entry in [Progress.md](../Progress.md).
 
-**Open question 7 is now answered, and [P5.17](#p517---the-indirect-draw-shader-change---scheduled-not-started)
+**Open question 7 is now answered, and [P5.17](#p517---the-indirect-draw-shader-change)
 finishes this group.** Do not try to complete P5.13 on its own; the missing half is a shader
 change.
 
@@ -258,7 +263,15 @@ This is the largest optional-feature group. `AccelerationStructureBuildFlags`,
 `AccelerationStructureGeometryFlags`, and `AccelerationStructureInstanceFlags` map closely onto
 their `VK_KHR_acceleration_structure` equivalents, so it is more mechanical than it looks.
 
-### P5.17 - The indirect draw shader change - **done, and unverified on mesh hardware**
+### P5.17 - The indirect draw shader change
+
+> **Done, and verified.** The frame draws geometry correctly on an RTX 3090 with host
+> validation on and zero validation messages. Two stage-interface defects had to be fixed
+> after this landed; see the 2026-09-01 entries in [Progress.md](../Progress.md).
+>
+> **The status stays out of this heading on purpose.** It used to be part of it, the heading
+> was rewritten when the task finished, and thirteen links across six documents broke
+> silently.
 
 **This finishes P5.13 and unblocks the frame. It is the answer to open question 7, and the
 approach is decided: the shader reads its own command's root data out of the argument buffer.**
@@ -435,17 +448,17 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
 ## Acceptance criteria
 
 1. Every function in `RHI.h` has a real implementation. **No `EE_UNIMPLEMENTED_FUNCTION()`
-   remains** in `RHI_Vulkan.cpp`. **Not met: 3 remain, down from 103, and none is a whole
-   function.** One is the indirect refusal from open question 7. The other two are markers that
-   name a caller if one ever appears: a sampler border colour that needs
-   `VK_EXT_custom_border_color`, and the static-sampler path the binding model does not use.
+   remains** in `RHI_Vulkan.cpp`. **Not met: 2 remain, down from 103, and neither is a whole
+   function.** Both are markers that name a caller if one ever appears: a sampler border colour
+   that needs `VK_EXT_custom_border_color`, and the static-sampler path the binding model does
+   not use. P5.17 removed the third, which was the indirect refusal from open question 7.
 2. ~~`RHI.h` is unmodified.~~ **No longer met, deliberately.** `git diff --stat upstream/main --
    Code/Base/Render/RHI.h` reports `4 ++++`: `MaxPendingFrames` is 3 on Linux, in a
    `#if defined( __linux__ )` branch that leaves the Windows value verbatim. Linux drivers report
    a swapchain `minImageCount` of 3 and the backend cannot absorb that. Escalated, approved and
    registered in [TouchedFiles.md](../TouchedFiles.md) during P6.6. **The spirit of the criterion
    still holds: no `RHI.h` concept changed, and Windows is bit for bit unchanged.**
-3. `RHI_Direct3D12.cpp` is unmodified.
+3. `RHI_Direct3D12.cpp` is unmodified. **Met.** `git diff upstream/main` reports no change.
 4. ~~Bring-up steps 1 to 8 all pass in the `Tester` harness, and the tests are committed.~~
    **Cannot be met as written**, and it is now partly met against the real engine instead.
    `Esoterica.Applications.Tester` is an upstream scratchpad, not a test framework. **P6.6 ran
@@ -453,17 +466,27 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    buffers, a swapchain with a real surface, and cleared and presented twelve frames with no
    validation errors. See the 2026-08-28 decision entry and the P6.6 entry in
    [Progress.md](../Progress.md).
-5. The full engine frame produces no Vulkan validation errors and no warnings. **Blocked on
-   [open question 8](../Progress.md#open-questions)**, and on hardware; see the P6.8 entry. The
-   Ubuntu 24.04 validation layers are usable after all, with
-   `VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true`.
-6. All 26 shaders from Phase 4 load and execute.
+5. The full engine frame produces no Vulkan validation errors and no warnings. **Met**, on an
+   RTX 3090, over 30 seconds, with **no `VK_LAYER_MESSAGE_ID_FILTER` at all**. Only
+   `VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true` remains, and that disables the layer's
+   stale bundled spirv-val rather than any check.
+6. All 26 shaders from Phase 4 load and execute. **Met for the pbrdemo frame**: every shader in
+   the engine is created and every pipeline compiles. Shaders no pass in that frame reaches have
+   loaded but not executed.
 7. The full engine frame renders correctly, checked against Windows Direct3D 12 screenshots of
-   the same scene. List any visual difference, with an explanation.
+   the same scene. List any visual difference, with an explanation. **Half met.** The frame is
+   correct on its own terms - see [Rendering: where we are](../Progress.md#what-works) - but
+   **nothing has been compared against Windows**, because no Windows build has been run. The
+   comparison is a row in the Windows queue in [Blocked.md](../Blocked.md).
 8. Feature parity is demonstrated for forward shading, cascaded shadows, GTAO, SMAA, OIT, mesh
-   picking, and debug draw. Name each one, and verify each one.
-9. RenderDoc capture works on Linux, through `BeginFrameCapture` and `EndFrameCapture`.
-10. `ReportDeviceMemoryLeaks` reports zero leaks after a clean shutdown.
+   picking, and debug draw. Name each one, and verify each one. **Not met.** Forward shading,
+   cascaded shadows and debug draw are visibly working in the pbrdemo frame; GTAO, SMAA, OIT and
+   mesh picking have not been named and verified one at a time, which is what this asks for.
+9. RenderDoc capture works on Linux, through `BeginFrameCapture` and `EndFrameCapture`. **Half
+   met.** Captures are taken and read - `renderdoccmd convert` answered most of the questions in
+   the render bring-up - but nothing in the engine calls `TriggerCapture`, so a capture needs the
+   capture key or a temporary call. RenderDoc also has to attach **before** `vkCreateInstance`.
+10. `ReportDeviceMemoryLeaks` reports zero leaks after a clean shutdown. **Met.**
 11. **The Windows MSBuild build still succeeds**, and the Direct3D 12 renderer is unchanged.
 
 Criteria 7 and 8 are the ones that matter, and no tool can check them. Report them honestly.

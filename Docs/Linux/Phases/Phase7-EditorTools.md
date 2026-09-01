@@ -25,20 +25,21 @@ work to do next.
 > ninja -f Build/Linux/Esoterica.ninja -k 0
 > ```
 >
-> **Three translation units fail, and nothing else does.** That is the whole of Phase 7's build
-> problem as of 2026-08-31:
+> **Nothing in the tree fails to compile.** The three translation units this block used to name
+> are all fixed, in P7.0 and P7.3. Both applications build, link and run in Debug and Release.
 >
-> | File | Error | Task |
-> |---|---|---|
-> | `ResourceServerApplication.h:13` | `'shellapi.h' file not found` | P7.3 |
-> | `ResourceServerUI.cpp:799` and `:811` | `no member named 'Win32' in namespace 'EE::Platform'` | P7.3, P7.4 |
-> | `EditorUI.h:141`, `:157`, `:189` | `member access into incomplete type 'EE::EditorTool'` | P7.0 |
+> | Task | State |
+> |---|---|
+> | P7.0 `EditorUI.h` include | done |
+> | P7.1 `EditorApplication_Linux` | done. The borderless window needed no new code; P6.2 had already written the hit test |
+> | P7.2 `SystemDialogs_Linux.cpp` | done, in review as PR #68. **Not `pfd`** - see the note on that task below |
+> | P7.3 Resource Server | done. It serves on `127.0.0.1:5556`, spawns compiler workers and draws its full UI |
+> | P7.4 `OpenInExplorer` | done, in review as PR #69. It was not a verification task; the function was opening the wrong applications |
+> | P7.5 Hot reload | four links of five, in review as PR #70. The fifth needs a GPU that can keep the editor alive |
+> | P7.6 Editor shakedown | not started |
 >
-> The last one is **not** an editor problem. `EditorUI.h` uses `EE::EditorTool` in a template and
-> never includes `EngineTools/Core/EditorTool.h`; MSVC supplies it transitively and clang does
-> not. It is the "Missing includes that MSVC supplies transitively" category that
-> [TouchedFiles.md](../TouchedFiles.md) already has a section for. **Fix it first** - it is one
-> line and it unblocks the editor's own build.
+> **[Progress.md](../Progress.md) is the authority on what each task actually did**, and the task
+> descriptions below are the original plan. Where they disagree, Progress.md is right.
 >
 > To run anything, see the "Start here" block in [Progress.md](../Progress.md). Two things there
 > are not obvious and each cost a session: host validation has to be switched on by hand in
@@ -47,23 +48,21 @@ work to do next.
 
 > ## What Phase 6 hands you, and how it shapes this phase
 >
-> ### The editor will not render on this machine, and that is not your bug
+> ### Which machine you are on decides what you can do
 >
-> **No GPU in the development machine can run the engine's geometry path.** The engine's whole
-> geometry path is mesh shaders; neither real GPU here has `VK_EXT_mesh_shader`, the software
-> rasteriser crashes compiling the shaders, and the NVIDIA part is refused for a missing
-> extension. The RHI **drops every mesh draw** on such a device and says so once in the log, so a
-> frame completes without its geometry.
+> **The engine renders correctly on a GPU with `VK_EXT_mesh_shader`** - measured on an RTX 3090,
+> host validation on, zero validation messages. The GPU hang this block used to describe is
+> fixed; it was `vkCmdSetFragmentShadingRateKHR` on a transfer command buffer, not the dropped
+> mesh draws.
 >
-> **The engine records and submits a complete frame with zero validation errors, and then the GPU
-> hangs executing it.** That hang is unresolved. Some part of it is likely an artefact of the
-> dropped mesh draws rather than a real defect, and **the two cannot be told apart without mesh
-> shader hardware.**
+> **On a GPU without it, the editor dies about three seconds after it reaches its frame loop.**
+> Every mesh draw is dropped, later passes read what the geometry path never wrote, the device is
+> lost, and `QueueHostWait` asserts. The GPU reset also stalls the Resource Server for about
+> seven seconds, so a second process cannot be used to watch the first.
 >
-> **So do not chase rendering on this machine.** Phase 7 is compile, link and tools work, and
-> almost none of it needs a working frame. If the editor comes up with a blank or broken
-> viewport, that is expected and already explained. Record it and move on. See the image layouts
-> entry in [Progress.md](../Progress.md).
+> **So the work splits by machine.** Compile, link and tools work needs no frame and is done.
+> Everything that means *using* the editor - P7.6, and the last link of P7.5 - needs the capable
+> machine. [Blocked.md](../Blocked.md) is the list.
 >
 > ### What is genuinely ready
 >
@@ -157,6 +156,14 @@ here. Window dragging, edge resizing, and maximize and restore all need to feel 
 is the most visible part of the editor's UX.
 
 ### P7.2 - `SystemDialogs_Linux.cpp`
+
+> **Done, and not the way this task describes.** `pfd` is a wrapper that shells out to `zenity`
+> and parses the output, and both halves of that were already in the tree: the vendored
+> `subprocess` library, and `zenity` itself. So nothing was fetched into `External/`, and
+> `zenity`, `qarma` and `matedialog` are all accepted because they share a command line.
+> `ExtensionFilter` needed no header change either - the filter argument is built from
+> `m_extension` and `m_displayText`, and `m_filter` keeps its Windows format. See the P7.2 entry
+> in [Progress.md](../Progress.md). The plan below is kept for the record.
 
 **New:** `Code/EngineTools/Core/SystemDialogs_Linux.cpp`
 
@@ -263,10 +270,12 @@ platform-neutral upstream bugs. See Conventions rule 3.
 
 ## Acceptance criteria
 
-**Criteria 3, 5, 8 and 9 need a window that draws, and criterion 10 needs a frame.** No GPU in
-the current development machine renders the engine's geometry path; see the Phase 6 block at the
-top. **Say which of these you could not check, rather than marking them met or failed.** The rest
-- the builds, the Resource Server, hot reload, the file dialogs - do not need a rendered frame.
+**Criteria 3, 5, 8, 9 and 10 need a machine whose GPU can keep the editor alive**; see the block
+at the top and the queues in [Blocked.md](../Blocked.md). **Say which of these you could not
+check, rather than marking them met or failed.**
+
+Met so far: 1, 2, 4 and 7. Criterion 6 is met to the point where the server pushes
+`ResourceUpdated` to a connected client; the editor acting on it is the unproved part.
 
 1. `Build/Linux_Release/Esoterica.Applications.Editor` builds, links, and launches.
 2. `Build/Linux_Release/Esoterica.Applications.ResourceServer` builds, links, and runs. **The
@@ -290,8 +299,8 @@ top. **Say which of these you could not check, rather than marking them met or f
 
 ## Do not
 
-- Implement XDG portal support before you try `pfd`.
-- Vendor `pfd` into `Code/**/ThirdParty/`.
+- Implement XDG portal support. `zenity` is what P7.2 used, and it works.
+- Vendor `pfd` into `Code/**/ThirdParty/`, or fetch it at all. It is not needed.
 - Change the interface in `SystemDialogs.h` without escalating.
 - Refactor `EditorUI.cpp`. It is platform-neutral, and it already works.
 - Fix platform-neutral editor bugs from P7.6 before you record them as upstream issues.

@@ -232,7 +232,7 @@ these up. That is P0.4.
 
 ---
 
-### P4.7 - The indirect draw shader change - **owned by [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**
+### P4.7 - The indirect draw shader change - **owned by [P5.17](Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change)**
 
 Phase 5 found that the engine's indirect draws cannot reach Vulkan without a change on the shader
 side, and open question 7 is now answered: the shader reads its own command's root data out of the

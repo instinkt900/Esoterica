@@ -105,60 +105,53 @@ These were decided at planning time. Change one only with a deliberate decision 
 
 ## Status
 
-See [Progress.md](Progress.md). **Phases 0 to 4 are done on Linux.** The resource compiler
-compiles every resource under `Data/`, DXC builds from source, and all 46 shader stages compile
-and validate as SPIR-V.
+**Live state is in [Progress.md](Progress.md).** This section is the shape of the thing; that
+file is the detail, and [Blocked.md](Blocked.md) is what is written but not yet verified.
 
-**Phase 5, the Vulkan RHI, is written and merged.** All sixteen groups are on `main`, and **none
-of them has ever run**: no Linux binary can reach `RHI::CreateContext` until Phase 6 lands. Treat
-the whole backend as compile-verified and run-unverified.
+**The engine renders on Linux, correctly.** `Esoterica.Applications.Engine` draws the pbrdemo map
+with geometry, textures, normals, image-based lighting, direct lighting, shadows, a sky and a
+reflective ground plane - on an RTX 3090, with host validation on, **zero validation messages and
+no message-ID filters at all**, no device memory leaked and a clean shutdown.
 
-**The frame does not draw yet, and the fix is scheduled.** Every engine command signature sets
-root constants and binds root descriptors per command, and no Vulkan indirect draw can do either.
-Open question 7 is now answered: the shader reads its own command's root data out of the argument
-buffer, indexed by `DrawIndex`. That is
-[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
-and it comes **after** Phase 6, because it cannot be tested until the engine runs.
+**Phases 0 to 6 are written. Phase 7 is in flight.** The whole tree builds in Debug and Release,
+and nothing in it fails to compile.
 
-**Phase 6, windowing and input, has started, and Esoterica has rendered on Linux.** P6.1 to P6.6
-are done: SDL3 builds from source, `LinuxApplication` opens a window and runs an event loop, the
-imgui platform backend runs on SDL3 with multi-viewport verified on X11, keyboard, mouse and
-gamepad input all work, and **a `VkSurfaceKHR` made from the SDL window drives a swapchain that
-cleared and presented twelve frames with no Vulkan validation errors**. `Base` has no Phase 6
-stubs left.
+| Phase | State |
+|---|---|
+| 0 - 4 | Done. `ninja` builds the tree, reflection and resource compilation run, DXC builds from source, and all 46 shader stages compile and validate as SPIR-V |
+| 5 - Vulkan RHI | Written, merged and **run**. All seventeen groups including P5.17. Four groups have still never executed - query pools, debug names, variable rate shading and raytracing - and they are rows in [Blocked.md](Blocked.md) |
+| 6 - Windowing and input | Written. SDL3, `LinuxApplication`, the imgui platform backend, keyboard, mouse and gamepad, the surface and the swapchain. The engine opens a window and renders a map |
+| 7 - Editor and tools | In flight. The editor and the Resource Server build, link and run; the server serves resources over the network and the editor no longer needs `-packaged`. The editor shakedown is what is left |
 
-**This carries the port's first real edit to an upstream file.** `RHI::MaxPendingFrames` is 3 on
-Linux, because the Intel UHD 620 and llvmpipe both report a swapchain `minImageCount` of 3. Four
-lines added, zero modified, and Windows is bit for bit unchanged. It was escalated, approved and
-registered in [TouchedFiles.md](TouchedFiles.md).
+### Two development machines, and only one can render
 
-**P6.7 is done too: the engine binary builds, links and starts.**
-`Build/Linux_Release/Esoterica.Applications.Engine -map data://... -packaged` reads its settings,
-loads compiled data, opens a window and creates a Vulkan device. **Criterion 1 is met.**
+**The port is built on a laptop whose GPU cannot run the engine's geometry path.** Its Intel UHD
+620 has no `VK_EXT_mesh_shader`, so the RHI drops every mesh draw, later passes read what the
+geometry path never wrote, and the GPU is lost a few seconds in. **Everything above about a
+correct frame was measured on a second machine with an RTX 3090.**
 
-**Phase 6 is written and does not meet its goal, and Phase 7 is the work to do next.** The
-engine builds every shader and every pipeline, enters its frame loop, and **records and submits a
-complete frame with zero validation errors**. The GPU then hangs executing it, and that is
-deliberately not being chased: no GPU in the development machine has `VK_EXT_mesh_shader`, the
-RHI drops every mesh draw as a result, and a real defect cannot be told apart from an artefact of
-that without different hardware.
+Do not chase rendering on the first machine. [Blocked.md](Blocked.md) lists what is waiting for
+the second one, and what is waiting for a Windows machine instead - two different queues that are
+easy to confuse.
 
-**Phase 7 needs none of it.** It is compile, link and tools work: a whole-tree build fails in
-three translation units and no others. Start from
-[Phase7-EditorTools.md](Phases/Phase7-EditorTools.md), and read
-[Deferred on purpose](Progress.md#deferred-on-purpose) before investigating anything that looks
-wrong.
+### What has never been checked at all
 
-**Run the engine with validation on.** The Ubuntu 24.04 layers are usable after all:
-`VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true` turns off only the layer's bundled
-spirv-val, which is where the stale SPIRV-Tools that rejects the `DebugDraw` mesh shader lives.
-Host validation also has to be switched on in the configuration's `Esoterica.ini`; the P6.8 entry
-has both lines.
+**No Windows build has been run since this port started.** "`main` builds on both Windows and
+Linux" is the invariant every phase's acceptance criteria ends with, and it is the largest
+unmeasured risk in the project. Ten shader files are edited for **both** platforms, with no
+`__linux__` branch to hide behind. See the Windows queue in [Blocked.md](Blocked.md).
 
-**imgui viewports will not work under Wayland.** `ImGui_ImplSDL3_Init` enables them only for
-video drivers on its global-mouse white list, which does not include `wayland`. The editor
-depends on them, so Phase 7 needs to know. See the P6.3 entry in [Progress.md](Progress.md).
+### Things that will surprise you
 
-**The surface question is settled and written.** `Platform::SetMainWindowHandle` holds an
-`SDL_Window*`, and `RHI_Vulkan.cpp` creates the `VkSurfaceKHR` itself through a Linux-only
-`Platform` function. See the decision entry in [Progress.md](Progress.md).
+- **imgui multi-viewport cannot work under Wayland.** `ImGui_ImplSDL3_Init` enables it only for
+  video drivers on its global-mouse white list, and `wayland` is not on it. The editor's docking
+  UI depends on viewports, so a Wayland session gets one merged window. That is upstream imgui's
+  own gate, not a port defect. See the P6.3 entry in [Progress.md](Progress.md).
+- **Validation is off unless the ini says so**, and the Ubuntu 24.04 layers need
+  `VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true` - which disables only the layer's stale
+  bundled spirv-val, not any real check. The "Start here" block in [Progress.md](Progress.md) has
+  both lines and three other things that each cost a session to find.
+- **`HLSL_STATIC_ASSERT` is compiled out on SPIR-V.** Every shared-struct size check is absent on
+  Linux and present on Windows.
+- **Read [Deferred on purpose](Progress.md#deferred-on-purpose) before investigating anything that
+  looks wrong.** It lists the shortcuts that were chosen rather than missed.
