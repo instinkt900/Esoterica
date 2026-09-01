@@ -27,10 +27,11 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 > render path: it records what works, the two bugs that each cost a session, and the measurement
 > traps that produced confidently wrong answers.
 >
-> **Four groups have still never executed:** P5.11 query pools, P5.12 debug names and markers,
-> P5.15 variable rate shading and P5.16 raytracing. They are rows in
-> [Blocked.md](../Blocked.md). **Every other group's "Not verified" list is historical** - the
-> correct frame exercised P5.1 to P5.10, P5.13 and P5.17.
+> **One group has still never executed: P5.16 raytracing.** It is a row in
+> [Blocked.md](../Blocked.md). P5.11, P5.12 and P5.15 were verified on 2026-09-01 - the first
+> with a temporary in-engine harness, the other two from a frame capture - and **every other
+> group's "Not verified" list is historical**, because the correct frame exercised P5.1 to P5.10,
+> P5.13 and P5.17.
 >
 > **Running the backend found eleven defects in this phase's own code**, all fixed. That is the
 > best available evidence for how much a "written but never run" group is worth:
