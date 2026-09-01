@@ -455,9 +455,6 @@ read `m_pMappedAddress_WriteCombined` a few hundred frames later. For a texture,
   nested bitfield struct, which is an upstream change that reaches Direct3D 12; or a fourth entry
   in `Code/Scripts/DXCPatches`. **Not urgent** - NVIDIA renders correctly without it - but it is a
   real conformance gap and another driver need not be so forgiving.
-- **The `storageInputOutput16` warning at startup is now stale.** `CreateContext` still reports
-  the missing feature and still says "Shaders that use them will fail to create". No shader uses
-  them any more; the message is about the device, not about this engine.
 - **The same query-as-enable-request pattern** used for the mesh shader features is still in place
   for the shading rate, acceleration structure and ray tracing blocks. None has a cross-dependency
   VUID today.
@@ -547,6 +544,418 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-01 - The `storageInputOutput16` startup warning outlived the problem it described
+
+**Every start on both development machines printed a warning about a gap that no longer exists.**
+`CreateContext` reported `storageInputOutput16` alongside `shaderInt16` and `shaderFloat16` and
+said "Shaders that use them will fail to create". That was true when P6.8 wrote it. **P5.20 made
+it false**: `DebugDraw.esf`'s `DebugDrawPrimitiveOutput` was the engine's only 16-bit
+interpolant, and `EE_INTERSTAGE_HANDLE` now carries it as a `uint` on SPIR-V.
+
+- Files changed: `Code/Base/Render/RHI_Vulkan.cpp`. The port owns it.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- The row for this in [Blocked.md](Blocked.md) is removed.
+
+#### What it says now
+
+The warning keeps `shaderInt16` and `shaderFloat16`, which shaders **do** still use for buffer
+accesses, and keeps the "will fail to create" wording for them, because it is still true.
+
+`storageInputOutput16` moves to its own line, as a **message** rather than a warning, and says
+what the device is rather than what the engine will do:
+
+```
+[Message][Rendering][RHI/CreateContext] This device has no storageInputOutput16. No shader in the
+engine declares it, so nothing depends on it.
+```
+
+The feature is still **enabled when the device has it**. Nothing declares it today; a future
+shader may want it back, and enabling an available feature costs nothing.
+
+#### Why a stale warning is worth a commit
+
+It named the first row of [What the first machine still cannot do](#what-the-first-machine-still-cannot-do)
+on every single start, on hardware where that row no longer has any consequence. Two sessions
+spent time asking whether it was the cause of something. A warning that cannot be acted on
+trains the reader to skip warnings.
+
+Verified by running the Resource Server: the warning is gone and the message appears in its
+place. This machine has `shaderInt16` and `shaderFloat16`, so the remaining warning correctly
+stays silent.
+
+### 2026-09-01 - P7.3 follow-up. The Resource Server asks before it exits, as Windows does
+
+**`OnUserExitRequest` confirms again.** P7.3 had to give it up: `MessageDialog::Confirmation`
+returned `Cancel` unconditionally, so asking would have refused every exit and trapped the user in
+a window that would not close. P7.2 made the dialogs real, and this restores the behaviour.
+
+- Files changed: `Code/Applications/ResourceServer/Linux/ResourceServerApplication_Linux.cpp`.
+  The port owns it.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- The row for this in [Blocked.md](Blocked.md) is removed.
+
+#### `ShowEx`, not `Confirmation`, and the reason is the old trap
+
+`Confirmation` collapses two different answers into one `false`: **the user said No**, and **no
+dialog could be shown**. A server that cannot show a dialog would then refuse every exit - which
+is exactly the failure P7.3 avoided by not asking at all.
+
+`ShowEx` returns the three cases apart, so the call site can say what it means:
+
+| Result | What happened | What the server does |
+|---|---|---|
+| `Yes` | the user confirmed | exit |
+| `No` | the user declined | stay open |
+| `Cancel` | no dialog was shown; the message went to the log instead | **exit** |
+
+`return result != MessageDialog::Result::No;` is the whole rule.
+
+#### Verified, all four paths
+
+| Case | Result |
+|---|---|
+| No clients connected | Exits immediately, no dialog |
+| A client connected, **No** | The dialog closes and **the server stays open**, window and all |
+| A client connected, **Yes** | The server exits |
+| A client connected, no `zenity` on `PATH` | No dialog, `[Warning][Tools][Dialog] Resource Server: There are still connected clients!` in the log, and the server exits |
+
+**`SIGTERM` is a much better test trigger than clicking the title bar.** SDL turns it into
+`SDL_EVENT_QUIT`, which reaches `OnUserExitRequest` by exactly the same path as the window
+manager's close. Clicking the imgui close button with `xdotool` works but is flaky: the button
+fires on release while hovered, and a fast synthetic click can fall inside one frame.
+
+#### Three things found while testing, none of them this change
+
+**`ninja` with no target builds Debug only.** The generated `default` rule lists the nine
+`Linux_Debug` outputs and nothing else. So `ninja -f Build/Linux/Esoterica.ninja -k 0` - the
+command in [/AGENTS.md](../../AGENTS.md#definition-of-done), and the one several entries above
+call a whole-tree build - **never rebuilds `Linux_Release`**. This cost half an hour: the code
+change was in, the build was green, and the running Release binary was a day old. Name the
+configuration you want, or check the timestamp.
+
+**The Resource Server does not shut down cleanly.** On exit it prints
+
+```
+Shutting down low level socket/threading support.
+Memory leak detected (span->list_size == span->used_count) at Code/Base/ThirdParty/rpmalloc/rpmalloc.c:1424
+```
+
+and traps. **Reproduced with zero clients and no dialog shown**, so it is not this change, and not
+P7.2's. **Root-caused since**: `Network::Server` never drains `m_receivedMessages` at shutdown.
+It is upstream, platform-neutral, and intermittent. See
+[Upstream issues observed](#upstream-issues-observed).
+
+**Destroying the window out from under the application asserts.** `xdotool windowclose` sends
+`XDestroyWindow` rather than `WM_DELETE_WINDOW`, and the next swapchain acquire fails:
+`result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR`. There is no Windows equivalent to compare
+against and no user path that does it, so it is recorded rather than fixed. It also means
+`xdotool windowclose` is **not** a way to test an exit path.
+
+### 2026-09-01 - P7.5 Hot reload. **Four links of five are proved. The fifth needs a working GPU**
+
+**A source edit reaches a connected client as a `ResourceUpdated` message, with a fresh compiled
+file behind it.** What is not proved is the editor acting on that message, because the editor
+cannot stay alive on this machine's GPU for the three seconds the round trip takes.
+
+- **No code changed.** This task found no defect. The Phase 3 watcher, the Resource Server and
+  the network path all did what they were supposed to.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- Acceptance criteria: **P7.5 is not fully met.** Links 1 to 4 below are verified. Link 5 is not,
+  and cannot be on this machine.
+
+#### The chain, and where the evidence stops
+
+| # | Link | Verified |
+|---|---|---|
+| 1 | A source edit produces an inotify event | **yes**, for four different write patterns |
+| 2 | The Resource Server turns it into a compile request | **yes**, visible in the requests table |
+| 3 | A worker recompiles and the compiled file is rewritten | **yes**, 19-28ms, mtime moves |
+| 4 | The server pushes `ResourceUpdated` to connected clients | **yes**, received by a client |
+| 5 | The client's `ResourceSystem` reloads and its users rebind | **no** - see below |
+
+#### The watcher survives every way an editor writes a file
+
+The phase document expected trouble here, above all with editors that save by writing a temp file
+and renaming it over the original, which produces `IN_MOVED_TO` and not `IN_CLOSE_WRITE`. **There
+is no trouble.** A scratch program watching `Data/` reported, in order:
+
+| What was done | Events reported |
+|---|---|
+| `cat backup > file` (in-place write) | `FileModified` on the file |
+| write a temp in the same directory, `mv` over the file | `FileCreated` + `FileModified` on the temp, then `FileRenamed` with `m_oldPath` set to the temp |
+| `sed -i` (which is a rename, with its own temp name) | the same three, correctly paired |
+| create then delete a file | `FileCreated`, `FileModified`, `FileDeleted` |
+
+The rename pairing works because `ProcessListOfDirectoryChanges` holds an `IN_MOVED_FROM` by its
+cookie until the matching `IN_MOVED_TO` arrives.
+
+**And the rename case would not have mattered even if it were reported as a create.**
+`ResourceServer::UpdateFileSystemWatcher` skips directory events and then treats every file event
+the same, whatever its type. There is no `FileModified`-only path to fall through.
+
+#### Recompilation is correct, including when it does nothing
+
+The first three edits wrote **byte-identical content**. The server logged a request for each and
+reported them **up to date** in 15-16ms with 0ms of compile time. Only the fourth edit, which
+actually changed a byte, compiled: 19.0ms. The compiled file's mtime moved to match.
+
+That is right, and it is worth knowing before someone concludes the watcher is broken: an editor
+that rewrites a file without changing it produces a request that correctly does no work.
+
+#### Link 4, and how it was measured without a renderer
+
+The server sends `NetworkMessageID::ResourceUpdated` to every connected client except the one that
+asked for the compile. The client's `NetworkResourceProvider` puts the ID in
+`m_externallyUpdatedResources`, and `ResourceSystem::UpdateResourceProvider` turns that into
+`RequestResourceHotReload`. **Nothing on that path logs**, so there is nothing to read in a log
+file.
+
+The editor cannot be used to observe it (see below), so a **scratch client with no renderer** was
+built against `libEsoterica.Base.so`: it starts `NetworkResourceProvider`, requests
+`data://demo/render/pbr/boulder/boulder.material`, and prints whatever
+`GetExternallyUpdatedResources()` returns each tick. Editing the material printed
+
+```
+RESOURCE UPDATED: data://demo/render/pbr/boulder/boulder.material
+```
+
+That is the exact value `RequestResourceHotReload` is called with. Everything past that point is
+platform-neutral engine code.
+
+`ResourceProvider`'s virtuals are public on the base and private on the override, so a client like
+this drives them through a `ResourceProvider*`. `ResourceRequest` needs a non-null `ResourceLoader`
+in its constructor but never calls it unless the load stages are driven, so a stub loader is
+enough.
+
+#### Why link 5 cannot be measured here, and it is not a port defect
+
+**The editor dies about three seconds after it reaches its frame loop.** Every time, with or
+without a startup map:
+
+```
+#0  EE::Render::RHI::QueueHostWait (semaphore=64) at Code/Base/Render/RHI_Vulkan.cpp:2232
+#1  EE::Render::RenderSystem::WaitForFrameStart () at Code/Engine/Render/RenderSystem.cpp:321
+#2  EE::Engine::Update () at Code/Engine/Engine.cpp:647
+```
+
+`EE_ASSERT( result == VK_SUCCESS )` on the semaphore wait. This is the device loss this machine's
+Intel UHD 620 has had since Phase 6: it has no `VK_EXT_mesh_shader`, so every mesh draw is dropped
+and later passes read what the geometry path never wrote. [Progress.md](#current-state) already
+says not to chase rendering here.
+
+**The GPU reset takes the Resource Server down with it for about seven seconds.** Both processes
+present through the same GPU, so when the editor hangs it, the server's frame loop stalls and its
+`Update()` stops running. Measured directly: a file edit at `11:37:51.296` produced a compile
+request timestamped `11:37:58`, while the same edit with no editor running was serviced in the
+same second. **The editor was dead before the recompile finished.** That is why racing the crash
+does not work, and it is worth writing down: a seven second lag between an edit and a compile is
+alarming and has nothing to do with the watcher.
+
+**Where to finish P7.5: the RTX 3090 machine.** Open the map, edit a material, and watch the
+viewport. Nothing more is needed, and the four links below it are already proved.
+
+#### Two things this run confirmed for other tasks
+
+- **P7.3's "serving a resource to a client" is no longer unverified.** The editor's own requests
+  are in the server's table, tagged with the client icon: the material, the physics database,
+  three textures and the map, all fetched over the wire with no `-packaged`.
+- **P7.2's message dialogs work in the real editor.** A deliberately broken Vulkan ICD made
+  `SDL_CreateWindow` fail, and the fatal error came up as a zenity dialog rather than a log line.
+
+#### One thing for P7.6
+
+The Resource Server's left panel draws **"Force Recompile" and "Request Compilation" on top of
+each other** in the Test Compile section. It is a layout problem in shared imgui code, not a
+platform one, but P7.6 should record it properly.
+
+### 2026-09-01 - P7.4 `OpenInExplorer`. It compiled, and it opened the wrong applications
+
+**The eight call sites were fine. The function underneath them was not.** P7.4 was written as a
+verification task. Running it found that `xdg-open` is not what "Open In Explorer" means, and
+`OpenInExplorer` is now built on `org.freedesktop.FileManager1.ShowItems` instead.
+
+- Files changed: `Code/Base/Platform/PlatformUtils_Linux.cpp`. The port owns it.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change. All eight call
+  sites are unchanged, and have been since Phase 1.
+- Acceptance criteria: P7.4 is met, including the "decide which behavior you want, and record it"
+  part. The decision is below.
+
+#### What `xdg-open` actually did on this machine
+
+The old implementation was `xdg-open <path>`, for both files and directories. `xdg-open` runs the
+handler registered for the file's MIME type, and nothing guarantees that is a file manager:
+
+| Path | MIME type | What `xdg-open` launches |
+|---|---|---|
+| `Data/Demo/Render/PBR/PBRDemo.map` | `text/plain` | **calibre-ebook-viewer** |
+| `Data/` | `inode/directory` | **org.gnome.baobab** - Disk Usage Analyzer |
+
+So neither the file case nor the directory case opened a file manager. That is not specific to a
+strange machine: `inode/directory` is claimed by whatever the user installed last, and every
+Esoterica resource extension is unregistered, so a data file falls back to its detected type.
+
+Read the menu labels the call sites use and the intent is not ambiguous: "Open In Explorer",
+"Go to Source File", "Go to Compiled File". They all mean *show me this file where it lives*.
+
+#### The decision: select the item, matching Windows
+
+`explorer.exe /select, <path>` opens the containing folder and highlights the item.
+`org.freedesktop.FileManager1.ShowItems` is the same operation, and **Nautilus, Dolphin, Thunar,
+Nemo and PCManFM all implement it**. It is a session-bus call, so D-Bus starts the file manager if
+it is not running.
+
+The call goes out through `dbus-send`, not a D-Bus client library. No new dependency, and it
+matches how P7.2 reached zenity.
+
+`--print-reply` is load bearing. Without it `dbus-send` fires and forgets and always exits 0; with
+it, the exit code says whether a file manager took the call, which is what selects the fallback.
+
+**The fallback is `xdg-open` on the containing directory, and never on the path itself.** A
+desktop with no `FileManager1` provider gets the directory opened by whatever claims
+`inode/directory`. That is a poor answer, but it is the only portable one left, and it is strictly
+better than launching an ebook reader.
+
+A directory argument arrives with a trailing delimiter from `FileSystem::Path`. It is stripped
+before the URI is built, so the file manager selects that directory inside its parent - again what
+Windows does. Both paths agree: `.../Render/PBR/` opens `Render` with `PBR` selected.
+
+#### Two things that are easy to get wrong here
+
+**The URI must be percent-encoded.** `ShowItems` takes `file://` URIs, not paths. A space or a `#`
+in a directory name silently addresses the wrong file, or no file, without it. Verified against a
+real path containing both.
+
+**A forked child of a threaded process must not allocate.** Every string the children need - the
+URI argument and the fallback directory - is built before the first `fork`. The children only
+`exec` and `_exit`.
+
+The fork is now a **double fork**, so the helper is reparented to init. The old single fork left a
+zombie behind on every click, because nothing waits for it. Checked with
+`waitpid( -1, WNOHANG )` straight after the call: it returns `-1`/`ECHILD`, so no child is left.
+
+#### How it was verified
+
+From a scratch binary linked against `libEsoterica.Base.so`, calling `Platform::Win32::OpenInExplorer`
+directly, then reading the resulting window titles with `xdotool`:
+
+| Argument | Window that opened |
+|---|---|
+| `.../Data/Demo/Render/PBR/PBRDemo.map` | `PBR - Thunar`, with the file selected |
+| `.../Data/Demo/Render/PBR/` | `Render - Thunar`, with `PBR` selected |
+| `.../dir with spaces/a file #1.map` | `dir with spaces - Thunar`, with the file selected |
+
+Both fallback branches were driven with a fake `dbus-send` on `PATH`: one that exits non-zero, and
+one that is absent entirely. Both reached `xdg-open` with the containing directory, and the argv
+log shows the `%20` and `%23` encoding going out on the real call.
+
+**Not verified: clicking the menu items in the running editor.** The function every one of them
+calls is verified, with both the file and the directory shapes they pass. Only Thunar was
+exercised; the other four file managers are not installed here.
+
+### 2026-09-01 - P7.2 `SystemDialogs_Linux.cpp`. The file and message dialogs are real
+
+**The halting stubs are gone.** `SystemDialogs_Linux.cpp` now opens the desktop's own file
+chooser and message boxes. Nothing in `EngineTools` calls `EE_UNIMPLEMENTED_FUNCTION` any more.
+
+- Files changed: `Code/EngineTools/Core/SystemDialogs_Linux.cpp`. The port owns it. It was already
+  in `LinuxSources.txt` and `Exclusions.txt` from Phase 3, so no build file changed.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- Acceptance criteria: P7.2 is met. `FileDialog::SelectFolder`, `Load`, `Save`, the four
+  `LoadResourceOrDataFile` / `SaveResourceOrDataFile` overloads, and `MessageDialog::ShowInternal`
+  all work.
+
+#### No new dependency: the phase document's option 2 was already in the tree, twice over
+
+The document said to start with `pfd` (portable-file-dialogs), and to fetch it into `External/` if
+it was missing. It is missing, and it is not needed. `pfd` is a wrapper that shells out to
+`zenity` or `kdialog` and parses the output. Both halves of that are already here:
+
+- `Code/EngineTools/ThirdParty/subprocess/` spawns the process. P7.3 proved it works on Linux.
+- `zenity`'s command line is what the desktops agree on. `qarma` is the Qt port of it and
+  `matedialog` is the MATE fork, and **both take the same arguments**, so supporting all three
+  costs one array of names.
+
+So `External/`, `DownloadDependencies.sh` and the include paths are all unchanged.
+
+**`subprocess_create` takes an argv array, not a command line.** Nothing needs quoting or
+escaping, and a filename with spaces or quotes in it survives the round trip. That was checked.
+
+#### What the tool is called with
+
+| Entry point | Arguments |
+|---|---|
+| `SelectFolder` | `--file-selection --directory --filename=<dir>/` |
+| `Load` | `--file-selection [--multiple --separator=\n] --title= --filename= --file-filter=...` |
+| `Save` | `--file-selection --save --confirm-overwrite --title= --filename= --file-filter=...` |
+| `MessageDialog` | `--info` / `--warning` / `--error` / `--question`, plus button labels |
+
+**`ExtensionFilter` needed no header change, and the escalation the document warned about did not
+happen.** `m_filter` holds the Windows double-NUL wide-string format, and it is left alone. The
+filter argument is built from `m_extension` and `m_displayText` instead, which is what the phase
+document asked for. The constructor is otherwise a copy of the Windows one, so both platforms fill
+the struct identically.
+
+**`--confirm-overwrite` is deprecated in zenity 4 and warns on stderr.** It is passed anyway:
+zenity 4 confirms overwrites on its own and ignores the flag, and zenity 3 needs it. Dropping it
+would silently overwrite files for anyone on the older version.
+
+**`--no-markup` on every message.** Messages carry file paths and type names, so `<` and `&` in
+them are text, not Pango markup.
+
+#### Seven Win32 message box layouts onto three buttons
+
+The tool has an OK button, a Cancel button, and one extra button. The extra button reports itself
+by **printing its own label and exiting non-zero**, which is why the label is compared against the
+output. The exit code alone cannot tell "extra button" from "cancel".
+
+| `MessageDialog::Type` | OK label | Cancel label | Extra button |
+|---|---|---|---|
+| `Ok` | - | - | - |
+| `OkCancel` | OK | Cancel | - |
+| `YesNo` | Yes | No | - |
+| `YesNoCancel` | Yes | Cancel | No |
+| `RetryCancel` | Retry | Cancel | - |
+| `AbortRetryIgnore` | Retry | Abort | Ignore |
+| `CancelTryContinue` | Try Again | Cancel | Continue |
+
+`AbortRetryIgnore` maps Abort onto Cancel and Ignore onto Continue, which is what the Win32
+implementation does with `IDABORT` and `IDIGNORE`.
+
+#### With no display, or no tool, the message still reaches the log
+
+`FileDialog` returns an empty result, which every caller already reads as a cancel. `MessageDialog`
+logs the message and returns `Cancel`, exactly as the Phase 3 stub did. **That is the case the
+ResourceCompiler workers run in**, and it is why the check is for `DISPLAY` and `WAYLAND_DISPLAY`
+rather than for the tool alone. The result is resolved once and cached: a missing tool is a
+property of the machine, not of the call.
+
+#### How it was verified
+
+The dialogs cannot be driven by a test, so the code was exercised from a scratch binary linked
+against `libEsoterica.Engine.Tools.so`, with a fake `zenity` first on `PATH` that logs its argv
+and returns a scripted exit code and stdout. That covers the parts a person clicking cannot check
+repeatably:
+
+- Multi-select returns both paths, including one with spaces in the name.
+- `Save` on a name typed without an extension comes back as `newmap.map`. `ValidateResult` appends
+  it, the tool does not.
+- `SelectFolder` on a real directory returns a path with `IsDirectoryPath()` true.
+  `GetFullPathString` stats the path and appends the trailing slash, so nothing extra is needed.
+- All three `YesNoCancel` outcomes map correctly: exit 0 to `Yes`, exit 1 with `No` on stdout to
+  `No`, exit 1 with nothing on stdout to `Cancel`.
+- Both fallbacks log and return `Cancel`.
+
+Then with the **real** zenity: the child process was inspected in `/proc/<pid>/cmdline` while the
+dialog was on screen, and closing it returned an empty result cleanly. **What is still unproven is
+a human clicking a file in the real dialog**, and the appearance of the dialogs themselves.
+
+#### A follow-up this unblocks in the Resource Server
+
+`ResourceServerApplication_Linux` logs a warning and exits when clients are connected, instead of
+asking. The P7.3 entry records why: `MessageDialog::Confirmation` returned `Cancel` unconditionally,
+so asking would have refused every exit and trapped the user in a window that would not close. That
+is no longer true. The confirmation can now be restored to match Windows.
 
 ### 2026-08-31 - Set 0 for an indirect draw, and RenderDoc attaches at last
 
@@ -670,7 +1079,7 @@ writing `fork` and `execv` by hand; the check paid off.
 | `WM_CLOSE` hides the window | Close exits | Same reason |
 | `ITaskbarList3` progress and busy overlay icons | Nothing | No portable equivalent. The busy state is already on screen in the request list, and the window is visible now |
 | A named single-instance mutex | An `flock` on a lock file | **Kept, and it turned out to be load bearing.** See below |
-| `MessageBox` confirming exit with clients connected | A logged warning, and the exit proceeds | `MessageDialog::Confirmation` on Linux logs and returns false until P7.2. Asking would refuse every exit and trap the user in a window that will not close |
+| `MessageBox` confirming exit with clients connected | A logged warning, and the exit proceeds | `MessageDialog::Confirmation` on Linux logged and returned false until P7.2. Asking would have refused every exit and trapped the user in a window that will not close. **P7.2 fixed that, so this can now be restored** |
 
 #### The single-instance guard is not a nicety, and cutting it was the wrong call
 
@@ -777,7 +1186,7 @@ which is [deferred on purpose](#deferred-on-purpose).
   now overrides. The phase document expected to iterate here and there was nothing to iterate on.
 - `EditorApplication::FatalError` calls `MessageDialog::Confirmation`, which on Linux is the
   Phase 3 sibling that logs and returns `Cancel`. So a fatal error is logged and unsaved work is
-  not offered for saving. P7.2 fixes that when it replaces `SystemDialogs_Linux.cpp`.
+  not offered for saving. **P7.2 fixed that**, and the save prompt now appears.
 
 **A whole-tree `ninja -k 0` now fails in the ResourceServer and nowhere else.** The editor links
 in every configuration.
@@ -5929,6 +6338,45 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `Network::Server` and `Network::Client` never drain `m_receivedMessages` at shutdown
+
+**This is the Resource Server's "Memory leak detected" on exit, and it is not a Linux defect.**
+
+`Server::m_receivedMessages` is a `TLockFreeQueue<Message*>`. The websocket receive callback runs
+on ixWebSocket's per-connection threads and fills it with `EE::New<Message>`
+(`NetworkServer_WebSockets.cpp:35`). It is drained in exactly one place: `Server::Update`, on the
+main thread, which deletes each message as it handles it (`NetworkServer.cpp:24-37`).
+
+**Nothing drains it at shutdown.** `~Server()` is `= default`, and `Server_WS::Stop` deletes the
+`ix::WebSocketServer` without touching the queue. So every message that arrives after the last
+`Update` and before `stop()` is allocated and never freed, and `rpmalloc_finalize` reports it:
+
+```
+Shutting down low level socket/threading support.
+Memory leak detected (span->list_size == span->used_count) at Code/Base/ThirdParty/rpmalloc/rpmalloc.c:1424
+```
+
+**`Client` has the same shape** - same undrained queue, same `= default` destructor
+(`NetworkClient.h:31`, `:81`) - so the engine and the editor can hit it too. They rarely do,
+because a client's inbound traffic at shutdown is much thinner than a server's.
+
+Both files are platform-neutral. **Windows has this too**, and has probably never noticed, because
+it only fires when a message lands in that window.
+
+#### Why it looks like a Linux defect, and how to tell it apart
+
+- **It is intermittent.** Three runs in four on this machine, with **zero external clients**: the
+  three compiler workers are themselves websocket clients and heartbeat continuously, so the
+  server always has traffic to catch.
+- **It does not reproduce under `gdb`**, which is the tell. The debugger changes the timing enough
+  that the last `Update` drains the queue.
+- **The engine shuts down clean**, which made it look Resource-Server-specific. It is not; it is
+  `Server` versus `Client` traffic volume.
+
+Do not go looking for a missing `ShutdownThreadHeap`. `Memory::InitializeThreadHeap` is called on
+these threads and deliberately never finalized - the comment in `Memory.cpp:68` says so, and
+relies on `rpmalloc_finalize` to release the heaps. That is fine. The leak is a real one.
 
 ### `ResourceServerContext::Initialize` leaks its `CompilerRegistry` on every failure path
 

@@ -220,6 +220,12 @@ A task is done only when all of these hold:
    ```bash
    python3 Code/Scripts/NinjaGen/NinjaGen.py && ninja -f Build/Linux/Esoterica.ninja
    ```
+   **That builds `Linux_Debug` only.** The generated `default` rule lists the Debug outputs and
+   nothing else, so a Release binary can sit a day stale behind a green build. Name the
+   configuration when you mean it:
+   ```bash
+   ninja -f Build/Linux/Esoterica.ninja Build/Linux_Release/Esoterica.Applications.Editor
+   ```
    Until Phase 1 finishes, "further" is the measure. Say how far it got, and what stopped it.
 3. **The Windows MSBuild build still succeeds**, unchanged. This is not optional, and it is not
    someone else's problem. A port that breaks Windows is worse than no port.

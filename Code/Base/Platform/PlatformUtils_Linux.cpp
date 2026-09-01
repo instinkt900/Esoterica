@@ -7,6 +7,7 @@
 #include <SDL3/SDL_vulkan.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -173,16 +174,120 @@ namespace EE::Platform::Linux
         return true;
     }
 
+    // Percent-encodes a filesystem path into a file:// URI. Everything outside the unreserved set
+    // is encoded, apart from the path delimiter itself, so a name with a space or a '#' in it
+    // still names the file it came from.
+    static String EncodePathAsFileURI( char const* path )
+    {
+        static char const* const pHexDigits = "0123456789ABCDEF";
+
+        String uri( "file://" );
+
+        for ( char const* pChar = path; *pChar != 0; pChar++ )
+        {
+            unsigned char const c = (unsigned char) *pChar;
+            bool const isUnreserved = ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' ) || c == '-' || c == '.' || c == '_' || c == '~' || c == '/';
+
+            if ( isUnreserved )
+            {
+                uri += (char) c;
+            }
+            else
+            {
+                uri += '%';
+                uri += pHexDigits[c >> 4];
+                uri += pHexDigits[c & 0x0F];
+            }
+        }
+
+        return uri;
+    }
+
     void OpenInExplorer( char const* path )
     {
-        EE_ASSERT( path != nullptr );
+        EE_ASSERT( path != nullptr && path[0] != 0 );
+
+        // A directory path carries a trailing delimiter. Strip it, so the file manager selects the
+        // directory inside its parent rather than opening it, which is what Windows does.
+        String targetPath( path );
+        while ( targetPath.length() > 1 && targetPath.back() == '/' )
+        {
+            targetPath.pop_back();
+        }
+
+        InlineString const uriArgument( InlineString::CtorSprintf(), "array:string:%s", EncodePathAsFileURI( targetPath.c_str() ).c_str() );
+
+        // The fallback target, for a desktop with no FileManager1 provider.
+        String containingDirectory( targetPath );
+        size_t const lastDelimiterIdx = containingDirectory.find_last_of( '/' );
+        containingDirectory.resize( ( lastDelimiterIdx == String::npos ) ? 0 : lastDelimiterIdx + 1 );
+
+        // Every string the child processes need is built above, before the fork. A forked child of
+        // a threaded process must not allocate.
+        //-------------------------------------------------------------------------
 
         pid_t const childProcessID = fork();
         if ( childProcessID == 0 )
         {
-            char* arguments[3] = { const_cast<char*>( "xdg-open" ), const_cast<char*>( path ), nullptr };
-            execvp( "xdg-open", arguments );
-            _exit( 127 );
+            // Fork twice, so the grandchild is reparented to init. Nothing here waits for the file
+            // manager, and a single fork would leave a zombie behind on every call.
+            if ( fork() == 0 )
+            {
+                // org.freedesktop.FileManager1.ShowItems opens the containing folder and selects
+                // the item, which is what "explorer.exe /select," does on Windows. Nautilus,
+                // Dolphin, Thunar, Nemo and PCManFM all implement it, and D-Bus starts the file
+                // manager if it is not already running.
+                char* const showItemsArguments[] =
+                {
+                    const_cast<char*>( "dbus-send" ),
+                    const_cast<char*>( "--session" ),
+                    const_cast<char*>( "--print-reply" ),
+                    const_cast<char*>( "--dest=org.freedesktop.FileManager1" ),
+                    const_cast<char*>( "--type=method_call" ),
+                    const_cast<char*>( "/org/freedesktop/FileManager1" ),
+                    const_cast<char*>( "org.freedesktop.FileManager1.ShowItems" ),
+                    const_cast<char*>( uriArgument.c_str() ),
+                    const_cast<char*>( "string:" ),
+                    nullptr
+                };
+
+                pid_t const showItemsProcessID = fork();
+                if ( showItemsProcessID == 0 )
+                {
+                    // --print-reply is what makes dbus-send wait for the call and report a failure,
+                    // which is the only way to know whether to fall back. The reply itself is
+                    // noise, so it and any error go to /dev/null rather than the editor's terminal.
+                    int const nullFileDescriptor = open( "/dev/null", O_WRONLY );
+                    if ( nullFileDescriptor != -1 )
+                    {
+                        dup2( nullFileDescriptor, STDOUT_FILENO );
+                        dup2( nullFileDescriptor, STDERR_FILENO );
+                    }
+
+                    execvp( "dbus-send", showItemsArguments );
+                    _exit( 127 );
+                }
+
+                int status = 0;
+                if ( showItemsProcessID > 0 && waitpid( showItemsProcessID, &status, 0 ) == showItemsProcessID && WIFEXITED( status ) && WEXITSTATUS( status ) == 0 )
+                {
+                    _exit( 0 );
+                }
+
+                // xdg-open is not an equivalent and is never given the path itself: it launches
+                // whatever application claims the file type, which for a .map on the development
+                // machine is an ebook reader. The containing directory is the closest it gets.
+                char* const openDirectoryArguments[] = { const_cast<char*>( "xdg-open" ), const_cast<char*>( containingDirectory.c_str() ), nullptr };
+                execvp( "xdg-open", openDirectoryArguments );
+                _exit( 127 );
+            }
+
+            _exit( 0 );
+        }
+
+        if ( childProcessID > 0 )
+        {
+            waitpid( childProcessID, nullptr, 0 );
         }
     }
 
