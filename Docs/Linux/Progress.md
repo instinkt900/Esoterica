@@ -548,6 +548,90 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-01 - P7.4 `OpenInExplorer`. It compiled, and it opened the wrong applications
+
+**The eight call sites were fine. The function underneath them was not.** P7.4 was written as a
+verification task. Running it found that `xdg-open` is not what "Open In Explorer" means, and
+`OpenInExplorer` is now built on `org.freedesktop.FileManager1.ShowItems` instead.
+
+- Files changed: `Code/Base/Platform/PlatformUtils_Linux.cpp`. The port owns it.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change. All eight call
+  sites are unchanged, and have been since Phase 1.
+- Acceptance criteria: P7.4 is met, including the "decide which behavior you want, and record it"
+  part. The decision is below.
+
+#### What `xdg-open` actually did on this machine
+
+The old implementation was `xdg-open <path>`, for both files and directories. `xdg-open` runs the
+handler registered for the file's MIME type, and nothing guarantees that is a file manager:
+
+| Path | MIME type | What `xdg-open` launches |
+|---|---|---|
+| `Data/Demo/Render/PBR/PBRDemo.map` | `text/plain` | **calibre-ebook-viewer** |
+| `Data/` | `inode/directory` | **org.gnome.baobab** - Disk Usage Analyzer |
+
+So neither the file case nor the directory case opened a file manager. That is not specific to a
+strange machine: `inode/directory` is claimed by whatever the user installed last, and every
+Esoterica resource extension is unregistered, so a data file falls back to its detected type.
+
+Read the menu labels the call sites use and the intent is not ambiguous: "Open In Explorer",
+"Go to Source File", "Go to Compiled File". They all mean *show me this file where it lives*.
+
+#### The decision: select the item, matching Windows
+
+`explorer.exe /select, <path>` opens the containing folder and highlights the item.
+`org.freedesktop.FileManager1.ShowItems` is the same operation, and **Nautilus, Dolphin, Thunar,
+Nemo and PCManFM all implement it**. It is a session-bus call, so D-Bus starts the file manager if
+it is not running.
+
+The call goes out through `dbus-send`, not a D-Bus client library. No new dependency, and it
+matches how P7.2 reached zenity.
+
+`--print-reply` is load bearing. Without it `dbus-send` fires and forgets and always exits 0; with
+it, the exit code says whether a file manager took the call, which is what selects the fallback.
+
+**The fallback is `xdg-open` on the containing directory, and never on the path itself.** A
+desktop with no `FileManager1` provider gets the directory opened by whatever claims
+`inode/directory`. That is a poor answer, but it is the only portable one left, and it is strictly
+better than launching an ebook reader.
+
+A directory argument arrives with a trailing delimiter from `FileSystem::Path`. It is stripped
+before the URI is built, so the file manager selects that directory inside its parent - again what
+Windows does. Both paths agree: `.../Render/PBR/` opens `Render` with `PBR` selected.
+
+#### Two things that are easy to get wrong here
+
+**The URI must be percent-encoded.** `ShowItems` takes `file://` URIs, not paths. A space or a `#`
+in a directory name silently addresses the wrong file, or no file, without it. Verified against a
+real path containing both.
+
+**A forked child of a threaded process must not allocate.** Every string the children need - the
+URI argument and the fallback directory - is built before the first `fork`. The children only
+`exec` and `_exit`.
+
+The fork is now a **double fork**, so the helper is reparented to init. The old single fork left a
+zombie behind on every click, because nothing waits for it. Checked with
+`waitpid( -1, WNOHANG )` straight after the call: it returns `-1`/`ECHILD`, so no child is left.
+
+#### How it was verified
+
+From a scratch binary linked against `libEsoterica.Base.so`, calling `Platform::Win32::OpenInExplorer`
+directly, then reading the resulting window titles with `xdotool`:
+
+| Argument | Window that opened |
+|---|---|
+| `.../Data/Demo/Render/PBR/PBRDemo.map` | `PBR - Thunar`, with the file selected |
+| `.../Data/Demo/Render/PBR/` | `Render - Thunar`, with `PBR` selected |
+| `.../dir with spaces/a file #1.map` | `dir with spaces - Thunar`, with the file selected |
+
+Both fallback branches were driven with a fake `dbus-send` on `PATH`: one that exits non-zero, and
+one that is absent entirely. Both reached `xdg-open` with the containing directory, and the argv
+log shows the `%20` and `%23` encoding going out on the real call.
+
+**Not verified: clicking the menu items in the running editor.** The function every one of them
+calls is verified, with both the file and the directory shapes they pass. Only Thunar was
+exercised; the other four file managers are not installed here.
+
 ### 2026-09-01 - P7.2 `SystemDialogs_Linux.cpp`. The file and message dialogs are real
 
 **The halting stubs are gone.** `SystemDialogs_Linux.cpp` now opens the desktop's own file
