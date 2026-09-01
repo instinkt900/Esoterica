@@ -103,7 +103,6 @@ authoritative status of each file; the rows below say what to do about it.
 | 2 | **The `storageInputOutput16` warning at startup is stale.** `CreateContext` still says "Shaders that use them will fail to create". Since P5.20 no shader uses them; the message is about the device, not this engine | `RHI_Vulkan.cpp` | [Rendering: where we are](Progress.md#still-open) |
 | 3 | **The items in [Deferred on purpose](Progress.md#deferred-on-purpose).** Known shortcuts, chosen rather than missed. Each is correct-enough to keep going and wrong enough to sweep before the port is called done. Not duplicated here | various | [Progress.md](Progress.md#deferred-on-purpose) |
 | 4 | **`requirements_gamenetworkingsockets` does not version-check `protoc`.** A stale one earlier on `PATH` is accepted and fails deep inside the build | `DownloadDependencies.sh` | [Rendering: where we are](Progress.md#still-open) |
-| 5 | **The Resource Server exits with a logged warning when clients are connected**, instead of asking, because `MessageDialog::Confirmation` used to return `Cancel` unconditionally. P7.2 fixed that, so the confirmation can be restored to match Windows | `ResourceServerApplication_Linux.cpp` | Progress.md, P7.2 entry |
 
 ---
 
