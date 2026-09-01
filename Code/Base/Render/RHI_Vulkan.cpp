@@ -1066,26 +1066,35 @@ namespace EE::Render::RHI
         enabledFeatures.m_vulkan11.uniformAndStorageBuffer16BitAccess = availableFeatures.m_vulkan11.uniformAndStorageBuffer16BitAccess;
         enabledFeatures.m_vulkan11.storagePushConstant16 = availableFeatures.m_vulkan11.storagePushConstant16;
 
-        // **The fifth 16-bit feature, and the one the port cannot work around.** A bindless
-        // handle is a uint16_t (RHI.esh:91-96), and a shader passes handles down its stage
-        // interface: DebugDraw.esf's DebugDrawPrimitiveOutput carries a TextureHandle from the
-        // mesh stage to the pixel stage. That puts a 16-bit type in an Input or Output variable,
-        // which Vulkan gates separately from the buffer accesses above. Direct3D 12 does not
-        // split it out: Native16BitShaderOps covers every use at once.
+        // **The fifth 16-bit feature, and no shader needs it any more.** A 16-bit type in an
+        // Input or Output variable is gated separately from the buffer accesses above, and
+        // Direct3D 12 does not split it out: Native16BitShaderOps covers every use at once.
         //
-        // Found by running with validation in P6.8. No GPU in the development machine has it -
-        // not the Intel UHD 620, not the NVIDIA MX250, not llvmpipe - so the engine's shaders
-        // cannot be created there at all. See the P6.8 entry in Progress.md.
+        // The engine's only 16-bit interpolant was DebugDraw.esf's DebugDrawPrimitiveOutput,
+        // which carried a uint16_t TextureHandle from the mesh stage to the pixel stage. P5.20
+        // replaced it with EE_INTERSTAGE_HANDLE, a uint on SPIR-V and the 16-bit handle on
+        // Direct3D 12, so the capability is no longer declared anywhere. Compiling every .esf at
+        // every profile and grepping the SPIR-V for OpCapability StorageInputOutput16 finds zero
+        // hits; it found exactly two before. See the P5.20 entry in Progress.md.
+        //
+        // It is still enabled when the device has it, because a future shader may want it back.
         enabledFeatures.m_vulkan11.storageInputOutput16 = availableFeatures.m_vulkan11.storageInputOutput16;
 
         if ( availableFeatures.m_features2.features.shaderInt16 != VK_TRUE ||
-             availableFeatures.m_vulkan12.shaderFloat16 != VK_TRUE ||
-             availableFeatures.m_vulkan11.storageInputOutput16 != VK_TRUE )
+             availableFeatures.m_vulkan12.shaderFloat16 != VK_TRUE )
         {
-            EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "This device is missing 16-bit shader types (shaderInt16 %s, shaderFloat16 %s, storageInputOutput16 %s). Shaders that use them will fail to create.",
+            EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "This device is missing 16-bit shader types (shaderInt16 %s, shaderFloat16 %s). Shaders that use them will fail to create.",
                             availableFeatures.m_features2.features.shaderInt16 ? "yes" : "no",
-                            availableFeatures.m_vulkan12.shaderFloat16 ? "yes" : "no",
-                            availableFeatures.m_vulkan11.storageInputOutput16 ? "yes" : "no" );
+                            availableFeatures.m_vulkan12.shaderFloat16 ? "yes" : "no" );
+        }
+
+        // A message, not a warning, and it says what the device is rather than what the engine
+        // will do. The old wording - "Shaders that use them will fail to create" - was true when
+        // it was written and has been wrong since P5.20. It named the first hardware gap on every
+        // start on hardware that no longer has a gap.
+        if ( availableFeatures.m_vulkan11.storageInputOutput16 != VK_TRUE )
+        {
+            EE_LOG_MESSAGE( LogCategory::Render, "RHI/CreateContext", "This device has no storageInputOutput16. No shader in the engine declares it, so nothing depends on it." );
         }
 
         // 64-bit types and subgroup operations

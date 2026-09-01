@@ -100,9 +100,8 @@ authoritative status of each file; the rows below say what to do about it.
 | # | What to do | Where | Detail in |
 |---|---|---|---|
 | 1 | **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should.** `DebugDrawPrimitiveOutput` was fixed by P5.20; `PrimitiveOutput` in `RendererTypes.esh` - the material shaders and `DebugDrawMesh.esf` - was not, because `MaterialShaderInput::New` copies the struct into a local and DXC then builds SPIR-V that spirv-val rejects. Two ways out, neither cheap: a packed `uint` with accessors instead of the nested bitfield struct, which reaches Direct3D 12; or a fourth `Code/Scripts/DXCPatches` entry. **Not urgent** - NVIDIA renders correctly without it - but another driver need not be so forgiving | `RendererTypes.esh` | [Rendering: where we are](Progress.md#still-open) |
-| 2 | **The `storageInputOutput16` warning at startup is stale.** `CreateContext` still says "Shaders that use them will fail to create". Since P5.20 no shader uses them; the message is about the device, not this engine | `RHI_Vulkan.cpp` | [Rendering: where we are](Progress.md#still-open) |
-| 3 | **The items in [Deferred on purpose](Progress.md#deferred-on-purpose).** Known shortcuts, chosen rather than missed. Each is correct-enough to keep going and wrong enough to sweep before the port is called done. Not duplicated here | various | [Progress.md](Progress.md#deferred-on-purpose) |
-| 4 | **`requirements_gamenetworkingsockets` does not version-check `protoc`.** A stale one earlier on `PATH` is accepted and fails deep inside the build | `DownloadDependencies.sh` | [Rendering: where we are](Progress.md#still-open) |
+| 2 | **The items in [Deferred on purpose](Progress.md#deferred-on-purpose).** Known shortcuts, chosen rather than missed. Each is correct-enough to keep going and wrong enough to sweep before the port is called done. Not duplicated here | various | [Progress.md](Progress.md#deferred-on-purpose) |
+| 3 | **`requirements_gamenetworkingsockets` does not version-check `protoc`.** A stale one earlier on `PATH` is accepted and fails deep inside the build | `DownloadDependencies.sh` | [Rendering: where we are](Progress.md#still-open) |
 
 ---
 
