@@ -13,8 +13,9 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 > ### **The engine renders the pbrdemo map correctly on Linux.**
 >
 > Lit, shaded, textured, shadowed geometry with a sky and a reflective ground plane, on an RTX
-> 3090, with host validation on and **zero validation messages** over 30 seconds. No device memory
-> leaked, clean shutdown. See [Rendering: where we are](#rendering-where-we-are).
+> 3090, with host validation on and **zero validation messages** over 30 seconds - and **no
+> `VK_LAYER_MESSAGE_ID_FILTER`**, which is new. No device memory leaked, clean shutdown. See
+> [Rendering: where we are](#rendering-where-we-are).
 >
 > **The advice "do not chase rendering on this machine" applied to the first machine only.** A
 > second machine has a discrete NVIDIA GPU and rendering is exactly what should be chased there.
@@ -429,17 +430,19 @@ read `m_pMappedAddress_WriteCombined` a few hundred frames later. For a texture,
 
 ### Still open
 
-- **`storageInputOutput16` is absent on NVIDIA.** `DebugDraw.esf` passes a `uint16_t` handle from
-  the mesh stage to the pixel stage, so those modules fail to create. Two VUIDs guard it; survey
-  past them with `VK_LAYER_MESSAGE_ID_FILTER=0x6e224e9,0x715035dd`. **This is now the last thing
-  standing between the engine and a run with no filters at all**, and it is a shader change, not
-  a hardware wait: the handle only needs to cross the stage boundary as a `uint`.
-- **A fragment shader reading a mesh shader's per-primitive output is not decorated
-  `PerPrimitiveEXT`.** DXC emits the decoration on the mesh shader's outputs
-  (`DeclResultIdMapper.cpp:3635`) and has no way to emit it on the pixel shader's inputs - there
-  is no `[[vk::perprimitiveEXT]]` attribute, it is rejected as an unknown attribute. NVIDIA
-  tolerates the mismatch and the frame is correct, but this is a genuine interface gap and another
-  driver need not. A fourth entry in `Code/Scripts/DXCPatches` is the fix if one ever complains.
+- **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should.** `DebugDrawPrimitiveOutput` is
+  fixed; `PrimitiveOutput` in `RendererTypes.esh` - the material shaders and `DebugDrawMesh.esf` -
+  is not. Any `vk::ext_decorate` in that struct makes DXC flatten it per AST field in the pixel
+  shader, and `MaterialShaderInput::New` copies the whole struct into a local, so DXC rebuilds
+  `PrimitiveOutputFlags` with one constituent per bitfield into the single member those bitfields
+  lower to. spirv-val rejects the module outright, so it cannot ship half-done by accident. Two
+  ways out, neither cheap: give `PrimitiveOutput` a packed `uint` and accessors instead of a
+  nested bitfield struct, which is an upstream change that reaches Direct3D 12; or a fourth entry
+  in `Code/Scripts/DXCPatches`. **Not urgent** - NVIDIA renders correctly without it - but it is a
+  real conformance gap and another driver need not be so forgiving.
+- **The `storageInputOutput16` warning at startup is now stale.** `CreateContext` still reports
+  the missing feature and still says "Shaders that use them will fail to create". No shader uses
+  them any more; the message is about the device, not about this engine.
 - **The same query-as-enable-request pattern** used for the mesh shader features is still in place
   for the shading rate, acceleration structure and ray tracing blocks. None has a cross-dependency
   VUID today.
@@ -827,6 +830,65 @@ two places now:
   `ResourceServerUI.cpp:799` and `:811`. That is P7.3.
 
 Nothing else in the tree fails.
+### 2026-09-01 - The last VUID filter is gone, and a fragment shader can say "per-primitive" after all
+
+**The engine runs with no `VK_LAYER_MESSAGE_ID_FILTER` at all.** 30 seconds, host validation on,
+zero validation messages, no device memory leaked, clean shutdown, correct frame. Only
+`VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true` remains, and that is the layer's stale
+bundled spirv-val, not this engine.
+
+#### `storageInputOutput16`: one shader, one word
+
+`DebugDraw.esf` passed a `TextureHandle` - a `uint16_t` - from its mesh stage to its pixel stage.
+A 16-bit interpolant needs `storageInputOutput16`, **no NVIDIA part reports that feature**, and
+the module fails to create outright with `VUID-VkShaderModuleCreateInfo-pCode-08740`. So the debug
+draw pipelines never existed on this GPU and two VUIDs had to be filtered to get past it.
+
+`EE_INTERSTAGE_HANDLE` in `RHI.esh` is `uint` on SPIR-V and the 16-bit handle on Direct3D 12. A
+stage variable occupies one location either way, a handle never exceeds 16 bits, and the `~0` "no
+texture" sentinel widens with the type it is assigned to, so no value changes.
+
+**Surveyed, not guessed.** Compiling every `.esf` in the tree at every profile and grepping the
+SPIR-V for `OpCapability StorageInputOutput16` found exactly two hits, both stages of that one
+file, and finds zero now. That sweep is worth keeping - it is about a minute of compiler time and
+it turns "which shaders have this problem" from a reading exercise into a fact.
+
+#### `PerPrimitiveEXT`: no compiler patch needed, and one place it still cannot go
+
+Vulkan matches a mesh shader's per-primitive output to a fragment input **only if the fragment
+input carries `PerPrimitiveEXT` too**. Direct3D fixes that up at link time and makes no
+distinction in the pixel shader at all; Vulkan cannot, because graphics pipeline libraries leave
+no link step to infer it in. DXC decorates the mesh shader side by itself and has no way to
+express the pixel shader side - `[[vk::perprimitiveEXT]]` does not exist and is silently ignored
+as an unknown attribute (microsoft/DirectXShaderCompiler#6862).
+
+The previous entry assumed that meant a fourth DXC patch. **It does not.** The SPIR-V inline
+intrinsics reach it directly: `[[vk::ext_decorate( 5271 )]]` on the member, plus
+`[[vk::ext_capability( 5283 )]]` and `[[vk::ext_extension( "SPV_EXT_mesh_shader" )]]` on the entry
+point. `EE_PER_PRIMITIVE` and `EE_PER_PRIMITIVE_PIXEL_ENTRY` in `RHI.esh` wrap both, gated on
+`__SHADER_TARGET_STAGE == __SHADER_STAGE_PIXEL` so the mesh shader is untouched and Windows sees
+nothing.
+
+`DebugDrawPrimitiveOutput` is now correctly decorated on both sides at matching locations.
+**`PrimitiveOutput` is not, and cannot be with this DXC** - see [Still open](#still-open).
+
+Four things that cost a try each, all invisible without `-Fc`:
+
+| | |
+|---|---|
+| `[[vk::...]]` after `[RootSignature(...)]` | "expected identifier". The C++-style attributes have to come **first** |
+| The decoration on a struct-typed member | Does not reach the flattened stage variable. It has to go on that struct's own members |
+| The decoration anywhere in a struct the pixel shader copies into a local | Invalid SPIR-V, rejected by spirv-val. This is what blocks `PrimitiveOutput` |
+| `-O0` vs `-O3` | `SV_CullPrimitive` in a pixel shader input struct is a `CullPrimitiveEXT` builtin with Input storage class, which is illegal - and vanishes at `-O3` because nothing reads it. **Check at the level the Reflector actually uses** |
+
+#### Files
+
+- Upstream files edited: `Code/Base/Render/RHI.esh` (53 added, 0 modified),
+  `Code/Engine/Render/Shaders/Debug/DebugDraw.esf` (13 added, 3 modified),
+  `Code/Engine/Render/Shaders/Renderer/RendererTypes.esh` (comment only). All `__spirv__`-gated,
+  all no-ops on Direct3D 12. Registered in [TouchedFiles.md](TouchedFiles.md).
+- Verified: `VK_LAYER_MESSAGE_ID_FILTER` removed entirely, 30 seconds, zero validation messages.
+
 ### 2026-09-01 - **The frame is correct.** Two stages disagreed on every location, and the pixel shader had no root arguments
 
 **The pbrdemo map renders correctly on Linux**: lit, textured, shadowed geometry, a sky, a
