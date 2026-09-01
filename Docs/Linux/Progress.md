@@ -455,9 +455,6 @@ read `m_pMappedAddress_WriteCombined` a few hundred frames later. For a texture,
   nested bitfield struct, which is an upstream change that reaches Direct3D 12; or a fourth entry
   in `Code/Scripts/DXCPatches`. **Not urgent** - NVIDIA renders correctly without it - but it is a
   real conformance gap and another driver need not be so forgiving.
-- **The `storageInputOutput16` warning at startup is now stale.** `CreateContext` still reports
-  the missing feature and still says "Shaders that use them will fail to create". No shader uses
-  them any more; the message is about the device, not about this engine.
 - **The same query-as-enable-request pattern** used for the mesh shader features is still in place
   for the shading rate, acceleration structure and ray tracing blocks. None has a cross-dependency
   VUID today.
@@ -547,6 +544,45 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-01 - The `storageInputOutput16` startup warning outlived the problem it described
+
+**Every start on both development machines printed a warning about a gap that no longer exists.**
+`CreateContext` reported `storageInputOutput16` alongside `shaderInt16` and `shaderFloat16` and
+said "Shaders that use them will fail to create". That was true when P6.8 wrote it. **P5.20 made
+it false**: `DebugDraw.esf`'s `DebugDrawPrimitiveOutput` was the engine's only 16-bit
+interpolant, and `EE_INTERSTAGE_HANDLE` now carries it as a `uint` on SPIR-V.
+
+- Files changed: `Code/Base/Render/RHI_Vulkan.cpp`. The port owns it.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- The row for this in [Blocked.md](Blocked.md) is removed.
+
+#### What it says now
+
+The warning keeps `shaderInt16` and `shaderFloat16`, which shaders **do** still use for buffer
+accesses, and keeps the "will fail to create" wording for them, because it is still true.
+
+`storageInputOutput16` moves to its own line, as a **message** rather than a warning, and says
+what the device is rather than what the engine will do:
+
+```
+[Message][Rendering][RHI/CreateContext] This device has no storageInputOutput16. No shader in the
+engine declares it, so nothing depends on it.
+```
+
+The feature is still **enabled when the device has it**. Nothing declares it today; a future
+shader may want it back, and enabling an available feature costs nothing.
+
+#### Why a stale warning is worth a commit
+
+It named the first row of [What the first machine still cannot do](#what-the-first-machine-still-cannot-do)
+on every single start, on hardware where that row no longer has any consequence. Two sessions
+spent time asking whether it was the cause of something. A warning that cannot be acted on
+trains the reader to skip warnings.
+
+Verified by running the Resource Server: the warning is gone and the message appears in its
+place. This machine has `shaderInt16` and `shaderFloat16`, so the remaining warning correctly
+stays silent.
 
 ### 2026-09-01 - P7.3 follow-up. The Resource Server asks before it exits, as Windows does
 
