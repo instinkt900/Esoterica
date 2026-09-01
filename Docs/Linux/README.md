@@ -38,6 +38,7 @@ upstream code that you read along the way. See Conventions rule 3.
 | [01-UpstreamMerges.md](01-UpstreamMerges.md) | How to merge upstream, and how to keep merges cheap |
 | [02-Architecture.md](02-Architecture.md) | Target design: platform layer, build system, RHI |
 | [03-Dependencies.md](03-Dependencies.md) | Every Windows dependency and its Linux replacement |
+| [04-BuildAndRun.md](04-BuildAndRun.md) | How to build and run each target on Linux |
 | [TouchedFiles.md](TouchedFiles.md) | Registry of every upstream file this port modifies |
 | [Progress.md](Progress.md) | Running log of completed and in-flight work |
 | [Blocked.md](Blocked.md) | What is written but not verified, indexed by the machine that unblocks it |
