@@ -99,25 +99,23 @@ work to do next.
 
 ## What is actually left
 
-Less than the phase's position in the list suggests, and **measured rather than estimated**: a
-whole-tree `ninja -k 0` on 2026-08-31 failed in **three translation units and no others**. The
-substance of the editor, `Code/Applications/Editor/EditorUI.cpp` and all of `Code/EngineTools/`,
-is platform-neutral and has compiled since Phase 3. `EditorApplication_Win32.cpp` is only 127
-lines, because the real logic lives in `EditorUI`.
+**P7.6, and nothing else.** The estimate below turned out to be right: the phase was much smaller
+than its position in the list suggests, because the substance of the editor -
+`Code/Applications/Editor/EditorUI.cpp` and all of `Code/EngineTools/` - is platform-neutral and
+has compiled since Phase 3. `EditorApplication_Win32.cpp` is only 127 lines, because the real
+logic lives in `EditorUI`.
 
-What remains:
+The five tasks below it are done. What they cost, against what this section guessed:
 
-0. **One missing include in `EditorUI.h`.** A few minutes, and the editor's own build is then
-   clean. See P7.0.
-1. The Resource Server, a Win32 GUI app that spawns worker processes. **Start here after P7.0**:
-   it is what lets the engine and the editor stop running with `-packaged`.
-2. Native file dialogs, `SystemDialogs.cpp`, 552 lines of COM. This is the biggest *new* code.
-3. `EditorApplication_Linux`, which is thin and mirrors the Phase 6 engine app.
-4. The `OpenInExplorer` call sites. They have resolved since Phase 1, so this is about checking
-   that they behave.
+| Task | Guess | What it was |
+|---|---|---|
+| P7.0 `EditorUI.h` include | "a few minutes" | one line |
+| P7.1 `EditorApplication_Linux` | "thin", but "expect to iterate" on the borderless window | thin, and the borderless window needed no new code at all |
+| P7.2 file dialogs | "the biggest *new* code", 552 lines of COM to replace | ~200 lines and no new dependency |
+| P7.3 Resource Server | the highest-value task | it was, and worker spawning needed no new code |
+| P7.4 `OpenInExplorer` | "checking that they behave" | they did not; the function was opening the wrong applications |
 
-**Two of these do not need a window at all**, let alone a working frame: P7.0 and the compiling
-half of P7.3. That is most of the value in this phase, and it is all reachable on this machine.
+**None of that needed a window that draws.** P7.6 does, and that is the whole of what is left.
 
 ---
 
