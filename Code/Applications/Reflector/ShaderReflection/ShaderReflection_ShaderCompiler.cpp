@@ -29,7 +29,31 @@ namespace EE::Reflection
     #if _WIN32
     #define DXC_ARG_TARGET_BACKEND
     #else
-    #define DXC_ARG_TARGET_BACKEND L"-spirv", L"-fspv-target-env=vulkan1.3", DXC_ARG_MEMORY_LAYOUT DXC_ARG_BINDING_MODEL
+    #define DXC_ARG_TARGET_BACKEND L"-spirv", L"-fspv-target-env=vulkan1.3", DXC_ARG_MEMORY_LAYOUT DXC_ARG_BINDING_MODEL DXC_ARG_STAGE_IO_ORDER
+    #endif
+
+    // **Inter-stage variables are matched by name in Direct3D and by `Location` in Vulkan**, and
+    // DXC's default is to number them in *declaration order*. `MS_main` declares
+    // `out primitives` before `out vertices`, so the mesh shader gave `PrimitiveOutput`
+    // (TEXCOORD4-9) locations 0-5 and `VertexOutput` (TEXCOORD0-3) locations 6-9. `PS_main` takes
+    // `VertexOutput` first, so the pixel shader numbered the same semantics 0-9 in order. Nothing
+    // lined up: the pixel shader read the primitive flags where the world position was written.
+    //
+    // The frame still rasterises, because SV_Position is a builtin and never had a location, so
+    // this looks like correct geometry with wrong shading rather than like an interface error.
+    // Nothing diagnoses it - both modules are internally valid and the location sets are the same
+    // size, so validation sees a match.
+    //
+    // -fvk-stage-io-order=alpha sorts by semantic string before numbering, which both stages do
+    // identically regardless of the order the entry point happens to declare its parameters in.
+    // DXC already forces this for hull and domain shaders, for exactly this reason. There are no
+    // vertex-buffer inputs anywhere in this engine - geometry is pulled in the mesh shader - so
+    // VSIn ordering, the one case where a location is a contract with the CPU side, cannot be
+    // affected.
+    #if _WIN32
+    #define DXC_ARG_STAGE_IO_ORDER
+    #else
+    #define DXC_ARG_STAGE_IO_ORDER L"-fvk-stage-io-order=alpha",
     #endif
 
     // Constant and structured buffer memory layout. The engine shares these struct declarations
