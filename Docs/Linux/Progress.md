@@ -6,6 +6,10 @@ Running state of the Linux port. **Every task appends here before it counts as d
 This file keeps a chain of independent agent sessions coherent. When you start a session, read
 "Current state" and "In flight" first.
 
+**What is written but not verified lives in [Blocked.md](Blocked.md)**, indexed by the machine
+that would unblock it. The entries below are dated and the blocked items are scattered through
+them; that file is how they are found. A task that leaves something unverified adds a row there.
+
 ---
 
 ## Current state
