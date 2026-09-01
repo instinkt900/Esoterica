@@ -27,7 +27,7 @@ here and saying so in that session's Progress.md entry.
 **The reference machine is the RTX 3090** - NVIDIA GeForce RTX 3090, driver 580.173.02, Ubuntu
 24.04.4, X11. It has `VK_KHR_fragment_shader_barycentric`, `VK_EXT_mesh_shader`,
 `VK_EXT_mutable_descriptor_type` and `shaderSharedInt64Atomics`, which is four of the five gaps in
-[What this machine still cannot do](Progress.md#what-this-machine-still-cannot-do).
+[What this machine still cannot do](Progress.md#what-the-first-machine-still-cannot-do).
 
 **The other development machine cannot do any of this.** Its Intel UHD 620 has no
 `VK_EXT_mesh_shader`, so every mesh draw is dropped, later passes read what the geometry path
@@ -60,12 +60,14 @@ covered by that run:
 | 8 | **P5.11 query pools** | The timestamp frequency inversion. A wrong one gives plausible timings that are wrong by a constant factor, which nobody notices | Progress.md, P5.11 entry |
 | 9 | **P5.15 variable rate shading** | The pipeline change, not the feature. Every graphics pipeline declares one more dynamic state on a device with the extension, and a mistake there breaks every draw. The feature itself is deliberately switched off | Progress.md, P5.15 entry |
 | 10 | **P5.16 raytracing** | All of it. No structure built, no ray traced, no raytracing pipeline compiled. **Assume none of it works** | Progress.md, P5.16 entry |
+| 11 | **The debug draw pass** | Its pipelines only started creating with P5.20, which fixed the 16-bit interpolant that made them fail outright. Nothing has checked that it draws | Progress.md, P5.20 entry |
+| 12 | **Phase 5 criterion 8, feature parity, named one at a time** | Forward shading, cascaded shadows and debug draw are visible in the pbrdemo frame. **GTAO, SMAA, OIT and mesh picking have never been named and verified individually**, which is what the criterion asks for | [Phase5-VulkanRHI.md](Phases/Phase5-VulkanRHI.md#acceptance-criteria) |
 
 ### One thing only a different driver will find
 
 | # | What to check | Why | Detail in |
 |---|---|---|---|
-| 11 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders | No cross-dependency VUID catches it today | Progress.md, 2026-08-31 NVIDIA entry |
+| 13 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders | No cross-dependency VUID catches it today | Progress.md, 2026-08-31 NVIDIA entry |
 
 ---
 

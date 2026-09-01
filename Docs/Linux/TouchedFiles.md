@@ -59,9 +59,9 @@ HLSL means. The fix is to write HLSL both back ends read the same way.
 | `Code/Base/Render/RHI.esh` | Adds `PackUint64( uint2 )` and `UnpackUint64( uint64_t )` next to the existing `RWBufferToBuffer` helpers. 18 lines added, 0 modified. | 6 (open question 8) | **done, unverified on Windows** |
 | `Code/Base/Render/RHI.esh` | P5.17's indirect root arguments: the `[[vk::push_constant]]` block, the `DrawIndex` entry macros, and `EE_DECLARE_INDIRECT_ROOT_CONSTANTS` / `_CBV`. **All inside `#ifdef __spirv__`**, with an `#else` that falls back to the existing declarations. Additions only. | 5 (P5.17) | **done, unverified on Windows** |
 | `Code/Engine/Render/Shaders/Renderer/ClusterCulling.esf` | The two declarations become the indirect variants, a `#define` pair maps the names onto the statics, and the entry point gains `EE_INDIRECT_DISPATCH_ENTRY_ARGS` and `_INIT`. **Bodies unchanged.** | 5 (P5.17) | **done, runs on Linux** |
-| `Code/Engine/Render/Shaders/Renderer/DefaultMeshShader.esh` | As above, with the `DRAW` entry macros. | 5 (P5.17) | **done, compiles and validates, never run** |
-| `Code/Engine/Render/Shaders/Debug/DebugDraw.esf` | As above. | 5 (P5.17) | **done, compiles and validates, never run** |
-| `Code/Engine/Render/Shaders/Debug/DebugDrawMesh.esf` | As above. | 5 (P5.17) | **done, compiles and validates, never run** |
+| `Code/Engine/Render/Shaders/Renderer/DefaultMeshShader.esh` | As above, with the `DRAW` entry macros. | 5 (P5.17) | **done, and it now runs.** The frame is correct on an RTX 3090 |
+| `Code/Engine/Render/Shaders/Debug/DebugDraw.esf` | As above. | 5 (P5.17) | **done. Its pipelines create since P5.20**; the debug draw pass itself is unverified |
+| `Code/Engine/Render/Shaders/Debug/DebugDrawMesh.esf` | As above. | 5 (P5.17) | **done. Its pipelines create since P5.20**; the debug draw pass itself is unverified |
 | `Code/Engine/Render/Shaders/SpatialHash.esh` | `SpatialHashBase`'s payload buffer becomes `Buffer<uint2>` / `RWBuffer<uint2>`. `LoadPayload` and `StorePayload` pack through the new helpers; `LoadMetadata` and `StoreMetadata` lose their packing entirely, because the element is now the `uint2` they always returned. | 6 (open question 8) | **done, unverified on Windows** |
 | `Code/Engine/Render/Shaders/Picking/InstancePickingResolve.esf` | `Buffer<uint64_t>` to `Buffer<uint2>`, one read wrapped in `PackUint64`. | 6 (open question 8) | **done, unverified on Windows** |
 | `Code/Engine/Render/Shaders/Renderer/InstanceCulling.esf` | As above. | 6 (open question 8) | **done, unverified on Windows** |
@@ -69,7 +69,7 @@ HLSL means. The fix is to write HLSL both back ends read the same way.
 | `Code/Engine/Render/Shaders/Renderer/MaterialShaderPBR.esh` | As above. Reaches every material pixel shader. | 6 (open question 8) | **done, unverified on Windows** |
 | `Code/Base/Render/RHI.esh` (3) | Adds `EE_INDIRECT_PIXEL_ENTRY_INIT` beside the existing draw and dispatch entry macros. **Inside `#ifdef __spirv__`**, empty in the `#else`. Additions only. | 5 (P5.17 follow-up) | **done, runs on Linux** |
 | `Code/Engine/Render/Shaders/Renderer/MaterialShaderPBR.esh` (2) | One line: `EE_INDIRECT_PIXEL_ENTRY_INIT` as the first statement of `PS_main`. P5.17 gave the mesh shader its root arguments and left the pixel shader in the same file reading two zero-initialised statics. Expands to nothing on Direct3D 12. | 5 (P5.17 follow-up) | **done, runs on Linux** |
-| `Code/Engine/Render/Shaders/Debug/DebugDrawMesh.esf` (2) | As above, in its `PS_main`. | 5 (P5.17 follow-up) | **done, compiles, not visually checked** |
+| `Code/Engine/Render/Shaders/Debug/DebugDrawMesh.esf` (2) | As above, in its `PS_main`. | 5 (P5.17 follow-up) | **done. Its pipelines create since P5.20**; the debug draw pass itself is unverified, and so is Windows |
 | `Code/Base/Render/RHI.esh` (4) | `EE_PER_PRIMITIVE` / `EE_PER_PRIMITIVE_PIXEL_ENTRY`, the `PerPrimitiveEXT` decoration a fragment input needs to match a mesh shader's per-primitive output, written with the SPIR-V inline intrinsics because DXC has no attribute for it. Gated on `__spirv__` **and** `__SHADER_TARGET_STAGE == __SHADER_STAGE_PIXEL`. Plus `EE_INTERSTAGE_HANDLE`, a resource handle that has to cross a stage boundary as 32 bits because NVIDIA has no `storageInputOutput16`. Additions only, all empty on Windows. | 5 | **done, runs on Linux** |
 | `Code/Engine/Render/Shaders/Debug/DebugDraw.esf` | `EE_INTERSTAGE_HANDLE` for `m_textureHandle` in `DebugDrawPrimitiveOutput` - the only 16-bit interpolant in the engine, and the last thing needing a VUID filter - and `EE_PER_PRIMITIVE` on its three per-primitive members plus `EE_PER_PRIMITIVE_PIXEL_ENTRY` on `PS_main`. The type is `GenericResourceHandle` on Windows, so Direct3D 12 keeps a 16-bit interpolant. | 5 | **done, runs on Linux** |
 | `Code/Engine/Render/Shaders/Renderer/RendererTypes.esh` | Comment only, on `PrimitiveOutput`: why it is **not** decorated `EE_PER_PRIMITIVE` when `DebugDrawPrimitiveOutput` is. No code change, so Windows is untouched by construction. | 5 | done |
@@ -172,7 +172,7 @@ never writes. libstdc++ and libc++ do not. Each fix is **2 lines added, 0 modifi
 ## Phase 5 - Vulkan RHI, the P5.17 indirect draw change
 
 **Planned, and escalated first.** These are the only upstream *shader* files this port edits.
-[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)
+[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change)
 holds the full task, and the human approved the edits on 2026-08-29 as the answer to open question
 7.
 

@@ -24,12 +24,16 @@ them; that file is how they are found. A task that leaves something unverified a
 > **The advice "do not chase rendering on this machine" applied to the first machine only.** A
 > second machine has a discrete NVIDIA GPU and rendering is exactly what should be chased there.
 > See [[dev-machines]] in the 2026-08-31 entries.
+>
+> **The laptop cannot run the editor at all.** It dies about three seconds into its frame loop,
+> on the device loss its Intel UHD 620 has had since Phase 6. That is what makes P7.6 and the
+> last link of P7.5 machine-blocked; see [Blocked.md](Blocked.md).
 
-**Phase 7 is in flight. P7.0, P7.1 and P7.3 are done. The whole tree builds.**
-`Esoterica.Applications.Editor` and `Esoterica.Applications.ResourceServer` both build, link and
-launch. **Nothing in the tree fails to compile any more.** The Resource Server serves on
-127.0.0.1:5556, spawns its compiler workers and draws its full UI. P7.2, P7.4, P7.5 and P7.6 are
-what is left in the phase.
+**Phase 7 is in flight, and P7.6 is what is left in it.** The whole tree builds in Debug and
+Release, and **nothing in it fails to compile.** `Esoterica.Applications.Editor` and
+`Esoterica.Applications.ResourceServer` both build, link and launch; the Resource Server serves on
+127.0.0.1:5556, spawns its compiler workers and draws its full UI. Per-task state, including which
+PRs are open, is in [In flight](#in-flight).
 
 **The engine and the editor no longer need `-packaged`.** `EnsureResourceServerIsRunning` was
 Windows-only and returned false, so the network resource provider could never start. P7.3 opened
@@ -43,7 +47,7 @@ Escalated, approved and fixed in P7.1: one character in
 **Phase 6 is written and does not meet its goal. The engine reaches its frame loop.** Open question 8 is answered and the
 `VK_ERROR_UNKNOWN` is gone. `Shaders::Initialize` runs to the end, every compute and graphics
 pipeline is created, and the engine stops at **`CmdExecuteIndirect`**, which is P5.13's refusal
-and [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)'s
+and [P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change)'s
 job. That is the wall this port has been aiming at since Phase 5.
 
 ### Start here
@@ -59,13 +63,15 @@ printf '[Render:RHI]\nEnable_Host_Validation = true\n' > Build/Linux_Release/Eso
 
 VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true \
   ./Build/Linux_Release/Esoterica.Applications.Engine \
-  -map data://demo/render/pbr/pbrdemo.map -packaged
+  -map data://demo/render/pbr/pbrdemo.map
 ```
 
 **Five things about that, each of which cost a session to find:**
 
-- **`-packaged` is required.** Without it the engine uses the network resource provider and tries
-  to start `EsotericaResourceServer.exe`, which is Phase 7. `-packaged` reads
+- **`-packaged` is no longer required, and the command above no longer passes it.** P7.3 opened
+  `EnsureResourceServerIsRunning` to Linux, so the engine starts the Resource Server and reaches
+  it over the network, as the Windows build does. That needs two keys in `Esoterica.ini`; the
+  P7.3 entry has them. `-packaged` still works, and reads
   `Build/Linux_<configuration>/CompiledData` directly, which is what Phase 3 filled.
 - **Run `CompileShaders.sh` and then `NinjaGen.py` again after any shader change.** The generated
   `.cpp` files are picked up by a glob, so the build will not see a new one otherwise.
@@ -100,11 +106,16 @@ the two candidates and how to bisect it when there is hardware to bisect on.
 once the four hardware-gap VUIDs are filtered. That was not true a day ago; see the
 `NoDescriptors` entry.
 
-### What this machine still cannot do
+### What the first machine still cannot do
 
-Four gaps, all hardware. **ANV accepts every one of these modules with validation off**, so the
-engine runs past them; they are shaders that are invalid by the spec and tolerated by the driver,
-which is not the same as correct.
+**This table is about the development laptop, not about the port.** The RTX 3090 machine closes
+four of the five rows, which is why it renders and this one does not. `storageInputOutput16` is
+absent on both, and since P5.20 **no shader in the engine needs it** - the row is a device fact
+with no consequence left.
+
+**ANV accepts every one of these modules with validation off**, so the engine runs past them on
+the laptop; they are shaders that are invalid by the spec and tolerated by the driver, which is
+not the same as correct.
 
 | Gap | Modules that declare it | Intel UHD 620 | NVIDIA MX250 | llvmpipe |
 |---|---|---|---|---|
@@ -165,7 +176,7 @@ still compile-verified only. Each P5.x entry's "Not verified" list stands apart 
 command's root data out of the argument buffer, indexed by `DrawIndex`. **It is deliberately
 sequenced after Phase 6 bring-up**, because nothing here can be tested until the engine runs. Read
 the decision entry and
-[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)
+[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change)
 before starting it. **The frame still cannot draw until it lands.**
 
 **All 16 groups are written. 15 of them are real; P5.13 is the exception and cannot be finished
@@ -482,26 +493,29 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 
 ## In flight
 
-> ### **P7.3 is open as a PR. The whole tree compiles.**
+> ### **Phase 7. Three PRs are open, and P7.6 has not started.**
 >
-> **Start from [Phase7-EditorTools.md](Phases/Phase7-EditorTools.md).** Its "Start here" block
-> names three translation units that still fail; that is stale, all three are fixed. What is left
-> in the phase is P7.2 (the file dialogs, which are still halting stubs), P7.4, P7.5 and P7.6.
+> | Task | State |
+> |---|---|
+> | P7.0, P7.1, P7.3 | merged |
+> | P7.2 file and message dialogs | **PR #68** |
+> | P7.4 `OpenInExplorer` | **PR #69**, stacked on #68 |
+> | P7.5 hot reload | **PR #70**, stacked on #69. Documentation only; no defect found |
+> | P7.6 editor shakedown | not started, and it needs the RTX 3090 machine |
 >
-> **P7.5 is now reachable.** The Resource Server runs and the engine can reach it, so resource
-> hot reload end to end is the next real test.
+> The three are stacked because they all add an entry to this file in the same place. GitHub
+> retargets each to `main` as the one below it merges.
+>
+> **P7.6 is the whole of what is left in Phase 7**, and it cannot be done on the laptop: the
+> editor dies about three seconds after it reaches its frame loop. See [Blocked.md](Blocked.md).
 
 ---
 
-**Phase 5 is merged and has now run.** All seventeen branches went in through PRs #24 to #41,
-ending with `p5.16-raytracing`. P6.6 and P6.7 executed the backend for the first time and found
-four defects in it, all fixed on the stack above. **What is still unverified is most of it**:
-every group's "Not verified" list stands except for the parts the P6.6 entry names.
-
-**[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)
-is still the last piece of Phase 5, and it still comes after P6.8.** It is the indirect draw
-shader change that makes the frame draw geometry, and it cannot be tested until the engine
-reaches a frame loop - which it does not yet, because `vkCreateComputePipelines` fails first.
+**Phase 5 is merged, has run, and the frame it produces is correct.** All seventeen groups went
+in through PRs #24 to #41 and then P5.17 to P5.20. **Four groups have still never executed** -
+P5.11 query pools, P5.12 debug names and markers, P5.15 variable rate shading and P5.16
+raytracing. Every other group's "Not verified" list is historical: the correct frame exercised
+P5.1 to P5.10, P5.13 and P5.17. [Blocked.md](Blocked.md) is the list that matters now.
 
 ---
 
@@ -1458,7 +1472,7 @@ With host validation on and `VK_KHRONOS_VALIDATION_DEBUG_DISABLE_SPIRV_VAL=true`
 - The engine stops in the same place with validation on as with it off, which was the point.
 
 **`CmdExecuteIndirect` is now the only thing left.** That is
-[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started),
+[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change),
 and it can be written against a live engine with validation on.
 
 #### Files
@@ -1626,7 +1640,7 @@ emits a 64-bit sampled image, whose sampled type has to match the view's format,
 before any of that matters.
 
 **The fix is a shader change on both backends, the same shape as
-[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started):**
+[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change):**
 read the pages as `Buffer<uint2>` and assemble the `uint64_t` in the shader. Six sites:
 
 | File | Line |
@@ -4790,7 +4804,7 @@ left the frame unable to draw.
 the argument buffer, indexing with the `DrawIndex` builtin, which is core Vulkan 1.1 through
 `VK_KHR_shader_draw_parameters`. The change hides in the `RHI.esh` macros and is guarded on
 `__spirv__`, so shader bodies and the whole Direct3D 12 path stay as they are. Scheduled as
-**[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change---scheduled-not-started)**,
+**[P5.17](Phases/Phase5-VulkanRHI.md#p517---the-indirect-draw-shader-change)**,
 **after Phase 6 bring-up**, because nothing here can be tested until the engine runs and this
 touches shaders Windows also compiles.
 
