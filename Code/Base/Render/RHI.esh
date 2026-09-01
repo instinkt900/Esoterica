@@ -259,6 +259,65 @@ static uint EE_g_commandIndex = 0;
 
 #endif
 
+// Per-primitive fragment inputs
+//-------------------------------------------------------------------------
+// **Direct3D fixes the mesh-to-pixel interface up at link time and makes no distinction between
+// per-vertex and per-primitive attributes in the pixel shader. Vulkan requires the distinction to
+// be in the SPIR-V.** A mesh shader's per-primitive outputs carry `PerPrimitiveEXT`, and a
+// fragment input only matches one if it carries the decoration too - graphics pipeline libraries
+// mean there is no link step left to infer it in.
+//
+// DXC emits the decoration on the mesh shader side by itself (`DeclResultIdMapper.cpp`) and has
+// no way to emit it on the pixel shader side: HLSL cannot say "per-primitive" about a pixel
+// shader input, `[[vk::perprimitiveEXT]]` does not exist, and `primitives` is rejected outside a
+// mesh shader. See microsoft/DirectXShaderCompiler#6862. So it is written out by hand with the
+// SPIR-V inline intrinsics, which needs no compiler patch.
+//
+// **Only in the pixel shader.** DXC already decorates the mesh shader's outputs, and applying it
+// twice to the same variable is not what is wanted; `__SHADER_TARGET_STAGE` is how the shared
+// struct tells the two stages apart. Both macros are empty everywhere else, so Direct3D 12 and
+// every other stage compile exactly as before.
+//
+// **Two limits, both found by reading `-Fc` rather than by any diagnostic.**
+//
+// The decoration does not reach the flattened stage variable from a member whose type is a
+// struct - it has to go on that struct's own members. And putting it anywhere in a struct the
+// pixel shader copies wholesale into a local produces invalid SPIR-V: the decoration switches
+// DXC to flattening the struct per AST field, and the copy then rebuilds it with one constituent
+// per bitfield into the single member those bitfields lower to. spirv-val rejects it, so it
+// fails loudly at least. `PrimitiveOutput` in RendererTypes.esh is that case, via
+// `MaterialShaderInput::New`, and is left undecorated; `DebugDrawPrimitiveOutput` reads its
+// members directly and is decorated. See "Still open" in Docs/Linux/Progress.md.
+//
+// NVIDIA renders correctly without any of this, so the frame is not the test. `-Fc` is.
+#if defined( __spirv__ ) && ( __SHADER_TARGET_STAGE == __SHADER_STAGE_PIXEL )
+
+// SPV_EXT_mesh_shader: PerPrimitiveEXT is decoration 5271, MeshShadingEXT is capability 5283.
+#define EE_PER_PRIMITIVE                    [[vk::ext_decorate( 5271 )]]
+#define EE_PER_PRIMITIVE_PIXEL_ENTRY        [[vk::ext_capability( 5283 )]] [[vk::ext_extension( "SPV_EXT_mesh_shader" )]]
+
+#else
+
+#define EE_PER_PRIMITIVE
+#define EE_PER_PRIMITIVE_PIXEL_ENTRY
+
+#endif
+
+// **A 16-bit value crossing a stage boundary needs `storageInputOutput16`, and NVIDIA does not
+// have it.** Not a driver gap that will close: no NVIDIA part reports the feature, so a
+// `uint16_t` interpolant makes the module fail to create outright with
+// VUID-VkShaderModuleCreateInfo-pCode-08740. Every resource handle in this engine is a
+// `uint16_t`, so any handle passed from a mesh shader to a pixel shader hits it.
+//
+// A stage variable occupies one location either way, so widening costs nothing, and a handle
+// never exceeds 16 bits so no value changes. The `~0` "no texture" sentinel stays correct because
+// it widens with the type it is assigned to. Direct3D 12 keeps the 16-bit type.
+#ifdef __spirv__
+#define EE_INTERSTAGE_HANDLE uint
+#else
+#define EE_INTERSTAGE_HANDLE GenericResourceHandle
+#endif
+
 BufferHandle RWBufferToBuffer( uint handle )
 {
     return BufferHandle( int( handle ) - 1 );

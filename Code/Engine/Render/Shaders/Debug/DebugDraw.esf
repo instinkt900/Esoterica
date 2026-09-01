@@ -63,10 +63,17 @@ struct DebugDrawVertexOutput
 
 struct DebugDrawPrimitiveOutput
 {
-    bool            m_cullPrimitive                     : SV_CullPrimitive;
-    TextureHandle   m_textureHandle                     : TEXCOORD3;
-    bool            m_lineAA                            : TEXCOORD4;
-    bool            m_pointAA                           : TEXCOORD5;
+    bool                    m_cullPrimitive             : SV_CullPrimitive;
+
+    // EE_INTERSTAGE_HANDLE rather than TextureHandle: a uint16_t here needs storageInputOutput16,
+    // which no NVIDIA part has, and this shader is the only place in the engine that crosses a
+    // stage boundary with one. Unchanged on Direct3D 12. See RHI.esh.
+    EE_PER_PRIMITIVE
+    EE_INTERSTAGE_HANDLE    m_textureHandle             : TEXCOORD3;
+    EE_PER_PRIMITIVE
+    bool                    m_lineAA                    : TEXCOORD4;
+    EE_PER_PRIMITIVE
+    bool                    m_pointAA                   : TEXCOORD5;
 };
 
 [RootSignature( DebugDrawRootSignature )]
@@ -517,6 +524,7 @@ void MS_main(
     }
 }
 
+EE_PER_PRIMITIVE_PIXEL_ENTRY
 [RootSignature( DebugDrawRootSignature )]
 float4 PS_main( DebugDrawVertexOutput vertexInput, DebugDrawPrimitiveOutput primitiveInput ) : SV_TARGET
 {
