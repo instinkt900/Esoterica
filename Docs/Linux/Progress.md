@@ -548,6 +548,110 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-01 - P7.2 `SystemDialogs_Linux.cpp`. The file and message dialogs are real
+
+**The halting stubs are gone.** `SystemDialogs_Linux.cpp` now opens the desktop's own file
+chooser and message boxes. Nothing in `EngineTools` calls `EE_UNIMPLEMENTED_FUNCTION` any more.
+
+- Files changed: `Code/EngineTools/Core/SystemDialogs_Linux.cpp`. The port owns it. It was already
+  in `LinuxSources.txt` and `Exclusions.txt` from Phase 3, so no build file changed.
+- Upstream files edited: **none.** No [TouchedFiles.md](TouchedFiles.md) change.
+- Acceptance criteria: P7.2 is met. `FileDialog::SelectFolder`, `Load`, `Save`, the four
+  `LoadResourceOrDataFile` / `SaveResourceOrDataFile` overloads, and `MessageDialog::ShowInternal`
+  all work.
+
+#### No new dependency: the phase document's option 2 was already in the tree, twice over
+
+The document said to start with `pfd` (portable-file-dialogs), and to fetch it into `External/` if
+it was missing. It is missing, and it is not needed. `pfd` is a wrapper that shells out to
+`zenity` or `kdialog` and parses the output. Both halves of that are already here:
+
+- `Code/EngineTools/ThirdParty/subprocess/` spawns the process. P7.3 proved it works on Linux.
+- `zenity`'s command line is what the desktops agree on. `qarma` is the Qt port of it and
+  `matedialog` is the MATE fork, and **both take the same arguments**, so supporting all three
+  costs one array of names.
+
+So `External/`, `DownloadDependencies.sh` and the include paths are all unchanged.
+
+**`subprocess_create` takes an argv array, not a command line.** Nothing needs quoting or
+escaping, and a filename with spaces or quotes in it survives the round trip. That was checked.
+
+#### What the tool is called with
+
+| Entry point | Arguments |
+|---|---|
+| `SelectFolder` | `--file-selection --directory --filename=<dir>/` |
+| `Load` | `--file-selection [--multiple --separator=\n] --title= --filename= --file-filter=...` |
+| `Save` | `--file-selection --save --confirm-overwrite --title= --filename= --file-filter=...` |
+| `MessageDialog` | `--info` / `--warning` / `--error` / `--question`, plus button labels |
+
+**`ExtensionFilter` needed no header change, and the escalation the document warned about did not
+happen.** `m_filter` holds the Windows double-NUL wide-string format, and it is left alone. The
+filter argument is built from `m_extension` and `m_displayText` instead, which is what the phase
+document asked for. The constructor is otherwise a copy of the Windows one, so both platforms fill
+the struct identically.
+
+**`--confirm-overwrite` is deprecated in zenity 4 and warns on stderr.** It is passed anyway:
+zenity 4 confirms overwrites on its own and ignores the flag, and zenity 3 needs it. Dropping it
+would silently overwrite files for anyone on the older version.
+
+**`--no-markup` on every message.** Messages carry file paths and type names, so `<` and `&` in
+them are text, not Pango markup.
+
+#### Seven Win32 message box layouts onto three buttons
+
+The tool has an OK button, a Cancel button, and one extra button. The extra button reports itself
+by **printing its own label and exiting non-zero**, which is why the label is compared against the
+output. The exit code alone cannot tell "extra button" from "cancel".
+
+| `MessageDialog::Type` | OK label | Cancel label | Extra button |
+|---|---|---|---|
+| `Ok` | - | - | - |
+| `OkCancel` | OK | Cancel | - |
+| `YesNo` | Yes | No | - |
+| `YesNoCancel` | Yes | Cancel | No |
+| `RetryCancel` | Retry | Cancel | - |
+| `AbortRetryIgnore` | Retry | Abort | Ignore |
+| `CancelTryContinue` | Try Again | Cancel | Continue |
+
+`AbortRetryIgnore` maps Abort onto Cancel and Ignore onto Continue, which is what the Win32
+implementation does with `IDABORT` and `IDIGNORE`.
+
+#### With no display, or no tool, the message still reaches the log
+
+`FileDialog` returns an empty result, which every caller already reads as a cancel. `MessageDialog`
+logs the message and returns `Cancel`, exactly as the Phase 3 stub did. **That is the case the
+ResourceCompiler workers run in**, and it is why the check is for `DISPLAY` and `WAYLAND_DISPLAY`
+rather than for the tool alone. The result is resolved once and cached: a missing tool is a
+property of the machine, not of the call.
+
+#### How it was verified
+
+The dialogs cannot be driven by a test, so the code was exercised from a scratch binary linked
+against `libEsoterica.Engine.Tools.so`, with a fake `zenity` first on `PATH` that logs its argv
+and returns a scripted exit code and stdout. That covers the parts a person clicking cannot check
+repeatably:
+
+- Multi-select returns both paths, including one with spaces in the name.
+- `Save` on a name typed without an extension comes back as `newmap.map`. `ValidateResult` appends
+  it, the tool does not.
+- `SelectFolder` on a real directory returns a path with `IsDirectoryPath()` true.
+  `GetFullPathString` stats the path and appends the trailing slash, so nothing extra is needed.
+- All three `YesNoCancel` outcomes map correctly: exit 0 to `Yes`, exit 1 with `No` on stdout to
+  `No`, exit 1 with nothing on stdout to `Cancel`.
+- Both fallbacks log and return `Cancel`.
+
+Then with the **real** zenity: the child process was inspected in `/proc/<pid>/cmdline` while the
+dialog was on screen, and closing it returned an empty result cleanly. **What is still unproven is
+a human clicking a file in the real dialog**, and the appearance of the dialogs themselves.
+
+#### A follow-up this unblocks in the Resource Server
+
+`ResourceServerApplication_Linux` logs a warning and exits when clients are connected, instead of
+asking. The P7.3 entry records why: `MessageDialog::Confirmation` returned `Cancel` unconditionally,
+so asking would have refused every exit and trapped the user in a window that would not close. That
+is no longer true. The confirmation can now be restored to match Windows.
+
 ### 2026-08-31 - Set 0 for an indirect draw, and RenderDoc attaches at last
 
 **Every material draw in the frame was invalid, and the frame is now clean.** Thirty seconds with
@@ -670,7 +774,7 @@ writing `fork` and `execv` by hand; the check paid off.
 | `WM_CLOSE` hides the window | Close exits | Same reason |
 | `ITaskbarList3` progress and busy overlay icons | Nothing | No portable equivalent. The busy state is already on screen in the request list, and the window is visible now |
 | A named single-instance mutex | An `flock` on a lock file | **Kept, and it turned out to be load bearing.** See below |
-| `MessageBox` confirming exit with clients connected | A logged warning, and the exit proceeds | `MessageDialog::Confirmation` on Linux logs and returns false until P7.2. Asking would refuse every exit and trap the user in a window that will not close |
+| `MessageBox` confirming exit with clients connected | A logged warning, and the exit proceeds | `MessageDialog::Confirmation` on Linux logged and returned false until P7.2. Asking would have refused every exit and trapped the user in a window that will not close. **P7.2 fixed that, so this can now be restored** |
 
 #### The single-instance guard is not a nicety, and cutting it was the wrong call
 
@@ -777,7 +881,7 @@ which is [deferred on purpose](#deferred-on-purpose).
   now overrides. The phase document expected to iterate here and there was nothing to iterate on.
 - `EditorApplication::FatalError` calls `MessageDialog::Confirmation`, which on Linux is the
   Phase 3 sibling that logs and returns `Cancel`. So a fatal error is logged and unsaved work is
-  not offered for saving. P7.2 fixes that when it replaces `SystemDialogs_Linux.cpp`.
+  not offered for saving. **P7.2 fixed that**, and the save prompt now appears.
 
 **A whole-tree `ninja -k 0` now fails in the ResourceServer and nowhere else.** The editor links
 in every configuration.
