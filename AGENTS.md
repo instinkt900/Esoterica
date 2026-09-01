@@ -25,7 +25,10 @@ Read these, in order:
    style. These are not negotiable. A violation creates merge debt that someone else pays later.
 2. **[Docs/Linux/Progress.md](Docs/Linux/Progress.md)** - what is done, what is in flight, and the
    open questions.
-3. **The phase document for your task**, in [Docs/Linux/Phases/](Docs/Linux/Phases/).
+3. **[Docs/Linux/Blocked.md](Docs/Linux/Blocked.md)** - what is written but not verified, indexed
+   by the machine that would unblock it. Check it before you conclude something is untested, and
+   add a row to it when your task leaves something unverified.
+4. **The phase document for your task**, in [Docs/Linux/Phases/](Docs/Linux/Phases/).
 
 Then do the task you were given, and nothing else. Do not fix, tidy, reformat, or improve upstream
 code that you read along the way. Conventions rule 3 lists the specific temptations to resist.
@@ -224,10 +227,13 @@ A task is done only when all of these hold:
    edited, with its reason and status.
 5. **[Docs/Linux/Progress.md](Docs/Linux/Progress.md)** records what you did and anything the next
    session needs to know.
-6. **A PR is open** against `main`. Its description states which acceptance criteria are met and
+6. **[Docs/Linux/Blocked.md](Docs/Linux/Blocked.md)** has a row for anything your task wrote but
+   could not verify, saying which machine would unblock it. Delete a row only when the thing is
+   verified.
+7. **A PR is open** against `main`. Its description states which acceptance criteria are met and
    which are not.
 
-Items 4 and 5 keep a chain of independent sessions coherent. Skipping them is the most expensive
+Items 4 to 6 keep a chain of independent sessions coherent. Skipping them is the most expensive
 shortcut available. Include them **in the task's own PR**. The "directly to `main`" allowance
 covers standalone doc updates, not the bookkeeping that belongs with a task.
 

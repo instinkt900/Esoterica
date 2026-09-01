@@ -23,7 +23,8 @@ Then read these, in order, **every session**:
 1. [00-Conventions.md](00-Conventions.md) - the rules. They are not negotiable. A violation
    creates merge debt that someone else pays later.
 2. [Progress.md](Progress.md) - what is done, and what is in flight.
-3. The phase document for your task, in [Phases/](Phases/).
+3. [Blocked.md](Blocked.md) - what is written but not verified, and which machine unblocks it.
+4. The phase document for your task, in [Phases/](Phases/).
 
 Then do the task you were given, and nothing else. Do not fix, tidy, reformat, or improve
 upstream code that you read along the way. See Conventions rule 3.
@@ -39,6 +40,7 @@ upstream code that you read along the way. See Conventions rule 3.
 | [03-Dependencies.md](03-Dependencies.md) | Every Windows dependency and its Linux replacement |
 | [TouchedFiles.md](TouchedFiles.md) | Registry of every upstream file this port modifies |
 | [Progress.md](Progress.md) | Running log of completed and in-flight work |
+| [Blocked.md](Blocked.md) | What is written but not verified, indexed by the machine that unblocks it |
 | [Phases/](Phases/) | Per-phase task specifications |
 
 ## Phases

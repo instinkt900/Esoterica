@@ -169,6 +169,8 @@ to the config.
 
 - [TouchedFiles.md](TouchedFiles.md) lists any upstream file you edited, with the reason.
 - [Progress.md](Progress.md) records what you did, and anything the next agent needs to know.
+- [Blocked.md](Blocked.md) gets a row for anything you wrote but could not verify, and which
+  machine would unblock it.
 
 This keeps a chain of independent agent sessions coherent. Skipping it is the most expensive
 shortcut available to you. See
