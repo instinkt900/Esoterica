@@ -108,6 +108,8 @@ void PS_main( bool isFrontFace : SV_IsFrontFace, VertexOutput vertex, PrimitiveO
 float4 PS_main( bool isFrontFace : SV_IsFrontFace, VertexOutput vertex, PrimitiveOutput primitive PS_DEVTOOLS_ARGS ) : SV_Target
 #endif
 {
+    EE_INDIRECT_PIXEL_ENTRY_INIT
+
     SpatialHashRO                                       spatialHash                 = CreateSpatialHashRO( RootCBV.m_lightCulling_SpatialHashLow, RootCBV.m_lightCulling_SpatialHashHigh );
 
     StructuredBuffer<LightInstance_DirectionalLight>    directionalLightBuffer      = GetBuffer( RootCBV.m_directionalLightBuffer );

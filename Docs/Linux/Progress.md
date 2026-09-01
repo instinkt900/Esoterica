@@ -10,11 +10,11 @@ This file keeps a chain of independent agent sessions coherent. When you start a
 
 ## Current state
 
-> ### **The engine draws geometry on Linux.**
+> ### **The engine renders the pbrdemo map correctly on Linux.**
 >
-> Lit, shaded, textured triangles, on an RTX 3090, with host validation on and zero validation
-> messages. **The image is wrong** - the geometry is scrambled - and that is one remaining defect,
-> described in [Rendering: where we are](#rendering-where-we-are). Everything before it works.
+> Lit, shaded, textured, shadowed geometry with a sky and a reflective ground plane, on an RTX
+> 3090, with host validation on and **zero validation messages** over 30 seconds. No device memory
+> leaked, clean shutdown. See [Rendering: where we are](#rendering-where-we-are).
 >
 > **The advice "do not chase rendering on this machine" applied to the first machine only.** A
 > second machine has a discrete NVIDIA GPU and rendering is exactly what should be chased there.
@@ -289,14 +289,13 @@ Windows build status: **not run.** 69 upstream files carry `+494 -71` lines acro
 
 ## Rendering: where we are
 
-**Read this before touching anything in the render path.** It records what works, the one thing
-that does not, and - more valuable - the eight or so wrong turns that cost a whole session, so the
-next one does not repeat them.
+**Read this before touching anything in the render path.** It records what works, and - more
+valuable - the wrong turns that cost two sessions, so the next one does not repeat them.
 
 ### What works
 
 Verified by running, on an RTX 3090, with `Enable_Host_Validation = true` and **zero validation
-messages** over 25 seconds:
+messages** over 30 seconds:
 
 - The full frame records and submits. No `VK_ERROR_DEVICE_LOST`, no kernel `Xid`, no leaked device
   memory.
@@ -304,24 +303,37 @@ messages** over 25 seconds:
   `clusterVisible = (1,83) (1,84) (1,85) (1,86)`, count 15, dispatch 15x1x1.
 - Mesh shader draws execute: `vkCmdDrawMeshTasksIndirectCountEXT`, resolved indirect count 1,
   `<612,1,1>` workgroups in a full frame.
-- Geometry rasterises with real materials and lighting.
+- **The frame is correct.** Geometry, UVs, textures, normals, image-based lighting, direct
+  lighting, shadows, the sky and the reflective ground plane all render.
 
-### What does not
+### What the two stage-interface defects looked like, and why they hid
 
-**The geometry is scrambled.** Recognisable shading and colour, wrong shapes - triangles fanning
-across the screen. One defect, somewhere in the vertex decode.
+Both are in the 2026-09-01 entry. The short version, because the *symptom* is the misleading part:
 
-The prime suspect is `StaticMeshVertex::GetPosition` in `MeshData.esh`. The struct is
-`uint16_t3 m_compressedPosition`, `int16_t3 m_compressedNormal`, two `float2` UVs and a packed
-colour: 32 bytes, and both `sizeof` on the C++ side and the SPIR-V `ArrayStride` agree on 32, so it
-is **not** a plain size mismatch. It decodes 16-bit values against a per-cluster anchor and a
-shared exponent, and this port has already been bitten once by 16-bit packing (DXC patch 0003).
+- **Locations, not names.** Vulkan matches inter-stage variables by `Location` and DXC numbers
+  them in declaration order, so a mesh shader that declares `out primitives` before
+  `out vertices` disagrees with the pixel shader about every slot. Fixed with
+  `-fvk-stage-io-order=alpha`.
+- **A pixel shader in an indirect draw has no root arguments.** P5.17's `#define RootCBV
+  EE_g_RootCBV` covers the whole translation unit, and only the mesh shader entry point filled
+  the static. Fixed with `EE_INDIRECT_PIXEL_ENTRY_INIT`.
+
+**Neither produces an error, anywhere.** `SV_Position` is a builtin with no location, so geometry
+still lands in the right place and only shading is wrong - which reads as a geometry bug. Both
+modules are individually valid, so validation is silent. **When shading is wrong but the
+silhouettes are right, suspect the stage interface before the vertex data.**
 
 **`HLSL_STATIC_ASSERT` is compiled out on SPIR-V** (`RHI.esh:68`), because DXC's SPIR-V back end
 does not implement `_Static_assert`. Every shared-struct size check is therefore absent on Linux
 and present on Windows. That is worth remembering for any layout suspicion.
 
-### The two bugs that were fixed, and why they hid so well
+**A layout suspicion is answerable in a minute, so answer it instead of carrying it.** Write a
+ten-line compute shader that includes the `.esh` and touches the struct, compile it with the same
+flags the Reflector uses, and read the `OpMemberDecorate ... Offset` lines out of `-Fc`. That is
+how `StaticMeshVertex` and `MeshCluster` - the previous handoff's prime suspect - were cleared:
+both match the C++ byte for byte, including the signed 24-bit anchor bitfields.
+
+### The two earlier bugs, and why they hid so well
 
 **Every triangle was back-face culled.** `frontFace` was inverted. The comment on that line said
 so itself - "the classic porting bug ... reasoned, not verified" - and the reasoning counted a
@@ -337,14 +349,22 @@ tolerates reading it as `Buffer<uint>`, which is why it never surfaced.
 Either bug alone produces a completely black frame, which is why fixing one at a time showed
 nothing and made both look like something else.
 
-### The one technique that cracked it
+### The two techniques that cracked it
 
 **`vkCmdClearAttachments` inside the live render pass, immediately after the draw.** It turned the
 window green while the draw itself wrote nothing. A clear inside a render pass instance bypasses
 culling and fragment shading but shares the attachment, the render area, the image view and
 present - so it separates "the primitive was culled" from every other explanation in one step.
 
-Reach for that first next time. It would have saved most of a session.
+**Bisecting the pixel shader one line at a time, against a deterministic frame.** Force
+`debugVisMode` to `ALBEDO`, then `NORMALS`, then `SSAO`; tint the inside of a branch to prove it
+was entered; write the three lighting terms into R, G and B at the end of `PS_main`. Each is one
+line, a two-minute rebuild and a screenshot, and each removes a branch of the tree for good. This
+is what separated "the geometry is wrong" from "the shading inputs are wrong", which was the whole
+question.
+
+It only works because the frame is reproducible - see the Xvfb note below. Do this before
+reaching for RenderDoc.
 
 ### Measurement traps that produced confidently wrong answers
 
@@ -358,8 +378,27 @@ Each of these was believed, written down, and later disproved:
 | De-duplicating the log by collapsing adjacent lines | "Descriptor heap slot 2 is double-allocated" | Every message is logged twice and the two copies interleave. Add a sequence number before drawing conclusions from ordering |
 | Testing one override at a time | "Not the indices, not the counts, not the culling" | Two independent bugs. Any single override still gave black. Combine overrides, or fix the cheapest confirmed bug first |
 | Overriding a shader with an early `return` | Engine asserts at startup | DXC strips resources nothing references, the reflected layout stops matching the root signature. Keep every declared resource live - multiply it by `1e-9` and add it to the result |
+| "Scrambled geometry" | A vertex decode bug, and a whole handoff written around one | Correct geometry, drawn in wireframe by a debug overlay that garbage flags had switched on, over surfaces shaded from garbage. **Name what you can see, not what you infer**: the orange was `float3( 1.0, 0.4, 0.0 )`, a literal in `MaterialShaderPBR.esh`, and grepping the colour would have found it in a minute |
+| Screenshotting the developer's desktop | An occluding window captured instead of the engine, twice | Run the engine on its own `Xvfb` display. It also makes the frame byte-identical run to run, which is what makes a one-line A/B worth anything |
 
 ### How to capture a frame
+
+**Render on a private display**, not the desktop. It keeps captures reproducible and keeps other
+windows out of them:
+
+```bash
+Xvfb :77 -screen 0 5120x1440x24 &
+DISPLAY=:77 ./Build/Linux_Release/Esoterica.Applications.Engine -map data://demo/render/pbr/pbrdemo.map -packaged &
+sleep 22
+WID=$( DISPLAY=:77 xwininfo -root -tree | grep '"Esoterica Engine"' | grep -oP '0x[0-9a-f]+' | head -1 )
+DISPLAY=:77 xwd -id $WID -silent > frame.xwd && ffmpeg -i frame.xwd frame.png
+```
+
+**The screen has to be at least as large as the saved window position.** SDL restores it from
+`EsotericaEngine.layout.ini`, which on a multi-monitor desktop can be `+3424+74`; a smaller Xvfb
+screen puts the window off-screen and every capture comes back black.
+
+The same 22-second capture is pixel-identical between runs, so two builds can be diffed directly.
 
 RenderDoc is **not** packaged by Ubuntu; it is an official tarball, and `renderdoc_1.45` matches
 the `renderdoc_app.h` pin in `DownloadDependencies.sh`.
@@ -388,11 +427,19 @@ wrote during the frame - those need a replay, or a readback.
 read `m_pMappedAddress_WriteCombined` a few hundred frames later. For a texture, a temporary
 `vkCmdCopyImageToBuffer` plus the correct `oldLayout` works the same way.
 
-### Still open, beyond the scrambled geometry
+### Still open
 
 - **`storageInputOutput16` is absent on NVIDIA.** `DebugDraw.esf` passes a `uint16_t` handle from
   the mesh stage to the pixel stage, so those modules fail to create. Two VUIDs guard it; survey
-  past them with `VK_LAYER_MESSAGE_ID_FILTER=0x6e224e9,0x715035dd`.
+  past them with `VK_LAYER_MESSAGE_ID_FILTER=0x6e224e9,0x715035dd`. **This is now the last thing
+  standing between the engine and a run with no filters at all**, and it is a shader change, not
+  a hardware wait: the handle only needs to cross the stage boundary as a `uint`.
+- **A fragment shader reading a mesh shader's per-primitive output is not decorated
+  `PerPrimitiveEXT`.** DXC emits the decoration on the mesh shader's outputs
+  (`DeclResultIdMapper.cpp:3635`) and has no way to emit it on the pixel shader's inputs - there
+  is no `[[vk::perprimitiveEXT]]` attribute, it is rejected as an unknown attribute. NVIDIA
+  tolerates the mismatch and the frame is correct, but this is a genuine interface gap and another
+  driver need not. A fourth entry in `Code/Scripts/DXCPatches` is the fix if one ever complains.
 - **The same query-as-enable-request pattern** used for the mesh shader features is still in place
   for the shading rate, acceleration structure and ray tracing blocks. None has a cross-dependency
   VUID today.
@@ -414,6 +461,7 @@ correct-enough to keep going and wrong enough to sweep before the port is called
 | The cluster culling argument buffer is never cleared | `Renderer_ForwardShading.cpp:730`, beside the two counter clears | One line in an **upstream engine file**, and Direct3D 12 never needed it because its indirect count stops the walk | The indirect compute loop is only correct while `maxNumCommands` is 1, which is what the pbrdemo scene happens to pass. Beyond that a command past the GPU-written count reads a stale slot |
 | Attachment transitions use `ALL_COMMANDS` and all-access masks | `TransitionAttachmentIfNeeded`, `RHI_Vulkan.cpp` | Nothing at the call site says what last touched the image or what the pass will do to it | Over-synchronisation. Correct, slow. Belongs with the other `ALL_COMMANDS` sites above |
 | Mesh draws are dropped instead of halting | `CmdSetPipeline`, `RHI_Vulkan.cpp` | No GPU here has `VK_EXT_mesh_shader`, and halting stopped the frame before anything else could be exercised | **A frame missing its geometry is not a rendered frame.** It warns once. On hardware with mesh shaders the branch never runs |
+| A pixel shader in an indirect draw reads command 0's root **constants** | `EE_INDIRECT_PIXEL_ENTRY_INIT`, `RHI.esh` | There is no `DrawIndex` in a fragment shader, and carrying the command index across the stage boundary means a new per-primitive attribute in upstream structs | Nothing today. Exact for the root **CBV**, because `BucketResolve.esf:41` writes the same address into every command. The per-command root constants - `m_clusterOffset`, `m_renderViewIndex`, `m_clusterVisibleBuffer` - would be command 0's, and no pixel shader reads one. **A pixel shader that starts reading one gets silently wrong data past the first command** |
 | An indirect `RootSRV` cannot be read | `CreateCommandSignature`, `RHI_Vulkan.cpp` | Only `RootConstants` and `RootCBV` have indirect declarations. `DebugDrawMesh.esf` declares a `RootSRV`, so a signature can carry one | Nothing indexes it yet. A shader that did would need a third declaration macro |
 | ~~The `GPU hang` after a full frame~~ **Fixed.** It was `vkCmdSetFragmentShadingRateKHR` on a transfer command buffer, not the dropped mesh draws. See the 2026-08-31 NVIDIA entry | `BeginCommandBuffer`, `RHI_Vulkan.cpp` | Was recorded as unresolvable without mesh hardware. That was wrong: the kernel named it as `Xid 32` throughout, and a GPU with dedicated queue families made it reproducible | Nothing now. The frame loop runs and shuts down clean |
 
@@ -779,6 +827,116 @@ two places now:
   `ResourceServerUI.cpp:799` and `:811`. That is P7.3.
 
 Nothing else in the tree fails.
+### 2026-09-01 - **The frame is correct.** Two stages disagreed on every location, and the pixel shader had no root arguments
+
+**The pbrdemo map renders correctly on Linux**: lit, textured, shadowed geometry, a sky, a
+reflective ground plane. 30 seconds, host validation on, **zero validation messages**, no device
+memory leaked, clean shutdown. Two defects, both found by measurement, neither where the previous
+session's handoff pointed.
+
+**The handoff's prime suspect was wrong, and cheap to clear.** It named
+`StaticMeshVertex::GetPosition` in `MeshData.esh` and 16-bit packing. Compiling the struct's
+decode to SPIR-V and reading the offsets settles it in one step: positions at byte 0/2/4, normals
+at 6/8/10, UVs at 12 and 20, colour at 28 - identical to the C++ side. `MeshCluster` is the same
+story, and its signed 24-bit anchor bitfields come out as `OpBitFieldSExtract 0 24`, correct.
+**Do this before believing any layout hypothesis**: `dxc -spirv -Fc` on a ten-line shader that
+touches the struct costs a minute and answers the question exactly.
+
+#### The mesh shader and the pixel shader disagreed on every `Location`
+
+**Direct3D matches inter-stage variables by semantic name. Vulkan matches them by `Location`,
+and DXC numbers those in declaration order.**
+
+`MS_main` declares `out primitives PrimitiveOutput` *before* `out vertices VertexOutput`, so the
+mesh shader gave TEXCOORD4-9 locations 0-5 and TEXCOORD0-3 locations 6-9. `PS_main` takes
+`VertexOutput` first, so the pixel shader numbered the same ten semantics 0-9 in order. Nothing
+lined up:
+
+| Semantic | MS output | PS input |
+|---|---|---|
+| TEXCOORD0 `m_worldPosition` | 6 | 0 |
+| TEXCOORD2 `m_uv` | 8 | 2 |
+| TEXCOORD4 `m_data0` | 0 | 4 |
+| TEXCOORD6 `m_primitiveFlags` | 2 | 6 |
+
+The pixel shader read the primitive flags where the world position was written. The visible
+result was **the orange wireframe overlay** - `RENDERER_DEBUG_FLAG_SHOW_WIREFRAME` happened to
+fall out of the garbage, and `float3( 1.0, 0.4, 0.0 )` in `MaterialShaderPBR.esh:389` is exactly
+the colour on screen. What the session before called scrambled geometry was **not geometry at
+all**: it was correct triangles, traced in wireframe by a debug path that was never asked for,
+over surfaces shaded from garbage.
+
+Fixed with `-fvk-stage-io-order=alpha`, Linux only. Both stages sort by semantic string before
+numbering, so the order the entry point happens to declare its parameters in stops mattering.
+DXC already forces this for hull and domain shaders, for exactly this reason. **No shader file
+changes.** There are no vertex-buffer inputs anywhere in this engine - geometry is pulled in the
+mesh shader, and `RHI_Vulkan.cpp` never builds a `VkVertexInputAttributeDescription` - so VSIn
+ordering, the one case where a location is a contract with the CPU side, cannot be affected.
+
+**Nothing diagnoses this.** Both modules are internally valid, the location sets are the same
+size, and `SV_Position` is a builtin that never had a location - so the geometry rasterises in
+the right place and only the shading is wrong.
+
+#### The pixel shader read its root arguments out of two zeroed statics
+
+With the locations fixed the geometry appeared, correctly shaped and correctly textured, and
+**every lit surface was still pure black.**
+
+P5.17 made the shader pull its own root arguments out of the indirect argument buffer, and
+`DefaultMeshShader.esh` renames `RootConstants` and `RootCBV` onto two statics **for the whole
+translation unit**. `MaterialShaderPBR.esh` is included into the same file, so `PS_main` reads
+those statics too - and only `MS_main` ever calls the init that fills them. A static nothing
+assigns is zero. The pixel shader's SPIR-V has **no set 0 binding at all**, which is the tell:
+`grep DescriptorSet` on the module shows set 1 and nothing else.
+
+So every `RootCBV` field the pixel shader read came back 0. `m_dfgTexture`, `m_radianceTexture`
+and `m_irradianceTexture` were handle 0, so `ComputeIBL` returned black; `m_numDirectionalLightPages`
+was 0, so the light loop never ran. Albedo was correct throughout, which is what made this look
+like a lighting bug rather than a binding bug - `m_shaderDataBuffer` was 0 too, and heap slot 0
+happens to be that buffer.
+
+`EE_INDIRECT_PIXEL_ENTRY_INIT` in `RHI.esh`, one line at the top of each affected `PS_main`,
+empty on Direct3D 12.
+
+**There is no `DrawIndex` in a fragment shader**, so it reads command `m_commandIndexBase`, which
+`CmdExecuteIndirect` sets to 0 for a draw. That is exact for the root CBV:
+`BucketResolve.esf:41` writes the same `RootCBV.m_deviceAddress` into every command it emits, so
+the CBV does not vary across the argument buffer. It is not exact for root constants that do vary
+per command, and that is recorded in [Deferred on purpose](#deferred-on-purpose).
+
+#### How each step was measured
+
+Every one of these was a single-line shader change, a rebuild and a screenshot, and each
+eliminated one branch of the tree:
+
+| Change | What it proved |
+|---|---|
+| `IsTriangleCulled(...) && false` | Not the software cull |
+| `triangleIndices = min( triangleIndices, numClusterVertices - 1 )` | Pixel-identical frame, so no index was ever out of range |
+| Colour pass depth `Equal` to `GreaterEqual`, then `m_depthTest = false` | Not a depth-prepass mismatch - and the frame that came back was **clean wireframe**, which named the defect |
+| `debugFlags = 0; debugVisMode = NONE` | The wireframe overlay was supplying every visible pixel |
+| `debugVisMode = ALBEDO`, then `NORMALS` | Geometry, UVs, textures and normals all correct |
+| `result.rgb += float3( 0, 0.25, 0 )` inside the lighting branch | The rocks do enter it, so `DISABLE_LIGHTING` was not set |
+| `result.rgb = float3( IBL, directLight, shadow )` | IBL 0, direct light 0, shadow 1 - uniformly, everywhere |
+
+**Run it on a private display.** `Xvfb :77 -screen 0 5120x1440x24` plus
+`xwd -id <window>` captures the engine window without photographing the developer's desktop, and
+makes the frame reproducible: the same 22-second capture is pixel-identical run to run, which is
+what makes an A/B of a one-line shader change worth anything.
+
+**The window position comes from `EsotericaEngine.layout.ini`**, so the Xvfb screen has to be at
+least as large as that saved position or the window lands off-screen and every capture is black.
+
+#### Files
+
+- Files changed: `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.cpp`
+  (the port owns its Linux branches).
+- Upstream files edited: `Code/Base/Render/RHI.esh` (19 added, 0 modified),
+  `Code/Engine/Render/Shaders/Renderer/MaterialShaderPBR.esh` and
+  `Code/Engine/Render/Shaders/Debug/DebugDrawMesh.esf` (2 added each, 0 modified). All additions,
+  all no-ops on Direct3D 12. Registered in [TouchedFiles.md](TouchedFiles.md).
+- Acceptance criteria: **Phase 6 criterion 2 is met.** A map renders, and it renders correctly.
+
 ### 2026-08-31 - **Geometry renders.** Every triangle was culled, and every index read zero
 
 **The engine draws lit, shaded, textured geometry on Linux.** Host validation on, zero validation

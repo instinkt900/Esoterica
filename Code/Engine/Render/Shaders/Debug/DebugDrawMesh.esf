@@ -205,6 +205,8 @@ void MS_main
 [RootSignature( DebugDrawMeshRootSignature )]
 float4 PS_main( VertexOutput vertex, PrimitiveOutput primitive, linear float3 barycentrics : SV_Barycentrics ) : SV_Target
 {
+    EE_INDIRECT_PIXEL_ENTRY_INIT
+
     float dotNL = dot( normalize( vertex.m_worldNormal ), normalize( float3( -1, -1, -1 ) ) );
 
     float3 color = vertex.m_color.rgb;
