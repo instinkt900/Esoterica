@@ -606,8 +606,9 @@ Memory leak detected (span->list_size == span->used_count) at Code/Base/ThirdPar
 ```
 
 and traps. **Reproduced with zero clients and no dialog shown**, so it is not this change, and not
-P7.2's. It contradicts Phase 6 criterion 8 for this application; the engine's own shutdown is
-clean.
+P7.2's. **Root-caused since**: `Network::Server` never drains `m_receivedMessages` at shutdown.
+It is upstream, platform-neutral, and intermittent. See
+[Upstream issues observed](#upstream-issues-observed).
 
 **Destroying the window out from under the application asserts.** `xdotool windowclose` sends
 `XDestroyWindow` rather than `WM_DELETE_WINDOW`, and the next swapchain acquire fails:
@@ -6301,6 +6302,45 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `Network::Server` and `Network::Client` never drain `m_receivedMessages` at shutdown
+
+**This is the Resource Server's "Memory leak detected" on exit, and it is not a Linux defect.**
+
+`Server::m_receivedMessages` is a `TLockFreeQueue<Message*>`. The websocket receive callback runs
+on ixWebSocket's per-connection threads and fills it with `EE::New<Message>`
+(`NetworkServer_WebSockets.cpp:35`). It is drained in exactly one place: `Server::Update`, on the
+main thread, which deletes each message as it handles it (`NetworkServer.cpp:24-37`).
+
+**Nothing drains it at shutdown.** `~Server()` is `= default`, and `Server_WS::Stop` deletes the
+`ix::WebSocketServer` without touching the queue. So every message that arrives after the last
+`Update` and before `stop()` is allocated and never freed, and `rpmalloc_finalize` reports it:
+
+```
+Shutting down low level socket/threading support.
+Memory leak detected (span->list_size == span->used_count) at Code/Base/ThirdParty/rpmalloc/rpmalloc.c:1424
+```
+
+**`Client` has the same shape** - same undrained queue, same `= default` destructor
+(`NetworkClient.h:31`, `:81`) - so the engine and the editor can hit it too. They rarely do,
+because a client's inbound traffic at shutdown is much thinner than a server's.
+
+Both files are platform-neutral. **Windows has this too**, and has probably never noticed, because
+it only fires when a message lands in that window.
+
+#### Why it looks like a Linux defect, and how to tell it apart
+
+- **It is intermittent.** Three runs in four on this machine, with **zero external clients**: the
+  three compiler workers are themselves websocket clients and heartbeat continuously, so the
+  server always has traffic to catch.
+- **It does not reproduce under `gdb`**, which is the tell. The debugger changes the timing enough
+  that the last `Update` drains the queue.
+- **The engine shuts down clean**, which made it look Resource-Server-specific. It is not; it is
+  `Server` versus `Client` traffic volume.
+
+Do not go looking for a missing `ShutdownThreadHeap`. `Memory::InitializeThreadHeap` is called on
+these threads and deliberately never finalized - the comment in `Memory.cpp:68` says so, and
+relies on `rpmalloc_finalize` to release the heaps. That is fine. The leak is a real one.
 
 ### `ResourceServerContext::Initialize` leaks its `CompilerRegistry` on every failure path
 
