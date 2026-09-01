@@ -107,6 +107,32 @@ branch never merges it.**
 This rule holds even with one person driving the work: **the agent writes, the human reviews.**
 That is the whole value of the checkpoint. It disappears if the agent both writes and merges.
 
+### What the PR description says
+
+**Describe the change, not the work that produced it.**
+
+Cover:
+
+- What the change does, and how that addresses the problem it sets out to solve.
+- How to verify it, where that is not obvious from the diff.
+- How to use anything new, when the PR adds a feature, a macro or a flag that other code calls.
+- Which acceptance criteria from the phase doc are met, and which are not.
+
+Leave out:
+
+- The order things were tried in.
+- Wrong turns, dead ends, and hypotheses that did not survive.
+- Narration of the investigation: what was suspected, what was ruled out, what turned out to be
+  the case.
+
+A reviewer is deciding whether to merge the diff in front of them. The route taken to it does not
+help with that decision, and burying the change under a travelogue makes the decision harder.
+
+None of that means throwing the investigation away. **It belongs in
+[Docs/Linux/Progress.md](Docs/Linux/Progress.md)**, which exists to carry exactly that between
+sessions - what was measured, what misled, and what the next session should not repeat. Two
+documents, two audiences. Keep them apart.
+
 ### What may go directly to `main`
 
 Documentation and bookkeeping only:

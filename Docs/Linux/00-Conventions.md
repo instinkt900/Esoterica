@@ -174,6 +174,11 @@ This keeps a chain of independent agent sessions coherent. Skipping it is the mo
 shortcut available to you. See
 [/AGENTS.md, Definition of done](../../AGENTS.md#definition-of-done) for the full checklist.
 
+**Progress.md is where the investigation goes, not the PR description.** What you measured, what
+misled you, and what the next session should not repeat all belong here. The PR describes the
+change and how it solves the problem. See
+[/AGENTS.md, What the PR description says](../../AGENTS.md#what-the-pr-description-says).
+
 ## Rule 10 - Report honestly
 
 If a phase does not meet its acceptance criteria, say so plainly, and say which ones. Do not
