@@ -127,7 +127,6 @@ machine assumes they are waiting on hardware.
 | 3 | **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should.** `DebugDrawPrimitiveOutput` was fixed by P5.20; `PrimitiveOutput` in `RendererTypes.esh` was not, because `MaterialShaderInput::New` copies the struct into a local and DXC then builds SPIR-V that spirv-val rejects. Two ways out, neither cheap: a packed `uint` with accessors, which reaches Direct3D 12; or a fourth `Code/Scripts/DXCPatches` entry. **Not urgent** - NVIDIA renders correctly without it - but another driver need not be so forgiving | [P8.5](Phases/Phase8-Completion.md#p85---shader-conformance) | [Rendering: where we are](Progress.md#still-open) |
 | 4 | **The six sanitizer configurations have never been built.** They all generate; no output directory has ever existed. TSan is the interesting one on an engine with a task system | [P8.6](Phases/Phase8-Completion.md#p86---sanitizers-and-build-coverage) | Progress.md, 2026-09-02 docs entry |
 | 5 | **The items in [Deferred on purpose](Progress.md#deferred-on-purpose).** Known shortcuts, chosen rather than missed. Each is correct-enough to keep going and wrong enough to sweep before the port is called done. Not duplicated here | [P8.4](Phases/Phase8-Completion.md#p84---rhi-debt-sweep) | [Progress.md](Progress.md#deferred-on-purpose) |
-| 6 | **`requirements_gamenetworkingsockets` does not version-check `protoc`.** A stale one earlier on `PATH` is accepted and fails deep inside the build | - | [Rendering: where we are](Progress.md#still-open) |
 
 ---
 
