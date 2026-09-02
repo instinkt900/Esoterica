@@ -319,7 +319,12 @@ that had to be fixed before the shakedown could see anything.
 [Progress.md](../Progress.md#deferred-on-purpose).** Those are known, chosen shortcuts, not
 things to rediscover. If you hit one, check that list before investigating.
 
-This is the last planned phase. Record this in [Progress.md](../Progress.md):
+**This was the last planned phase, and it is no longer.**
+[Phase 8](Phase8-Completion.md) collects what is left after the port works: the Windows build, the
+runtime shakedown, the deferred debt, and the fork review. It was added on 2026-09-02, once the
+editor worked and it became clear that "done" and "verified" were not the same date.
+
+Record this in [Progress.md](../Progress.md):
 
 - The `SystemDialogs` implementation you chose, and its limits.
 - Whether the Resource Server runs with a GUI or headless, and why.
@@ -329,8 +334,9 @@ This is the last planned phase. Record this in [Progress.md](../Progress.md):
 
 ## Beyond this phase
 
-These are out of scope on purpose. They are recorded here so that nobody mistakes them for
-oversights.
+These are out of scope for the **whole port**, not just this phase. They are recorded here so that
+nobody mistakes them for oversights, and
+[P8.7](Phase8-Completion.md#p87---fork-review) is expected to say so explicitly.
 
 - **Profiling.** This port drops Optick. Tracy is the natural replacement. It is a separate
   optional workstream.

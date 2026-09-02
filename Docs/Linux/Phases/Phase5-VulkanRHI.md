@@ -27,11 +27,17 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 > render path: it records what works, the two bugs that each cost a session, and the measurement
 > traps that produced confidently wrong answers.
 >
-> **One group has still never executed: P5.16 raytracing.** It is a row in
-> [Blocked.md](../Blocked.md). P5.11, P5.12 and P5.15 were verified on 2026-09-01 - the first
-> with a temporary in-engine harness, the other two from a frame capture - and **every other
-> group's "Not verified" list is historical**, because the correct frame exercised P5.1 to P5.10,
-> P5.13 and P5.17.
+> **One group has still never executed: P5.16 raytracing - and nothing can make it.** It has zero
+> callers and there are no raytracing shaders, so it is dead code on Direct3D 12 too. See P5.16
+> below, and [P8.3](Phase8-Completion.md#p83---raytracing-or-the-decision-not-to). P5.11, P5.12
+> and P5.15 were verified on 2026-09-01 - the first with a temporary in-engine harness, the other
+> two from a frame capture - and **every other group's "Not verified" list is historical**,
+> because the correct frame exercised P5.1 to P5.10, P5.13 and P5.17.
+>
+> **What this phase still owes is collected in
+> [Phase 8](Phase8-Completion.md).** Criteria 1, 7, 8, 9 and 11 all end there: the two remaining
+> `EE_UNIMPLEMENTED_FUNCTION` markers, the Windows frame comparison, mesh picking, the RenderDoc
+> trigger, and the Windows build itself.
 >
 > **Running the backend found eleven defects in this phase's own code**, all fixed. That is the
 > best available evidence for how much a "written but never run" group is worth:
@@ -264,6 +270,14 @@ This is the largest optional-feature group. `AccelerationStructureBuildFlags`,
 `AccelerationStructureGeometryFlags`, and `AccelerationStructureInstanceFlags` map closely onto
 their `VK_KHR_acceleration_structure` equivalents, so it is more mechanical than it looks.
 
+**Written, and it has never executed - because nothing can make it execute.**
+`CreateAccelerationStructure`, `CmdDispatchRays` and `RaytracingShaderTable` have **zero callers**
+across `Code/Engine`, `Code/EngineTools` and `Code/Game`, and the tree contains no raytracing
+shaders. It is dead code on Direct3D 12 for the same reason, exactly like OIT. Verifying it means
+a scratch harness or a formal decision not to; that is
+[P8.3](Phase8-Completion.md#p83---raytracing-or-the-decision-not-to). **Do not add a raytracing
+renderer to the engine to give it a caller.**
+
 ### P5.17 - The indirect draw shader change
 
 > **Done, and verified.** The frame draws geometry correctly on an RTX 3090 with host
@@ -480,23 +494,27 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    **nothing has been compared against Windows**, because no Windows build has been run. The
    comparison is a row in the Windows queue in [Blocked.md](../Blocked.md).
 8. Feature parity is demonstrated for forward shading, cascaded shadows, GTAO, SMAA, OIT, mesh
-   picking, and debug draw. Name each one, and verify each one. **Met for four of seven, and
-   three cannot be met as written.** Named one at a time, from a frame capture on the RTX 3090
-   plus two A/B runs:
+   picking, and debug draw. Name each one, and verify each one. **Met for five of seven. One
+   cannot be met, and one is owed to
+   [P8.4](Phase8-Completion.md#p84---rhi-debt-sweep).** Named one at a time, from a frame capture
+   on the RTX 3090, two A/B runs, and the P7.6 editor shakedown:
    - **Forward shading** - verified. Three passes, 8 indirect mesh draws each across 4 buckets.
    - **Cascaded shadows** - verified. 4 cascades, 32 indirect mesh draws, shadow visible.
    - **GTAO** - verified. A/B against `Enable_SSAO = false` changes geometry and ground contact
      and leaves the sky untouched.
    - **SMAA** - verified. A/B against `Enable_SMAA = false` shows stair-stepped silhouettes with
      it off and smooth ones with it on.
-   - **Debug draw** - the pass records, its pipelines create and it issues 5 indirect mesh draws.
-     Whether a debug primitive is visible is unproven, because pbrdemo submits none. Settles in
-     the editor, under P7.6.
+   - **Debug draw** - **verified, 2026-09-01, in the editor.** A selected entity's bounds draw as
+     a yellow line in the map editor viewport, which is the first debug primitive this port has
+     produced. It needed the `EE_IndirectRoot` fix in P7.6; before that the direct dispatch in
+     `DebugDraw.esf` inherited the previous indirect draw's root arguments and hung the GPU.
    - **OIT** - **cannot be met.** `OITResolve.esf` compiles but nothing looks it up or creates a
      pipeline for it, and `OIT.esh` has no consumers. The feature does not run on Direct3D 12
      either, so no Linux work can demonstrate it.
-   - **Mesh picking** - **not reachable here.** Gated on `IsPickingEnabled()` inside
-     `#if EE_DEVELOPMENT_TOOLS`, so it only runs from an editor viewport. Belongs to P7.6.
+   - **Mesh picking** - **still not verified.** Gated on `IsPickingEnabled()` inside
+     `#if EE_DEVELOPMENT_TOOLS`, so it only runs from an editor viewport. P7.6 opened that
+     viewport but did not check picking, so it is owed to
+     [P8.4](Phase8-Completion.md#p84---rhi-debt-sweep).
 9. RenderDoc capture works on Linux, through `BeginFrameCapture` and `EndFrameCapture`. **Half
    met.** Captures are taken and read - `renderdoccmd convert` answered most of the questions in
    the render bring-up - but nothing in the engine calls `TriggerCapture`, so a capture needs the

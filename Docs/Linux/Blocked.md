@@ -12,6 +12,17 @@ the entry that explains it.
 
 ---
 
+## This is not the remaining-work list
+
+**It is the subset of it that is blocked on hardware.** Everything left in the port is in
+[Phase 8](Phases/Phase8-Completion.md), which is ordered by size and includes plenty that is
+blocked on nothing at all - the runtime shakedown, the sanitizer builds, the RHI debt sweep, the
+fork review.
+
+The two files overlap on purpose and neither subsumes the other. This one is *"which desk do I
+need"*; Phase 8 is *"what is left, and how big"*. The Windows queue below is
+[P8.1](Phases/Phase8-Completion.md#p81---the-windows-build) seen from the desk.
+
 ## How to use this
 
 Sit down at a machine, read the section for that machine, and work down it. The rows are ordered
@@ -64,7 +75,13 @@ closed P5.11. See the "GPU-blocked queue, part 1" and P5.11 entries in Progress.
 
 | # | Group | What to check first | Detail in |
 |---|---|---|---|
-| 5 | **P5.16 raytracing** | All of it. No structure built, no ray traced, no raytracing pipeline compiled. **Assume none of it works.** The largest thing left in this queue | Progress.md, P5.16 entry |
+| 5 | **Mesh picking.** The last unverified item in criterion 8. Gated on `IsPickingEnabled()` inside `#if EE_DEVELOPMENT_TOOLS`, so it needs an editor viewport. Click an entity in the map editor and confirm the picked entity is the one under the cursor | Phase 5 criterion 8, and [P8.4](Phases/Phase8-Completion.md#p84---rhi-debt-sweep) |
+
+**P5.16 raytracing is no longer a row here.** It is not blocked on hardware: the 3090 has the
+extensions and the code is written. It is blocked on there being **nothing that calls it** - zero
+callers across `Code/Engine`, `Code/EngineTools` and `Code/Game`, and no raytracing shaders, on
+either backend. That makes it a decision rather than a measurement, and it moved to
+[P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to).
 
 ### One thing only a different driver will find
 
@@ -98,13 +115,19 @@ authoritative status of each file; the rows below say what to do about it.
 
 ## Needs neither, and is easy to mistake for a hardware wait
 
-**Do not park these behind a machine. They are ordinary work.**
+**Do not park these behind a machine. They are ordinary work**, and they are the reason this file
+is not the remaining-work list. Each has a task in
+[Phase 8](Phases/Phase8-Completion.md); the rows here exist so that nobody sitting at the wrong
+machine assumes they are waiting on hardware.
 
-| # | What to do | Where | Detail in |
+| # | What to do | Task | Detail in |
 |---|---|---|---|
-| 1 | **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should.** `DebugDrawPrimitiveOutput` was fixed by P5.20; `PrimitiveOutput` in `RendererTypes.esh` - the material shaders and `DebugDrawMesh.esf` - was not, because `MaterialShaderInput::New` copies the struct into a local and DXC then builds SPIR-V that spirv-val rejects. Two ways out, neither cheap: a packed `uint` with accessors instead of the nested bitfield struct, which reaches Direct3D 12; or a fourth `Code/Scripts/DXCPatches` entry. **Not urgent** - NVIDIA renders correctly without it - but another driver need not be so forgiving | `RendererTypes.esh` | [Rendering: where we are](Progress.md#still-open) |
-| 2 | **The items in [Deferred on purpose](Progress.md#deferred-on-purpose).** Known shortcuts, chosen rather than missed. Each is correct-enough to keep going and wrong enough to sweep before the port is called done. Not duplicated here | various | [Progress.md](Progress.md#deferred-on-purpose) |
-| 3 | **`requirements_gamenetworkingsockets` does not version-check `protoc`.** A stale one earlier on `PATH` is accepted and fails deep inside the build | `DownloadDependencies.sh` | [Rendering: where we are](Progress.md#still-open) |
+| 1 | **The engine has never simulated.** "Play Map" has never been pressed, no physics body has been seen to move, and no animation graph has been evaluated. Needs a skeletal asset imported first, since `Data/` has none. **The largest item in the port after the Windows build** | [P8.2](Phases/Phase8-Completion.md#p82---runtime-shakedown) | Progress.md, 2026-09-02 docs entry |
+| 2 | **Raytracing has no callers on either backend.** A scratch harness, or a recorded decision that it is unreachable. Not a hardware wait | [P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to) | Progress.md, 2026-09-02 docs entry |
+| 3 | **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should.** `DebugDrawPrimitiveOutput` was fixed by P5.20; `PrimitiveOutput` in `RendererTypes.esh` was not, because `MaterialShaderInput::New` copies the struct into a local and DXC then builds SPIR-V that spirv-val rejects. Two ways out, neither cheap: a packed `uint` with accessors, which reaches Direct3D 12; or a fourth `Code/Scripts/DXCPatches` entry. **Not urgent** - NVIDIA renders correctly without it - but another driver need not be so forgiving | [P8.5](Phases/Phase8-Completion.md#p85---shader-conformance) | [Rendering: where we are](Progress.md#still-open) |
+| 4 | **The six sanitizer configurations have never been built.** They all generate; no output directory has ever existed. TSan is the interesting one on an engine with a task system | [P8.6](Phases/Phase8-Completion.md#p86---sanitizers-and-build-coverage) | Progress.md, 2026-09-02 docs entry |
+| 5 | **The items in [Deferred on purpose](Progress.md#deferred-on-purpose).** Known shortcuts, chosen rather than missed. Each is correct-enough to keep going and wrong enough to sweep before the port is called done. Not duplicated here | [P8.4](Phases/Phase8-Completion.md#p84---rhi-debt-sweep) | [Progress.md](Progress.md#deferred-on-purpose) |
+| 6 | **`requirements_gamenetworkingsockets` does not version-check `protoc`.** A stale one earlier on `PATH` is accepted and fails deep inside the build | - | [Rendering: where we are](Progress.md#still-open) |
 
 ---
 

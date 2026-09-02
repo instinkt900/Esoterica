@@ -187,15 +187,19 @@ from Phase 4.
 
 | File | Change | Phase | Status |
 |---|---|---|---|
-| `Code/Base/Render/RHI.esh` (2) | Indirect variants of `EE_DECLARE_ROOT_CONSTANTS` and `EE_DECLARE_ROOT_CBV` (`:124`, `:125`). Under `__spirv__` they read the shader's own command out of the argument buffer at `argumentBufferAddress + DrawIndex * stride + rootOffset`, keeping the names `RootConstants` and `RootCBV` so no shader body changes. The `#else` is today's `ConstantBuffer<T>` declaration. | 5 | planned |
-| `Code/Engine/Render/Shaders/Renderer/DefaultMeshShader.esh` | One declaration line each, swapped to the indirect macros. These four are the only shaders an indirect draw reaches. Everything else keeps `CmdSetRootConstants` and is not touched. | 5 | planned |
-| `Code/Engine/Render/Shaders/Debug/DebugDrawMesh.esf` | As above. | 5 | planned |
-| `Code/Engine/Render/Shaders/Debug/DebugDraw.esf` | As above. | 5 | planned |
-| `Code/Engine/Render/Shaders/Renderer/ClusterCulling.esf` | As above, and the hard one: it is the only indirect **compute** dispatch, where `DrawIndex` does not exist. P5.17 lists the two candidate approaches. **The command index arrives as a push constant instead.** | 5 | planned |
+| `Code/Base/Render/RHI.esh` (2) | Indirect variants of `EE_DECLARE_ROOT_CONSTANTS` and `EE_DECLARE_ROOT_CBV` (`:124`, `:125`). Under `__spirv__` they read the shader's own command out of the argument buffer at `argumentBufferAddress + DrawIndex * stride + rootOffset`, keeping the names `RootConstants` and `RootCBV` so no shader body changes. The `#else` is today's `ConstantBuffer<T>` declaration. | 5 | done |
+| `Code/Engine/Render/Shaders/Renderer/DefaultMeshShader.esh` | One declaration line each, swapped to the indirect macros. These four are the only shaders an indirect draw reaches. Everything else keeps `CmdSetRootConstants` and is not touched. | 5 | done |
+| `Code/Engine/Render/Shaders/Debug/DebugDrawMesh.esf` | As above. | 5 | done |
+| `Code/Engine/Render/Shaders/Debug/DebugDraw.esf` | As above. | 5 | done |
+| `Code/Engine/Render/Shaders/Renderer/ClusterCulling.esf` | As above, and the hard one: it is the only indirect **compute** dispatch, where `DrawIndex` does not exist. P5.17 lists the two candidate approaches. **The command index arrives as a push constant instead.** | 5 | done |
 
-**Watch for one more.** If the chosen approach needs the `ClusterCulling` argument buffer cleared
-each frame, that is a change in `Code/Engine/Render/Renderer_ForwardShading.cpp`, which is **not**
-on this registry. Check whether the engine already clears it, and escalate before editing it.
+**The "watch for one more" above turned out to be real.** The `ClusterCulling` argument buffer did
+need clearing each frame, and `Code/Engine/Render/Renderer_ForwardShading.cpp` is now on this
+registry with status `done`, escalated and approved in P7.6.
+
+**All five rows above are `done` and none has been compiled on Windows.** They are guarded by
+`#ifdef __spirv__` with an `#else` that falls back to the existing declarations, so Direct3D 12
+*should* be untouched. That is [P8.1](Phases/Phase8-Completion.md#p81---the-windows-build).
 
 ## Phase 2 - Reflector
 
