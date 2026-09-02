@@ -101,6 +101,40 @@ EE_FORCE_INLINE int vsprintf_s( char* pBuffer, size_t bufferSize, char const* pF
 }
 
 //-------------------------------------------------------------------------
+// Type name compatibility
+//-------------------------------------------------------------------------
+// MSVC's `typeid( T ).name()` returns a human readable name - "enum EE::Physics::ObjectCategory" -
+// and callers skip the leading "enum " to recover the fully qualified name the Reflector
+// registered. The Itanium ABI returns the *mangled* name instead, "N2EE7Physics14ObjectCategoryE",
+// so the same arithmetic yields "Physics14ObjectCategoryE" and every lookup misses.
+
+#include <cxxabi.h>
+#include <stdlib.h>
+
+namespace EE::Platform
+{
+    // Writes the demangled, fully qualified name of a `typeid().name()` result into the supplied
+    // buffer - "EE::Physics::ObjectCategory". Returns false and leaves the buffer untouched if the
+    // name cannot be demangled.
+    //
+    // __cxa_demangle requires any output buffer it is handed to have come from malloc, so it always
+    // allocates its own here and the result is copied out. Callers cache the result per type.
+    inline bool DemangleTypeInfoName( char const* pMangledName, char* pOutBuffer, size_t outBufferSize )
+    {
+        int status = 0;
+        char* pDemangledName = abi::__cxa_demangle( pMangledName, nullptr, nullptr, &status );
+        bool const succeeded = ( status == 0 ) && ( pDemangledName != nullptr );
+        if ( succeeded )
+        {
+            strncpy_s( pOutBuffer, outBufferSize, pDemangledName, strlen( pDemangledName ) );
+        }
+
+        free( pDemangledName );
+        return succeeded;
+    }
+}
+
+//-------------------------------------------------------------------------
 // Dev Defines
 //-------------------------------------------------------------------------
 

@@ -36,16 +36,30 @@ reaches its frame loop**, on `EE_ASSERT( result == VK_SUCCESS )` in `QueueHostWa
 (`RHI_Vulkan.cpp:2232`). The GPU reset also stalls the Resource Server for about seven seconds,
 so a second process cannot be used to watch the first. Do not try to work around this.
 
-### The editor, which has never stayed alive long enough to use
+### The editor, which has now been used once
+
+**P7.6 had its first pass on 2026-09-01** and the framing above it is out of date for the 3090: the
+editor stays alive, draws its whole UI, opens `pbrdemo.map` and shuts down cleanly. The rows below
+are what that pass did **not** reach or could not settle. Read the P7.6 entry in
+[Progress.md](Progress.md) before starting - three things there look like defects and are not, and
+one of them (gdb freezing every dialog) will waste an hour if you rediscover it.
+
+**The editor hang is fixed** (2026-09-01, the cluster culling argument buffer clear), so these rows
+can now actually be worked - before that the editor died 65 s to 211 s after a map was opened.
+
+**Everything here needs the desktop awake and unlocked.** i3 runs without a compositor, so a locked
+screen makes every screenshot return the lock screen rather than the editor, and DPMS throttles the
+editor to a fraction of its normal work.
 
 | # | What to check | Where | Detail in |
 |---|---|---|---|
-| 1 | **P7.6, the editor shakedown.** The whole task. Resource browser, resource importer, animation graph editor, ragdoll editor, map editor, property grids. None has ever run on Linux | `Code/EngineTools/` | [Phase7-EditorTools.md](Phases/Phase7-EditorTools.md#p76---editor-shakedown) |
-| 2 | **P7.5's last link.** Open the map, edit a material, watch the viewport reload it. The four links below it are proved | - | Progress.md, P7.5 entry |
-| 3 | **The "Open In Explorer" menu items.** Six in EngineTools, two in the Resource Server. The function they call is verified; the menu items are not | `EditorTool_ResourceBrowser.cpp`, `EditorTool_ResourceImporter.cpp`, `DataPathPicker.cpp`, `ResourcePickers.cpp`, `ResourceServerUI.cpp` | Progress.md, P7.4 entry |
-| 4 | **The file dialogs opened from the editor's own menus.** The `FileDialog` entry points are verified directly; no editor menu has opened one | `Code/EngineTools/Core/SystemDialogs_Linux.cpp` | Progress.md, P7.2 entry |
-| 5 | **The borderless title bar buttons.** Minimize, maximize and close are drawn and have never been clicked, in either the editor or the Resource Server | `Application_Linux.cpp`, `EditorApplication_Linux.cpp` | Progress.md, P7.1 and P7.3 entries |
-| 6 | **The Resource Server's Test Compile panel** draws "Force Recompile" and "Request Compilation" on top of each other. Shared imgui code, so check it on Windows too | `ResourceServerUI.cpp` | Progress.md, P7.5 entry |
+| 1 | **The tools that were never opened.** Resource importer (its crash is fixed, its window has not been seen), dependency viewer, system info, bulk update, animation graph editor, ragdoll editor, property grids. Criterion 8 is "opens without crashing" | `Code/EngineTools/` | [Phase7-EditorTools.md](Phases/Phase7-EditorTools.md#p76---editor-shakedown) |
+| 2 | **P7.5's last link.** Open the map, edit a material, watch the viewport reload it. The four links below it are proved, and the map now opens | - | Progress.md, P7.5 entry |
+| 3 | **The "Open In Explorer" menu items.** The resource browser's item was clicked and did fork, with `dbus-send`, `xdg-open` and `nautilus` all present - but the virtual display has no FileManager1 provider, so nothing could be observed. Needs a real desktop session. Seven other call sites remain untouched | `EditorTool_ResourceBrowser.cpp`, `EditorTool_ResourceImporter.cpp`, `DataPathPicker.cpp`, `ResourcePickers.cpp`, `ResourceServerUI.cpp` | Progress.md, P7.4 and P7.6 entries |
+| 4 | **The title bar minimize and maximize buttons.** **Close is verified** - it exits cleanly with no leaks. The other two cannot be tested under i3, which implements neither; `xdotool windowminimize` is equally a no-op. Needs a WM that iconifies | `ImguiX_Linux.cpp`, `Application_Linux.cpp` | Progress.md, P7.6 entry |
+| 5 | **The Resource Server's Test Compile panel** draws "Force Recompile" and "Request Compilation" on top of each other. Shared imgui code, so check it on Windows too | `ResourceServerUI.cpp` | Progress.md, P7.5 entry |
+| 6 | **The title bar hit test uses a stale imgui hover state**, so the application menus can be unreachable for a whole session. Diagnosed and measured, deliberately not fixed. The fix belongs in `ImguiX_Linux.cpp`, which already computes the sub-rects the hit test should be testing against | `Application_Linux.cpp:453`, `ImguiX_Linux.cpp:36-50` | Progress.md, P7.6 entry |
+| 7 | **imgui multi-viewport docking** - dragging a tool out into its own OS window. Criterion 9, never attempted | - | [Phase7-EditorTools.md](Phases/Phase7-EditorTools.md#acceptance-criteria) |
 
 ### Phase 5 groups the correct frame did not cover
 
@@ -57,15 +71,13 @@ closed P5.11. See the "GPU-blocked queue, part 1" and P5.11 entries in Progress.
 
 | # | Group | What to check first | Detail in |
 |---|---|---|---|
-| 7 | **P5.16 raytracing** | All of it. No structure built, no ray traced, no raytracing pipeline compiled. **Assume none of it works** | Progress.md, P5.16 entry |
-| 8 | **That the debug draw pass produces something visible.** The pass records, its pipelines create and it issues 5 indirect mesh draws - that much is verified. The counts are GPU-written and pbrdemo submits no debug geometry, so nothing has seen a debug primitive | **The editor is where this settles**, since it draws gizmos and bounds. Fold it into P7.6 | Progress.md, "GPU-blocked queue, part 1" |
-| 9 | **Criterion 8's last live row: mesh picking.** Gated on `IsPickingEnabled()` at `Renderer_ForwardShading.cpp:1022`, so it never runs in a standalone engine frame | **Also P7.6.** Forward shading, cascaded shadows, GTAO and SMAA are verified; OIT is dead code on both backends and cannot be verified at all | [Phase5-VulkanRHI.md](Phases/Phase5-VulkanRHI.md#acceptance-criteria) |
+| 8 | **P5.16 raytracing** | All of it. No structure built, no ray traced, no raytracing pipeline compiled. **Assume none of it works** | Progress.md, P5.16 entry |
 
 ### One thing only a different driver will find
 
 | # | What to check | Why | Detail in |
 |---|---|---|---|
-| 10 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
+| 9 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
 
 ---
 
