@@ -35,9 +35,10 @@ prerequisites. Read them in [Progress.md](../Progress.md) before you write any c
 > because the correct frame exercised P5.1 to P5.10, P5.13 and P5.17.
 >
 > **What this phase still owes is collected in
-> [Phase 8](Phase8-Completion.md).** Criteria 1, 7, 8, 9 and 11 all end there: the two remaining
-> `EE_UNIMPLEMENTED_FUNCTION` markers, the Windows frame comparison, mesh picking, the RenderDoc
-> trigger, and the Windows build itself.
+> [Phase 8](Phase8-Completion.md).** **P8.4 closed criteria 1, 8 and 9 on 2026-09-03** - the two
+> `EE_UNIMPLEMENTED_FUNCTION` markers stay and are explained, mesh picking is verified, and the
+> RenderDoc trigger is deliberately not added. **Criteria 7 and 11 need a Windows machine** and
+> are the whole of what this phase still owes: the frame comparison, and the build itself.
 >
 > **Running the backend found eleven defects in this phase's own code**, all fixed. That is the
 > best available evidence for how much a "written but never run" group is worth:
@@ -463,10 +464,22 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
 ## Acceptance criteria
 
 1. Every function in `RHI.h` has a real implementation. **No `EE_UNIMPLEMENTED_FUNCTION()`
-   remains** in `RHI_Vulkan.cpp`. **Not met: 2 remain, down from 103, and neither is a whole
-   function.** Both are markers that name a caller if one ever appears: a sampler border colour
-   that needs `VK_EXT_custom_border_color`, and the static-sampler path the binding model does
-   not use. P5.17 removed the third, which was the indirect refusal from open question 7.
+   remains** in `RHI_Vulkan.cpp`. **Closed by P8.4 on 2026-09-03: met in substance, not to the
+   letter. 2 markers remain, down from 103, and the decision is that they stay.**
+   - **Every function in `RHI.h` does have a real implementation.** That is the part of this
+     criterion that matters, and it is met.
+   - The two remaining markers are **not unimplemented functions**. Each guards a branch inside a
+     working function that nothing in the engine reaches: `VulkanBorderColor` halts only if a
+     sampler asks for a border colour that is not transparent black, opaque black or opaque white,
+     which would need `VK_EXT_custom_border_color`; and `CreateRootSignature` halts only if a
+     shader starts using a static sampler, which the binding model does not.
+   - **They are kept on purpose.** Each one names the caller that started needing the feature, the
+     moment one appears. Deleting them would trade a loud, precise failure for a silent wrong
+     result - the wrong border colour, or a sampler that is quietly not bound. Neither can be
+     implemented today without a caller to test against, and writing an untested implementation to
+     satisfy the wording of a criterion is worse than the marker.
+
+   P5.17 removed the third, which was the indirect refusal from open question 7.
 2. ~~`RHI.h` is unmodified.~~ **No longer met, deliberately.** `git diff --stat upstream/main --
    Code/Base/Render/RHI.h` reports `4 ++++`: `MaxPendingFrames` is 3 on Linux, in a
    `#if defined( __linux__ )` branch that leaves the Windows value verbatim. Linux drivers report
@@ -494,10 +507,10 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    **nothing has been compared against Windows**, because no Windows build has been run. The
    comparison is a row in the Windows queue in [Blocked.md](../Blocked.md).
 8. Feature parity is demonstrated for forward shading, cascaded shadows, GTAO, SMAA, OIT, mesh
-   picking, and debug draw. Name each one, and verify each one. **Met for five of seven. One
-   cannot be met, and one is owed to
-   [P8.4](Phase8-Completion.md#p84---rhi-debt-sweep).** Named one at a time, from a frame capture
-   on the RTX 3090, two A/B runs, and the P7.6 editor shakedown:
+   picking, and debug draw. Name each one, and verify each one. **Met for six of seven, and the
+   seventh cannot be met.** Mesh picking was the last one owed, and P8.4 verified it on
+   2026-09-03. Named one at a time, from a frame capture on the RTX 3090, two A/B runs, the P7.6
+   editor shakedown and P8.4's picking checks:
    - **Forward shading** - verified. Three passes, 8 indirect mesh draws each across 4 buckets.
    - **Cascaded shadows** - verified. 4 cascades, 32 indirect mesh draws, shadow visible.
    - **GTAO** - verified. A/B against `Enable_SSAO = false` changes geometry and ground contact
@@ -511,17 +524,27 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    - **OIT** - **cannot be met.** `OITResolve.esf` compiles but nothing looks it up or creates a
      pipeline for it, and `OIT.esh` has no consumers. The feature does not run on Direct3D 12
      either, so no Linux work can demonstrate it.
-   - **Mesh picking** - **still not verified.** Gated on `IsPickingEnabled()` inside
-     `#if EE_DEVELOPMENT_TOOLS`, so it only runs from an editor viewport. P7.6 opened that
-     viewport but did not check picking, so it is owed to
-     [P8.4](Phase8-Completion.md#p84---rhi-debt-sweep).
-9. RenderDoc capture works on Linux, through `BeginFrameCapture` and `EndFrameCapture`. **Half
-   met.** Captures are taken and read - `renderdoccmd convert` answered most of the questions in
-   the render bring-up - but nothing in the engine calls `TriggerCapture`, so a capture needs the
-   capture key or a temporary call. RenderDoc also has to attach **before** `vkCreateInstance`.
-   Two more constraints found on 2026-09-01: `BeginFrameCapture` and `EndFrameCapture` have zero
-   callers in `Code/`, and **host validation has to be off** or the engine segfaults inside
-   `librenderdoc.so`.
+   - **Mesh picking** - **verified, 2026-09-03, by P8.4.** Three clicks in the map editor
+     viewport on `pbrdemo`, each selecting exactly what was under the cursor: the boulder selects
+     `Boulder`, sky and the reflective ground select `Skydome`, and the floor - which is edge-on
+     to the default camera and about two pixels tall on screen - selects `Floor`. The Outliner
+     highlight and the Inspector contents agree each time.
+9. RenderDoc capture works on Linux, through `BeginFrameCapture` and `EndFrameCapture`. **Closed
+   by P8.4 on 2026-09-03: met, with three constraints recorded as permanent.** Captures are taken
+   and read - `renderdoccmd convert` answered most of the questions in the render bring-up - and
+   both functions are implemented and work. **P8.4 decided not to add an in-engine trigger**, for
+   the same reason it did not add a raytracing caller:
+   - `BeginFrameCapture` and `EndFrameCapture` have **zero callers in `Code/` on either backend**.
+     `RHI_Direct3D12.cpp` implements them and nothing calls them there either. **Having no trigger
+     is parity**, and adding one is a feature upstream does not have. Phase 8's "do not" list
+     forbids adding a caller to give working code something to do.
+   - **RenderDoc must attach before `vkCreateInstance`**, so launching under RenderDoc is required
+     regardless of what the engine calls. A trigger would not remove that.
+   - **Host validation has to be off**, or the engine segfaults inside `librenderdoc.so`. Found
+     2026-09-01.
+
+   The capture key is the trigger, and a temporary in-engine call is the fallback when a specific
+   frame has to be caught - which is what the 2026-09-01 capture did.
 10. `ReportDeviceMemoryLeaks` reports zero leaks after a clean shutdown. **Met.**
 11. **The Windows MSBuild build still succeeds**, and the Direct3D 12 renderer is unchanged.
 

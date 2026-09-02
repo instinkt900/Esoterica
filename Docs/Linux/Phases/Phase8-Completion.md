@@ -24,7 +24,7 @@ could ever go upstream.
 > | P8.1 The Windows build | not started. **The largest unmeasured risk in the port** |
 > | P8.2 Runtime shakedown | **mostly done**, 2026-09-02. Game preview runs, physics simulates, a skeletal asset opens in all three animation editors. Left: a gamepad, and evaluating a graph |
 > | P8.3 Raytracing, or the decision not to | **deferred**, 2026-09-03, by the developer. Not started, and nothing else in the phase waits on it |
-> | P8.4 RHI debt sweep | not started |
+> | P8.4 RHI debt sweep | **done**, 2026-09-03. Mesh picking verified; the barrier debt and both `EE_UNIMPLEMENTED_FUNCTION` markers made permanent; no RenderDoc trigger. Phase 5 criteria 1, 8 and 9 closed |
 > | P8.5 Shader conformance | not started |
 > | P8.6 Sanitizers and build coverage | not started |
 > | P8.7 Fork review | not started. Do this last |
@@ -45,7 +45,10 @@ could ever go upstream.
 > multi-viewport docking works, resource hot reload works end to end, and both applications shut
 > down clean with no leaks. Debug and Release build the whole tree.
 >
-> ### What has never been exercised, and is easy to miss
+> ### What had never been exercised when this phase opened
+>
+> **This block is what Phase 7 handed over, and P8.2 has since answered most of it.** Kept as the
+> starting position; the table above and [Progress.md](../Progress.md) are current.
 >
 > **The engine has only ever drawn a static scene for about thirty seconds.** Nothing in this port
 > has been observed *simulating*: no physics body has been seen to move, no animation graph has
