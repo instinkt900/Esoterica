@@ -36,16 +36,12 @@ reaches its frame loop**, on `EE_ASSERT( result == VK_SUCCESS )` in `QueueHostWa
 (`RHI_Vulkan.cpp:2232`). The GPU reset also stalls the Resource Server for about seven seconds,
 so a second process cannot be used to watch the first. Do not try to work around this.
 
-### The editor, which has now been used once
+### The editor, which has now been shaken down
 
-**P7.6 had its first pass on 2026-09-01** and the framing above it is out of date for the 3090: the
-editor stays alive, draws its whole UI, opens `pbrdemo.map` and shuts down cleanly. The rows below
-are what that pass did **not** reach or could not settle. Read the P7.6 entry in
-[Progress.md](Progress.md) before starting - three things there look like defects and are not, and
-one of them (gdb freezing every dialog) will waste an hour if you rediscover it.
-
-**The editor hang is fixed** (2026-09-01, the cluster culling argument buffer clear), so these rows
-can now actually be worked - before that the editor died 65 s to 211 s after a map was opened.
+**P7.6's second pass ran on 2026-09-02** and retired seven of the eight rows that used to be here.
+Every tool opens, multi-viewport works, hot reload closes end to end, and `OpenInExplorer` opens a
+file manager. Read the 2026-09-02 entry in [Progress.md](Progress.md) before starting - two traps
+there are about driving imgui with `xdotool` rather than about the port, and each cost an hour.
 
 **Everything here needs the desktop awake and unlocked.** i3 runs without a compositor, so a locked
 screen makes every screenshot return the lock screen rather than the editor, and DPMS throttles the
@@ -53,13 +49,10 @@ editor to a fraction of its normal work.
 
 | # | What to check | Where | Detail in |
 |---|---|---|---|
-| 1 | **The tools that were never opened.** Resource importer (its crash is fixed, its window has not been seen), dependency viewer, system info, bulk update, animation graph editor, ragdoll editor, property grids. Criterion 8 is "opens without crashing" | `Code/EngineTools/` | [Phase7-EditorTools.md](Phases/Phase7-EditorTools.md#p76---editor-shakedown) |
-| 2 | **P7.5's last link.** Open the map, edit a material, watch the viewport reload it. The four links below it are proved, and the map now opens | - | Progress.md, P7.5 entry |
-| 3 | **The "Open In Explorer" menu items.** The resource browser's item was clicked and did fork, with `dbus-send`, `xdg-open` and `nautilus` all present - but the virtual display has no FileManager1 provider, so nothing could be observed. Needs a real desktop session. Seven other call sites remain untouched | `EditorTool_ResourceBrowser.cpp`, `EditorTool_ResourceImporter.cpp`, `DataPathPicker.cpp`, `ResourcePickers.cpp`, `ResourceServerUI.cpp` | Progress.md, P7.4 and P7.6 entries |
-| 4 | **The title bar minimize and maximize buttons.** **Close is verified** - it exits cleanly with no leaks. The other two cannot be tested under i3, which implements neither; `xdotool windowminimize` is equally a no-op. Needs a WM that iconifies | `ImguiX_Linux.cpp`, `Application_Linux.cpp` | Progress.md, P7.6 entry |
-| 5 | **The Resource Server's Test Compile panel** draws "Force Recompile" and "Request Compilation" on top of each other. Shared imgui code, so check it on Windows too | `ResourceServerUI.cpp` | Progress.md, P7.5 entry |
-| 6 | **The title bar hit test uses a stale imgui hover state**, so the application menus can be unreachable for a whole session. Diagnosed and measured, deliberately not fixed. The fix belongs in `ImguiX_Linux.cpp`, which already computes the sub-rects the hit test should be testing against | `Application_Linux.cpp:453`, `ImguiX_Linux.cpp:36-50` | Progress.md, P7.6 entry |
-| 7 | **imgui multi-viewport docking** - dragging a tool out into its own OS window. Criterion 9, never attempted | - | [Phase7-EditorTools.md](Phases/Phase7-EditorTools.md#acceptance-criteria) |
+| 1 | **The title bar minimize and maximize buttons.** **Close is verified** - it exits cleanly with no leaks. The other two cannot be tested under i3, which implements neither; `xdotool windowminimize` is equally a no-op. Needs a WM that iconifies, and installing one was declined on 2026-09-02 | `ImguiX_Linux.cpp`, `Application_Linux.cpp` | Progress.md, P7.6 entries |
+| 2 | **The Resource Server's Test Compile panel** draws "Force Recompile" and "Request Compilation" on top of each other once the panel is narrow. **Reproduced and explained on 2026-09-02** - `SameLine( GetContentRegionAvail().x - 200 )` at `ResourceServerUI.cpp:881` goes left of the checkbox on a narrow panel. Upstream and platform-neutral, so it is left for an upstream report and a Windows check, not fixed here | `ResourceServerUI.cpp:881` | Progress.md, 2026-09-02 entry |
+| 3 | **The ragdoll editor has never been opened**, because it needs a Skeleton resource and `Data/` has none - no `.skel`, no `.anim`, and the only FBXs are non-skeletal. Needs a skeletal asset imported first, not a different machine | `Code/EngineTools/Physics/` | Progress.md, 2026-09-02 entry |
+| 4 | **The seven `OpenInExplorer` call sites other than the resource browser's.** The implementation is proved - nautilus opened the folder and selected the item - so what is left is only whether each site builds the right path | `EditorTool_ResourceImporter.cpp`, `DataPathPicker.cpp`, `ResourcePickers.cpp`, `ResourceServerUI.cpp` | Progress.md, P7.4 and 2026-09-02 entries |
 
 ### Phase 5 groups the correct frame did not cover
 
@@ -71,13 +64,13 @@ closed P5.11. See the "GPU-blocked queue, part 1" and P5.11 entries in Progress.
 
 | # | Group | What to check first | Detail in |
 |---|---|---|---|
-| 8 | **P5.16 raytracing** | All of it. No structure built, no ray traced, no raytracing pipeline compiled. **Assume none of it works** | Progress.md, P5.16 entry |
+| 5 | **P5.16 raytracing** | All of it. No structure built, no ray traced, no raytracing pipeline compiled. **Assume none of it works.** The largest thing left in this queue | Progress.md, P5.16 entry |
 
 ### One thing only a different driver will find
 
 | # | What to check | Why | Detail in |
 |---|---|---|---|
-| 9 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
+| 6 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
 
 ---
 
