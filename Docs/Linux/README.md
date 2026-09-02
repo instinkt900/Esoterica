@@ -42,7 +42,8 @@ upstream code that you read along the way. See Conventions rule 3.
 | [TouchedFiles.md](TouchedFiles.md) | Registry of every upstream file this port modifies |
 | [Progress.md](Progress.md) | Running log of completed and in-flight work |
 | [Blocked.md](Blocked.md) | What is written but not verified, indexed by the machine that unblocks it |
-| [Phases/](Phases/) | Per-phase task specifications |
+| [Phases/](Phases/) | Per-phase task specifications. [Phase 8](Phases/Phase8-Completion.md) is the remaining-work list |
+| `ForkReview.md` | *(not written yet)* How far this fork has diverged, and whether any of it could go upstream. [P8.7](Phases/Phase8-Completion.md#p87---fork-review) |
 
 ## Phases
 
@@ -59,6 +60,11 @@ in parallel, the phase doc says so.
 | [5 - Vulkan RHI](Phases/Phase5-VulkanRHI.md) | Vulkan backend behind `RHI.h`, at full parity | 3-5 months |
 | [6 - Windowing and Input](Phases/Phase6-WindowingInput.md) | `Engine` app renders a map on Linux | 3-4 weeks |
 | [7 - Editor and Tools](Phases/Phase7-EditorTools.md) | Full editor on Linux | 3-4 weeks |
+| [8 - Completion and Fork Review](Phases/Phase8-Completion.md) | The Windows build runs, the engine simulates, the debt is swept, and the fork is assessed | unknown; P8.1 is why |
+
+**Phase 8 was added on 2026-09-02**, after Phase 7's editor shakedown. The original plan ended at
+Phase 7 and was right that the port would work by then; what it had no place for was the work
+left over **after** the thing works. See [Why this phase exists](Phases/Phase8-Completion.md#why-this-phase-exists).
 
 ## Why this is smaller than it looks
 
@@ -114,15 +120,31 @@ with geometry, textures, normals, image-based lighting, direct lighting, shadows
 reflective ground plane - on an RTX 3090, with host validation on, **zero validation messages and
 no message-ID filters at all**, no device memory leaked and a clean shutdown.
 
-**Phases 0 to 6 are written. Phase 7 is in flight.** The whole tree builds in Debug and Release,
-and nothing in it fails to compile.
+**The editor works too.** It opens the map, every tool opens, multi-viewport docking works,
+resource hot reload works end to end on a real asset edit, and both applications shut down clean.
+
+**Phases 0 to 7 are done. Phase 8 is what is left**, and it is verification and debt rather than
+porting. The whole tree builds in Debug and Release, and nothing in it fails to compile.
 
 | Phase | State |
 |---|---|
 | 0 - 4 | Done. `ninja` builds the tree, reflection and resource compilation run, DXC builds from source, and all 46 shader stages compile and validate as SPIR-V |
-| 5 - Vulkan RHI | Written, merged and **run**. All seventeen groups including P5.17. Debug names, markers and variable rate shading are now verified from a frame capture, and criterion 8 is met for forward shading, cascaded shadows, GTAO and SMAA. Query pools are verified too. **Raytracing has still never executed**, and it is a row in [Blocked.md](Blocked.md) |
+| 5 - Vulkan RHI | Written, merged and **run**. All seventeen groups including P5.17. Criterion 8 is met for forward shading, cascaded shadows, GTAO, SMAA and debug draw; mesh picking is owed to P8.4. **Raytracing has never executed and nothing can make it** - it has no callers on either backend. See [P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to) |
 | 6 - Windowing and input | Written. SDL3, `LinuxApplication`, the imgui platform backend, keyboard, mouse and gamepad, the surface and the swapchain. The engine opens a window and renders a map |
-| 7 - Editor and tools | In flight. The editor and the Resource Server build, link and run; the server serves resources over the network and the editor no longer needs `-packaged`. The editor shakedown is what is left |
+| 7 - Editor and tools | **Done.** Both applications build, link and run; the server serves over the network; the editor shakedown of 2026-09-02 met criteria 5, 6, 8, 9 and 10. Four items remain and they are in [Blocked.md](Blocked.md) |
+| 8 - Completion and fork review | **In flight.** Nothing has been built on Windows, nothing has been seen to *simulate*, and the fork has never been measured against upstream |
+
+### There is almost no unported code left
+
+Worth stating plainly, because the remaining-work list is long and it reads worse than it is.
+Every `*_Win32.*` file has a `_Linux` sibling - 27 of them - and
+`Code/Scripts/NinjaGen/Exclusions.txt` drops **five** things: the Direct3D 12 backend, its memory
+allocator, three Windows entry points, and the Windows-only BuildGenerator. **No engine subsystem
+is excluded.** Physics, animation, the entity system, navmesh and networking all compile and ship
+in the Linux build.
+
+What is left in Phase 8 is verification debt, deliberate shortcuts, and one feature that is dead
+code on both backends.
 
 ### Two development machines, and only one can render
 
@@ -137,10 +159,19 @@ easy to confuse.
 
 ### What has never been checked at all
 
+Two things, and they are the whole of Phase 8's risk.
+
 **No Windows build has been run since this port started.** "`main` builds on both Windows and
 Linux" is the invariant every phase's acceptance criteria ends with, and it is the largest
 unmeasured risk in the project. Ten shader files are edited for **both** platforms, with no
-`__linux__` branch to hide behind. See the Windows queue in [Blocked.md](Blocked.md).
+`__linux__` branch to hide behind. See the Windows queue in [Blocked.md](Blocked.md) and
+[P8.1](Phases/Phase8-Completion.md#p81---the-windows-build).
+
+**The engine has rendered, and it has never simulated.** Every measurement in this port is a
+static scene held for about thirty seconds. No physics body has been seen to move, no animation
+graph has been evaluated, and **"Play Map" has never been pressed.** That is
+[P8.2](Phases/Phase8-Completion.md#p82---runtime-shakedown), and it is the largest functional
+unknown after Windows.
 
 ### Things that will surprise you
 

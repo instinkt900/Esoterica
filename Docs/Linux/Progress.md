@@ -48,11 +48,16 @@ them; that file is how they are found. A task that leaves something unverified a
 > the title bar hit test's stale hover state, diagnosed on 2026-09-01, is fixed and measured.
 > See the entry below.
 
-**Phase 7 is in flight, and P7.6 is what is left in it.** The whole tree builds in Debug and
-Release, and **nothing in it fails to compile.** `Esoterica.Applications.Editor` and
+**Phases 0 to 7 are done. [Phase 8](Phases/Phase8-Completion.md) is what is left**, and it is
+verification and debt rather than porting. The whole tree builds in Debug and Release, and
+**nothing in it fails to compile.** `Esoterica.Applications.Editor` and
 `Esoterica.Applications.ResourceServer` both build, link and launch; the Resource Server serves on
-127.0.0.1:5556, spawns its compiler workers and draws its full UI. Per-task state, including which
-PRs are open, is in [In flight](#in-flight).
+127.0.0.1:5556, spawns its compiler workers and draws its full UI. Per-task state is in
+[In flight](#in-flight).
+
+**Two things have never been checked at all, and they are the whole of Phase 8's risk.** No
+Windows build has been run at any point in this port, and **the engine has never been observed
+simulating** - every measurement here is a static scene held for about thirty seconds.
 
 **The engine and the editor no longer need `-packaged`.** `EnsureResourceServerIsRunning` was
 Windows-only and returned false, so the network resource provider could never start. P7.3 opened
@@ -542,17 +547,33 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 
 ## In flight
 
-> ### **Phase 7. Everything before P7.6 is merged, and P7.6 has been shaken down.**
+> ### **Phase 7 is done. Phase 8 is what is left.**
 >
 > | Task | State |
 > |---|---|
-> | P7.0, P7.1, P7.2, P7.3, P7.4, P7.5 | merged (#68, #69 and #70 landed on 2026-09-01; P7.5's fifth link closed on 2026-09-02) |
-> | P7.6 editor shakedown | **second pass done**, 2026-09-02. Criteria 5, 6, 8, 9 and 10 met; two defects found and fixed |
+> | P7.0 - P7.5 | merged (#68, #69 and #70 landed on 2026-09-01; P7.5's fifth link closed on 2026-09-02) |
+> | P7.6 editor shakedown | **done**, 2026-09-02, PR #79. Criteria 5, 6, 8, 9 and 10 met; two defects found and fixed |
 >
-> **P7.6 is the whole of what is left in Phase 7, and only four things are left in it.** Criterion
-> 3's minimize and maximize need a window manager that implements them, the ragdoll editor needs a
-> skeletal asset the dataset does not have, seven `OpenInExplorer` call sites are unexercised, and
-> criterion 11 is the standing Windows build. The rows are in [Blocked.md](Blocked.md).
+> Four things remain from Phase 7 and all four are in [Blocked.md](Blocked.md): minimize and
+> maximize need a window manager that implements them, the ragdoll editor needs a skeletal asset
+> the dataset does not have, seven `OpenInExplorer` call sites are unexercised, and the Test
+> Compile panel overlap is an upstream bug to report rather than fix.
+>
+> ### **[Phase 8](Phases/Phase8-Completion.md), added 2026-09-02.**
+>
+> | Task | State |
+> |---|---|
+> | P8.1 The Windows build | not started. **The largest unmeasured risk in the port** |
+> | P8.2 Runtime shakedown | not started. Nothing has been observed simulating |
+> | P8.3 Raytracing, or the decision not to | not started |
+> | P8.4 RHI debt sweep | not started |
+> | P8.5 Shader conformance | not started |
+> | P8.6 Sanitizers and build coverage | not started |
+> | P8.7 Fork review | not started. Do this last |
+>
+> **The original plan ended at Phase 7 and was right that the port would work by then.** What it
+> had no place for was the work left over *after* the thing works: verification that no machine
+> could do at the time, shortcuts taken deliberately, and the question of what this fork is.
 
 ---
 
@@ -593,6 +614,89 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-02 - Docs. Phase 8 exists, and the port's remaining work is one list instead of five
+
+**A survey of the whole port, and the documents brought up to what it found.** No code changed.
+The survey read every phase document, `Blocked.md` and `TouchedFiles.md`, and then checked each
+claim against the tree rather than believing it. Three findings changed how much work is left, and
+in one case which direction.
+
+#### There is almost no unported code
+
+The remaining-work list is long and reads worse than it is, so this is worth stating first. **Every
+`*_Win32.*` file has a `_Linux` sibling** - 27 of them, checked by basename across `Code/`. And
+`Exclusions.txt` drops **five** things: the Direct3D 12 backend, `D3D12MemoryAllocator`, three
+Windows entry points, and the Windows-only BuildGenerator. **No engine subsystem is excluded.**
+Physics, animation, the entity system, navmesh and networking all compile and ship on Linux.
+
+Two things that look like gaps and are not: **NavPower is off upstream too**
+(`NAVPOWER_INCLUDED=False` in `Code/PropertySheets/NavPower.props`), so navmesh generation is
+parity rather than a Linux hole; and **there is no audio module** in the engine at all.
+
+#### Raytracing is smaller than every document said, and in a way that changes the plan
+
+`Blocked.md` called P5.16 "the largest thing left". It is not. `RHI_Vulkan.cpp` **implements** it -
+acceleration structures, raytracing pipelines, shader binding tables, `vkCmdTraceRays` and
+`vkCmdTraceRaysIndirect2`, all entry points resolved.
+
+**`CreateAccelerationStructure`, `CmdDispatchRays` and `RaytracingShaderTable` have zero callers**
+across `Code/Engine`, `Code/EngineTools` and `Code/Game`, and the tree contains no raytracing
+shaders. It is dead code on Direct3D 12 for the same reason. So it cannot be verified by running
+the engine, and the honest options are a scratch harness or a formal decision not to - which is
+what [P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to) now says. It is
+the same shape as OIT, which Phase 5 already closed as "cannot be met".
+
+#### The engine has rendered. It has never simulated
+
+Every measurement in this port is a static scene held for about thirty seconds. **"Play Map" does
+not appear anywhere in this file**, and `MapEditor.cpp:353` is where it lives. No physics body has
+been seen to move, no animation graph has been evaluated, and Phase 6 criterion 3's "works for
+camera control" has never been checked in a running engine.
+
+Animation is blocked by data before code: `Data/` has **no `.skel`, no `.anim` and no `.ag`**, and
+the only FBXs are non-skeletal. Importing one skeletal asset unblocks both the animation runtime
+and the ragdoll editor, which is a `Blocked.md` row for exactly that reason.
+[P8.2](Phases/Phase8-Completion.md#p82---runtime-shakedown) is now the second-largest item in the
+port.
+
+#### What was corrected
+
+- **Five `TouchedFiles.md` rows were still `planned`** that P5.17 completed. Verified against the
+  tree - `RHI.esh` has 4 indirect-macro sites and the four shaders have 5 to 6 each - and set to
+  `done`. The registry is what makes the post-merge audit in
+  [01-UpstreamMerges.md](01-UpstreamMerges.md) mechanical, so a stale row there is a defect in the
+  merge procedure, not a documentation nit. Its "watch for one more" note was stale too:
+  `Renderer_ForwardShading.cpp` did need the clear, and is now registered.
+- **Phase 5 criterion 8 said debug draw "settles in the editor, under P7.6".** P7.6 settled it on
+  2026-09-01 - the yellow selection bounds - so it is five of seven now, not four. **Mesh picking
+  is still not verified**; P7.6 opened the viewport but did not check picking, and it is owed to
+  P8.4.
+- **Open question 2** (which LLVM the Reflector needs) was still `open` though answered every
+  session since Phase 2. Closed: clang 21.1.8.
+- **Phase 7 said "this is the last planned phase".** It no longer is.
+
+#### The sanitizer configurations have never been built
+
+`Toolchain.py` generates nine configurations and the ninja file carries all nine, including
+`Linux_{Debug,Release}_{ASan,TSan,UBSan}`. **No sanitizer output directory has ever existed**, and
+`Linux_Debug` has never been built on the RTX 3090 machine either. On an engine with a task system,
+TSan is the interesting one. [P8.6](Phases/Phase8-Completion.md#p86---sanitizers-and-build-coverage).
+
+#### Phase 8, and why it is a phase rather than a list
+
+The remaining work did not fit the documents that existed. `Blocked.md` is strictly *"written but
+not verified, indexed by the machine that unblocks it"* and that is what makes it usable at a given
+desk - but half of what is left is blocked on nothing at all. Folding sanitizers and doc drift into
+it would have cost the property that makes it work.
+
+So [Phase8-Completion.md](Phases/Phase8-Completion.md) collects it, in the same task-and-criteria
+shape as every other phase, ordered by size and risk rather than dependency. `Blocked.md` stays
+machine-indexed and unchanged. **P8.7 is new work rather than carried-over work**: a fork review
+that measures how far this fork has diverged from upstream, what a merge costs as a standing
+expense, and whether any slice of it could ever go upstream safely. It is specified, not run.
+
+---
 
 ### 2026-09-02 - P7.6 second pass. Every tool opens, hot reload closes, and two defects that hid the rest are fixed
 
@@ -6944,7 +7048,7 @@ question to "Decisions made" once you answer it.
 | # | Question | Blocks | Status |
 |---|---|---|---|
 | 1 | ~~Does `ctt` (texture compression) build on Linux?~~ | Phase 3 | **answered: yes, it is open source. Built from crates.io.** |
-| 2 | Which LLVM version does the Reflector need, and does `clangAST` compile against it on Linux? | Phase 2 | open |
+| 2 | ~~Which LLVM version does the Reflector need, and does `clangAST` compile against it on Linux?~~ | Phase 2 | **answered in practice, closed 2026-09-02: clang 21.1.8, built from source into `External/LLVM`.** `clangAST` compiles against it and the Reflector has run every session since Phase 2. The version matters because clang's C++ AST API is not stable across major versions; see [04-BuildAndRun.md](04-BuildAndRun.md#the-toolchain). It was left open only because nobody closed it |
 | 3 | ~~Use `volk`, or the plain Vulkan loader?~~ | Phase 5 | **answered: the plain loader.** Nothing is profiled yet, and nothing can be until the backend renders |
 | 4 | ~~Do the target distros package SDL3, or must we always build it?~~ | Phase 6 | **answered 2026-08-29: always build it.** Ubuntu 24.04 LTS has no SDL3 package; it arrives from 25.04. `DownloadDependencies.sh` builds `release-3.4.14` from source |
 | 5 | ~~Does `GameNetworkingSockets` block the first `Base` link?~~ | Phase 1 | **answered: yes, and at compile time, not link** |
