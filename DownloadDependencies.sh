@@ -48,6 +48,11 @@ require_header()
     [[ -f "$1" ]] || MISSING_PACKAGES+=( "$2" )
 }
 
+require_executable()
+{
+    [[ -x "$1" ]] || MISSING_PACKAGES+=( "$2" )
+}
+
 # What each dependency needs, beyond git.
 requirements_optick()      { :; }
 
@@ -137,11 +142,20 @@ requirements_ixwebsocket()
     require_pkg_config zlib zlib1g-dev
 }
 
+# The protoc that matches the libprotobuf CMake will link, which is not necessarily the one on
+# PATH. Empty when pkg-config does not know protobuf; require_pkg_config reports that separately.
+protobuf_protoc()
+{
+    local prefix
+    prefix=$( pkg-config --variable=exec_prefix protobuf 2>/dev/null ) || return 0
+    [[ -n "${prefix}" ]] && printf '%s/bin/protoc' "${prefix}"
+}
+
 requirements_gamenetworkingsockets()
 {
     require_command cmake cmake
     require_command ninja ninja-build
-    require_command protoc protobuf-compiler
+    require_executable "$( protobuf_protoc )" protobuf-compiler
     require_pkg_config openssl libssl-dev
     require_pkg_config protobuf libprotobuf-dev
 }
@@ -493,10 +507,22 @@ fetch_gamenetworkingsockets()
         return
     fi
 
-    command -v protoc >/dev/null || fail "GameNetworkingSockets needs protobuf. Install it:
+    # CMake's FindProtobuf takes the library from the standard prefix but protoc from PATH, so a
+    # stale protoc earlier on PATH generates .pb.h files against headers it does not match: 3.17
+    # emits an include for a header 3.21 deleted, and the build then fails with an #error that
+    # never names the binary at fault. The compiler that matches the library is the one in the
+    # same install prefix, so ask pkg-config rather than PATH.
+    local protoc
+    protoc=$( protobuf_protoc )
+    [[ -x "${protoc}" ]] || fail "GameNetworkingSockets needs protobuf. Install it:
 
     sudo apt install libprotobuf-dev protobuf-compiler
 "
+
+    if [[ "${protoc}" != "$( command -v protoc || true )" ]]
+    then
+        info "using ${protoc}, not the protoc on PATH ($( command -v protoc || echo none ))"
+    fi
 
     info "fetching GameNetworkingSockets ${GNS_TAG}"
     rm -rf "${target}.src"
@@ -510,7 +536,8 @@ fetch_gamenetworkingsockets()
         -DBUILD_SHARED_LIB=ON \
         -DBUILD_TESTS=OFF \
         -DBUILD_EXAMPLES=OFF \
-        -DUSE_CRYPTO=OpenSSL
+        -DUSE_CRYPTO=OpenSSL \
+        -DProtobuf_PROTOC_EXECUTABLE="${protoc}"
     cmake --build "${target}.src/build" --parallel "${BUILD_JOBS}"
     cmake --install "${target}.src/build"
     rm -rf "${target}.src"
