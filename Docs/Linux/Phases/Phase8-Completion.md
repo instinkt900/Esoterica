@@ -23,7 +23,7 @@ could ever go upstream.
 > |---|---|
 > | P8.1 The Windows build | not started. **The largest unmeasured risk in the port** |
 > | P8.2 Runtime shakedown | **mostly done**, 2026-09-02. Game preview runs, physics simulates, a skeletal asset opens in all three animation editors. Left: a gamepad, and evaluating a graph |
-> | P8.3 Raytracing, or the decision not to | not started |
+> | P8.3 Raytracing, or the decision not to | **deferred**, 2026-09-03, by the developer. Not started, and nothing else in the phase waits on it |
 > | P8.4 RHI debt sweep | not started |
 > | P8.5 Shader conformance | not started |
 > | P8.6 Sanitizers and build coverage | not started |
@@ -149,6 +149,11 @@ works from all three input devices, and a skeletal asset has been imported and o
 animation graph editor.
 
 ### P8.3 - Raytracing, or the decision not to
+
+> **Deferred on 2026-09-03, by the developer: "raytracing can come later and will not affect this
+> current line of work."** That is a scheduling decision, not one of the two outcomes below, so
+> **this task is still open** and Phase 5's raytracing criterion is still unclosed. Nothing else in
+> Phase 8 depends on it. Pick it up before P8.7, which needs every other answer.
 
 **Read the block at the top of this document before starting.** P5.16 is written and has **no
 callers and no shaders**. It cannot be verified by running the engine, because the engine never

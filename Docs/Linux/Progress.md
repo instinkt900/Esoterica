@@ -569,7 +569,7 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 > |---|---|
 > | P8.1 The Windows build | not started. **The largest unmeasured risk in the port** |
 > | P8.2 Runtime shakedown | **mostly done**, 2026-09-02. Game preview runs, physics simulates, all three animation editors open. Gamepad camera control still needs a controller |
-> | P8.3 Raytracing, or the decision not to | not started |
+> | P8.3 Raytracing, or the decision not to | **deferred**, 2026-09-03, by the developer. Still open - a deferral is not one of the two outcomes the task asks for |
 > | P8.4 RHI debt sweep | not started |
 > | P8.5 Shader conformance | not started |
 > | P8.6 Sanitizers and build coverage | not started |
