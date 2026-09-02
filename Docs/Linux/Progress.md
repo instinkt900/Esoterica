@@ -647,6 +647,14 @@ through a new `require_executable` helper next to `require_header`. A machine wi
   is already registered there as a port-owned file with 0 upstream lines modified.
 - Docs: this entry, the Blocked.md row deleted, and the `PATH=/usr/bin:$PATH` workaround in
   [04-BuildAndRun.md](04-BuildAndRun.md) replaced with a note that it is no longer needed.
+- **[04-BuildAndRun.md](04-BuildAndRun.md)'s package list was telling the wrong story**, found
+  while making the change above. It headed eight packages "Packages it does not check for", and
+  the script checks five of them: `libprotobuf-dev` and `rustup` always did, `libxss-dev` and
+  `libxtst-dev` since PR #60, and `protobuf-compiler` as of this change. Only three are genuinely
+  unchecked, for two different reasons now written down - `libsqlite3-dev` is needed by the
+  *engine* build (`ResourceCompilationDatabase.cpp` includes `sqlite3.h`) and the script only ever
+  builds `External/`, while `vulkan-tools` and `vulkan-validationlayers` are not build
+  dependencies at all. The list is now per-package and says which are checked.
 - Verified by rebuilding GameNetworkingSockets **with the stale 3.17.3 still first on `PATH`**:
   69/69 objects, both `.pb.cc` files compiled, `libGameNetworkingSockets.so` installed, exit 0.
   The `.pb.cc` files compiling is the proof - 3.17 output cannot build against 3.21 headers.

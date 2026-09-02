@@ -29,19 +29,28 @@ because knowing them makes the rest of this document unnecessary.
 Run `./DownloadDependencies.sh` first. It builds and installs everything under `External/`,
 including the pinned LLVM and SDL3.
 
-**Packages it does not check for.** Its `requirements_*` functions miss these, so it passes and
-a nested CMake fails later instead:
+**Packages to install first.** The script names everything it checks for in one message, so most
+of these produce a clear failure rather than a nested CMake one. Three it cannot check, and they
+are the three worth installing before you start:
 
 ```bash
 sudo apt install libsqlite3-dev protobuf-compiler libprotobuf-dev \
                  libxss-dev libxtst-dev vulkan-tools vulkan-validationlayers rustup
 ```
 
-- `libxss-dev` and `libxtst-dev` - SDL3's `CheckX11` stops at the first missing extension.
-- `rustup` - `ctt` needs Rust 1.90 and Ubuntu 24.04 ships 1.75. The `rustup` package **removes**
-  `rustc` and `cargo`. Run `rustup default stable` afterwards.
-- `vulkan-validationlayers` - not needed to build. Host validation silently does nothing without
+- `libsqlite3-dev` - **not checked, and it fails late.**
+  `EngineTools/Resource/ResourceCompilationDatabase.cpp` includes `sqlite3.h`, so it is the
+  engine build that needs it. The dependency script only ever builds `External/` and never sees
   it.
+- `vulkan-tools` and `vulkan-validationlayers` - **not checked, because neither is a build
+  dependency.** `vulkaninfo` is a diagnostic, and host validation silently does nothing without
+  the layers. [Progress.md](Progress.md)'s run recipe turns validation on and needs them.
+- `rustup` - checked, both that `cargo` exists and that it is 1.90 or newer. Listed anyway
+  because the package **removes** `rustc` and `cargo`: Ubuntu 24.04 ships Rust 1.75 and `ctt`
+  needs 1.90. Run `rustup default stable` afterwards.
+- `libxss-dev` and `libxtst-dev` - checked. SDL3's `CheckX11` stops at the first missing
+  extension, so before they were checked each one cost its own CMake run to discover.
+- `protobuf-compiler` and `libprotobuf-dev` - checked. See the note below.
 
 **A stale `protoc` earlier on `PATH` is harmless.** It used to break GameNetworkingSockets:
 CMake's `FindProtobuf` takes the library from the standard prefix but `protoc` from `PATH`, so a
