@@ -503,6 +503,13 @@ static void ImGui_ImplSDL3_SetupPlatformHandles(ImGuiViewport* viewport, SDL_Win
     viewport->PlatformHandleRaw = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
 #elif defined(__APPLE__)
     viewport->PlatformHandleRaw = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr);
+#elif defined(__linux__)
+    // EE: upstream leaves this null outside Windows and macOS. ImguiRenderer::ImGui_CreateWindowContext
+    // then falls back to PlatformHandle, which is an SDL_WindowID rather than a window, and
+    // SDL_Vulkan_CreateSurface rejects it as an "Invalid window" - so every popped-out viewport got a
+    // swapchain-less window that drew nothing. The native window handle on Linux is the SDL_Window*
+    // itself; see Platform::Linux::CreateVulkanSurface.
+    viewport->PlatformHandleRaw = window;
 #endif
 }
 

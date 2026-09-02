@@ -2,6 +2,7 @@
 #include "Application_Linux.h"
 #include "Base/Settings/IniFile.h"
 #include "Base/Imgui/Platform/ImguiPlatform_Linux.h"
+#include "Base/Imgui/Platform/ImguiX_Linux.h"
 #include "Base/FileSystem/FileSystemPath.h"
 #include "Base/FileSystem/FileSystemUtils.h"
 #include "Base/Logging/SystemLog.h"
@@ -450,16 +451,22 @@ namespace EE
 
                 //-------------------------------------------------------------------------
 
-                if ( !isAnyInteractibleWidgetHovered )
-                {
-                    int32_t const titleBarTop = (int32_t) titleBarRect.GetTL().m_y;
-                    int32_t const titleBarLeft = (int32_t) titleBarRect.GetTL().m_x;
-                    int32_t const titleBarBottom = titleBarTop + (int32_t) titleBarRect.GetSize().m_y;
-                    int32_t const titleBarRight = titleBarLeft + (int32_t) titleBarRect.GetSize().m_x;
+                // The hovered flag is deliberately unused here. SDL runs this callback while it
+                // drains the motion event, before imgui has processed that motion, so the flag
+                // describes the previous cursor position - one motion behind, every time. The
+                // title bar's own sub-rects say the same thing without the frame-order race.
+                int32_t const titleBarTop = (int32_t) titleBarRect.GetTL().m_y;
+                int32_t const titleBarLeft = (int32_t) titleBarRect.GetTL().m_x;
+                int32_t const titleBarBottom = titleBarTop + (int32_t) titleBarRect.GetSize().m_y;
+                int32_t const titleBarRight = titleBarLeft + (int32_t) titleBarRect.GetSize().m_x;
 
-                    bool const isCursorWithinTitleBarX = cursor.m_x > titleBarLeft && cursor.m_x < titleBarRight;
-                    bool const isCursorWithinTitleBarY = cursor.m_y > titleBarTop && cursor.m_y < titleBarBottom;
-                    if ( isCursorWithinTitleBarX && isCursorWithinTitleBarY )
+                bool const isCursorWithinTitleBarX = cursor.m_x > titleBarLeft && cursor.m_x < titleBarRight;
+                bool const isCursorWithinTitleBarY = cursor.m_y > titleBarTop && cursor.m_y < titleBarBottom;
+                if ( isCursorWithinTitleBarX && isCursorWithinTitleBarY )
+                {
+                    #if EE_DEVELOPMENT_TOOLS
+                    if ( !ImGuiX::Platform::IsPointInTitleBarInteractiveSection( cursor.m_x, cursor.m_y ) )
+                    #endif
                     {
                         return SDL_HITTEST_DRAGGABLE;
                     }

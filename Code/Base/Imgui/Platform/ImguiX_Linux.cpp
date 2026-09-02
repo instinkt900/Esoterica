@@ -2,6 +2,7 @@
 
 #if EE_DEVELOPMENT_TOOLS
 #ifdef __linux__
+#include "ImguiX_Linux.h"
 #include <SDL3/SDL.h>
 
 //-------------------------------------------------------------------------
@@ -12,9 +13,40 @@
 
 namespace EE::ImGuiX
 {
+    // The title bar's non-draggable sub-rects, in window coordinates. The hit test runs on the
+    // same thread as the draw, one frame behind it. See ImguiX_Linux.h for why it cannot instead
+    // ask imgui what is hovered.
+    struct TitleBarInteractiveSection
+    {
+        float m_left = 0, m_top = 0, m_right = 0, m_bottom = 0;
+    };
+
+    constexpr static int32_t const g_maxTitleBarInteractiveSections = 3; // menus, controls, window controls
+    static TitleBarInteractiveSection g_titleBarInteractiveSections[g_maxTitleBarInteractiveSections];
+    static int32_t g_numTitleBarInteractiveSections = 0;
+
+    static void RecordTitleBarInteractiveSection( ImVec2 const& pos, ImVec2 const& size )
+    {
+        if ( size.x <= 0.0f || size.y <= 0.0f )
+        {
+            return;
+        }
+
+        EE_ASSERT( g_numTitleBarInteractiveSections < g_maxTitleBarInteractiveSections );
+        TitleBarInteractiveSection& section = g_titleBarInteractiveSections[g_numTitleBarInteractiveSections];
+        section.m_left = pos.x;
+        section.m_top = pos.y;
+        section.m_right = pos.x + size.x;
+        section.m_bottom = pos.y + size.y;
+        g_numTitleBarInteractiveSections++;
+    }
+
+    //-------------------------------------------------------------------------
+
     void ApplicationTitleBar::Draw( TFunction<void()>&& menuDrawFunction, float menuSectionDesiredWidth, TFunction<void()>&& controlsSectionDrawFunction, float controlsSectionDesiredWidth )
     {
         m_rect.Reset();
+        g_numTitleBarInteractiveSections = 0;
 
         //-------------------------------------------------------------------------
 
@@ -58,6 +90,8 @@ namespace EE::ImGuiX
                 ImGui::PushStyleColor( ImGuiCol_ChildBg, Colors::Green ); // Debug Color
                 #endif
 
+                RecordTitleBarInteractiveSection( menuSectionStartPos, ImVec2( menuSectionFinalWidth, titleBarHeight ) );
+
                 ImGui::SetCursorPos( menuSectionStartPos );
                 ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 0, 0 ) );
                 ImGui::PushStyleVar( ImGuiStyleVar_FramePadding, ImGui::GetStyle().FramePadding + ImVec2( 0, 2 ) );
@@ -87,6 +121,8 @@ namespace EE::ImGuiX
                 ImGui::PushStyleColor( ImGuiCol_ChildBg, Colors::Red ); // Debug Color
                 #endif
 
+                RecordTitleBarInteractiveSection( controlSectionStartPos, ImVec2( controlSectionFinalWidth, titleBarHeight ) );
+
                 ImGui::SetCursorPos( controlSectionStartPos );
                 ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 0, 0 ) );
                 bool const drawControlsSection = ImGui::BeginChild( "Right", ImVec2( controlSectionFinalWidth, titleBarHeight ), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoDecoration );
@@ -109,6 +145,8 @@ namespace EE::ImGuiX
             #if EE_ENABLE_IMGUIX_DEBUG
             ImGui::PushStyleColor( ImGuiCol_ChildBg, Colors::Blue ); // Debug Color
             #endif
+
+            RecordTitleBarInteractiveSection( windowControlsStartPos, ImVec2( windowControlsWidth, titleBarHeight ) );
 
             ImGui::SetCursorPos( windowControlsStartPos );
             if ( ImGui::BeginChild( "WindowControls", ImVec2( windowControlsWidth, titleBarHeight ), 0, ImGuiWindowFlags_NoDecoration ) )
@@ -134,10 +172,9 @@ namespace EE::ImGuiX
 
         //-------------------------------------------------------------------------
 
-        // The SDL3 imgui backend leaves PlatformHandleRaw null on Linux - it only fills it in on
-        // Windows and macOS - and stores the SDL_WindowID in PlatformHandle instead. So the
-        // window is looked up by id here, where the Win32 sibling casts PlatformHandleRaw to an
-        // HWND. See ImGui_ImplSDL3_SetupPlatformHandles.
+        // The SDL3 imgui backend stores the SDL_WindowID in PlatformHandle, so the window is
+        // looked up by id here, where the Win32 sibling casts PlatformHandleRaw to an HWND.
+        // See ImGui_ImplSDL3_SetupPlatformHandles.
         auto const windowID = (SDL_WindowID) (intptr_t) ImGui::GetWindowViewport()->PlatformHandle;
         SDL_Window* pWindow = SDL_GetWindowFromID( windowID );
 
@@ -215,6 +252,28 @@ namespace EE::ImGuiX
 
         ImGui::PopStyleColor();
         ImGui::PopStyleVar( 2 );
+    }
+}
+
+//-------------------------------------------------------------------------
+
+namespace EE::ImGuiX::Platform
+{
+    bool IsPointInTitleBarInteractiveSection( int32_t windowX, int32_t windowY )
+    {
+        float const x = (float) windowX;
+        float const y = (float) windowY;
+
+        for ( int32_t i = 0; i < g_numTitleBarInteractiveSections; i++ )
+        {
+            TitleBarInteractiveSection const& section = g_titleBarInteractiveSections[i];
+            if ( x >= section.m_left && x < section.m_right && y >= section.m_top && y < section.m_bottom )
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 #endif

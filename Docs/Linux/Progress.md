@@ -33,14 +33,20 @@ them; that file is how they are found. A task that leaves something unverified a
 > seven features in criterion 8 are verified, and so is P5.11. What is left there is **P5.16
 > raytracing** and the rows that need the editor rather than the engine.
 >
-> ### **The editor opens a map and renders it.**
+> ### **The editor has been shaken down, and every tool opens.**
 >
-> P7.6's first pass, 2026-09-01. `demo/render/pbr/pbrdemo.map` in the map editor, host validation
-> on, zero validation messages, and a clean shutdown with no leaks. **Two defects: the title bar
-> cannot reliably be clicked** (a stale imgui hover state in the hit test), and
-> **`GetEnumInfo<T>()` was MSVC-only**, which killed the editor whenever a physics property grid
-> was drawn - fixed, escalated and approved. A `VK_ERROR_DEVICE_LOST` seen twice is **not** yet
-> attributed to the port: both sightings were on a virtual display. See the entry below.
+> P7.6's second pass, 2026-09-02, an hour of driving on the RTX 3090 with **zero errors and zero
+> validation messages**. Every tool opens - importer, dependency viewer, system info, bulk edit,
+> memory tracker, settings, and the animation graph editor with its own live 3D preview.
+> **Multi-viewport works**, a tool drags out into its own OS window and renders. **Hot reload
+> closes end to end**, which is P7.5's fifth link: a material rewritten with the
+> rename-over-original pattern changed the live viewport with no restart. Clean shutdown, no leaks.
+>
+> **Two defects found and fixed, both in this fork's own files, no upstream edit.** Every
+> popped-out viewport was a window with no swapchain - `PlatformHandleRaw` is null on Linux, so
+> `ImguiRenderer` fell back to an `SDL_WindowID` and `SDL_Vulkan_CreateSurface` rejected it. And
+> the title bar hit test's stale hover state, diagnosed on 2026-09-01, is fixed and measured.
+> See the entry below.
 
 **Phase 7 is in flight, and P7.6 is what is left in it.** The whole tree builds in Debug and
 Release, and **nothing in it fails to compile.** `Esoterica.Applications.Editor` and
@@ -500,6 +506,12 @@ read `m_pMappedAddress_WriteCombined` a few hundred frames later. For a texture,
   parity and there is no OIT to have parity with.
 - **`requirements_gamenetworkingsockets` does not version-check `protoc`.** A stale one earlier on
   `PATH` is accepted and fails deep inside the build.
+- **The Shipping configuration does not link on the RTX 3090 machine**, though it links on the
+  first one. Every one of its 607 compile steps succeeds and the link then fails in `ld`, not in
+  the code: `LLVMgold.so: cannot open shared object file`. `External/LLVM/lib/LLVMgold.so` does
+  not exist in this machine's LLVM install, so its Shipping LTO has no plugin. Found on
+  2026-09-02 while checking a `#if EE_DEVELOPMENT_TOOLS` guard; **it is a dependency gap between
+  the two machines, not a code defect**, and no Shipping binary has ever been linked here.
 
 ---
 
@@ -530,17 +542,17 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 
 ## In flight
 
-> ### **Phase 7. Everything before P7.6 is merged, and P7.6 has had its first pass.**
+> ### **Phase 7. Everything before P7.6 is merged, and P7.6 has been shaken down.**
 >
 > | Task | State |
 > |---|---|
-> | P7.0, P7.1, P7.2, P7.3, P7.4, P7.5 | merged (#68, #69 and #70 landed on 2026-09-01) |
-> | P7.6 editor shakedown | **first pass done.** The editor opens a map; two defects found, one fixed |
+> | P7.0, P7.1, P7.2, P7.3, P7.4, P7.5 | merged (#68, #69 and #70 landed on 2026-09-01; P7.5's fifth link closed on 2026-09-02) |
+> | P7.6 editor shakedown | **second pass done**, 2026-09-02. Criteria 5, 6, 8, 9 and 10 met; two defects found and fixed |
 >
-> **P7.6 is the whole of what is left in Phase 7.** The first pass is the 2026-09-01 entry below.
-> What remains needs an **awake, unlocked** RTX 3090 desktop: the tools that were never opened, and
-> a loaded run to settle whether the `VK_ERROR_DEVICE_LOST` is the editor or the virtual display.
-> The rows are in [Blocked.md](Blocked.md).
+> **P7.6 is the whole of what is left in Phase 7, and only four things are left in it.** Criterion
+> 3's minimize and maximize need a window manager that implements them, the ragdoll editor needs a
+> skeletal asset the dataset does not have, seven `OpenInExplorer` call sites are unexercised, and
+> criterion 11 is the standing Windows build. The rows are in [Blocked.md](Blocked.md).
 
 ---
 
@@ -581,6 +593,163 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-02 - P7.6 second pass. Every tool opens, hot reload closes, and two defects that hid the rest are fixed
+
+**The editor was driven for an hour on the RTX 3090 with zero errors and zero validation messages**,
+and the shakedown that P7.6's first pass could not reach is done. Seven of the eight rows in
+[Blocked.md](Blocked.md)'s editor queue are retired. **Two defects were found and fixed**, both of
+which had to be fixed *first*, because each one hid the work behind it.
+
+**No upstream file was edited.** All four files are this fork's own, so
+[TouchedFiles.md](TouchedFiles.md) is unchanged.
+
+#### Every popped-out viewport was a window with no swapchain
+
+Opening any tool that imgui placed outside the main window logged one error and drew nothing:
+
+```
+SDL_Vulkan_CreateSurface failed: Invalid window   PlatformUtils_Linux.cpp:313
+```
+
+`ImguiRenderer::ImGui_CreateWindowContext` (`ImguiRenderer.cpp:20`) picks the handle to build the
+viewport's swapchain from:
+
+```cpp
+void* hwnd = pViewport->PlatformHandleRaw ? pViewport->PlatformHandleRaw : pViewport->PlatformHandle;
+```
+
+`ImGui_ImplSDL3_SetupPlatformHandles` fills `PlatformHandleRaw` in on Windows and macOS and leaves
+it **null everywhere else**, so Linux took the fallback - and `PlatformHandle` is an
+`SDL_WindowID`, an integer, not a window. `SDL_Vulkan_CreateSurface` rejected it as an "Invalid
+window", the viewport got no surface, and every tool dragged out of the dock was a blank OS window.
+
+**Fixed in `ImguiPlatform_Linux.cpp`**, as an `#elif defined(__linux__)` branch in the existing
+`_WIN32`/`__APPLE__` chain, setting `PlatformHandleRaw` to the `SDL_Window*`. The port already
+defines the native window handle on Linux as the `SDL_Window*` - see
+`Platform::Linux::CreateVulkanSurface` and the comment at `RHI_Vulkan.cpp:2367` - so
+`ImguiRenderer.cpp` then works unchanged, and **needs no upstream edit at all.** The stale comment
+in `ImguiX_Linux.cpp` that said `PlatformHandleRaw` is null on Linux was corrected.
+
+#### The title bar hit test, fixed and measured
+
+Row 6 was diagnosed on 2026-09-01 and deliberately left. It is fixed now, the way that entry
+proposed: `ApplicationTitleBar::Draw` records its three non-draggable sub-rects - the menu section,
+the controls section and the window controls - and `LinuxApplication::BorderlessWindowHitTest`
+tests the cursor against those instead of against `ImGui::IsAnyItemHovered()`.
+
+New file `Code/Base/Imgui/Platform/ImguiX_Linux.h` declares the one query. The hovered flag is
+still read, and still ignored, so the measurement below could be taken without a second build.
+
+Measured on a 2560-wide window with a temporary `printf` in the hit test, since `ptrace_scope` is
+1 here and gdb cannot attach to a running editor:
+
+| window x | region | result |
+|---|---|---|
+| 100-380 | menu section, 8-408 | NORMAL |
+| 420-1580 | the gap, 408-1617 | DRAGGABLE |
+| 1620-2380 | controls section, 1617-2417 | NORMAL |
+| 2420 | the 8 px section padding | DRAGGABLE |
+| 2450, 2500, 2540 | minimize, maximize, close | NORMAL |
+
+**The same trace shows the old flag still lagging** - `700,700` in the client area reported
+`hovered=1`, inherited from the close button visited before it. Under the old code that lag broke
+the hit test in *both* directions: `700,18` is empty title bar and reported `hovered=1`, so the
+window would not drag; `2450,18` is the minimize button and reported `hovered=0`, so pressing it
+would have dragged the window instead. Both are right now, and neither depends on frame order.
+
+**The draggable region is now the gap between the sections rather than "anywhere no widget is
+hovered".** That is the design's own model: `s_minimumDraggableGap` exists to guarantee the gap,
+and the sections are fixed at 400 and 800 px, so the gap grows with the window - 1209 px at 2560
+wide, 249 px at 1600. The gaps between the three window-control buttons are correctly
+non-draggable now, where before they were not.
+
+#### What the shakedown found
+
+Criterion 8, every tool opened, no crashes, no errors:
+
+| Tool | Result |
+|---|---|
+| Resource Importer | Opens. Parsed `Floor.fbx`, listed its meshes and materials and its two referencing resources. **Its window had never been seen** |
+| Resource Dependency Viewer | Opens, with its picker and toolbar |
+| Resource System Info | Opens, populated - 5 resources with load, wait and install times, plus record history |
+| Resource Bulk Edit | Opens |
+| Memory Tracker | Opens, populated. CPU 7.42 MB tracked / 45.03 MB, **and live GPU accounting**: VRAM 183.61 MB, per-resource-type down to `Buffer [SRV\|UAV\|Indirect]` x171 |
+| System Settings | Opens, full reflected settings tree |
+| UI Test, ImGui Demo, ImPlot Demo | All three open and render |
+| Animation graph editor | Opens complete - graph view, control parameters, variation editor, debugger, **and a second live 3D preview viewport** |
+| Property grids | Render. The Inspector's entity grid, and the ragdoll create dialog's |
+| Ragdoll editor | **Not reachable with this dataset.** It requires a Skeleton resource and `Data/` has none - no `.skel` and no `.anim`, and the only FBXs are non-skeletal. Not a port defect |
+
+Criterion 9, multi-viewport: **met.** The Outliner was dragged out of the dock into its own OS
+window, entirely outside the main window, rendering through the engine's own renderer - then
+dragged back in, with the destroy path clean.
+
+Criterion 6, hot reload end to end: **met, and this closes P7.5's fifth link.** With the map open,
+`Boulder.material` was rewritten to a temp file and **renamed over the original**, which is the
+write pattern the criterion names. The boulder turned white in the live viewport with no restart;
+restoring the file the same way turned it back. The Resource Server's own request table is the
+independent record: `Boulder.material` compiled in 48.6 ms at 12:49:56 followed by
+`DefaultWhite.texture`, then 29.5 ms at 12:50:36 followed by `BoulderAlbedo.texture`.
+
+Criterion 5, `OpenInExplorer`: **met for the resource browser.** Nautilus was D-Bus-activated and
+reported `"p76_scratch.ag" selected (69 bytes)` - the containing folder opened with the item
+selected, which is what `explorer.exe /select,` does. Only that one call site was exercised; the
+other seven build the path differently but all funnel into the same `Platform::OpenInExplorer`.
+
+Criterion 10: clean shutdown from the title bar close button - "Shutdown Started", "No device
+memory leaked", gone. The only two `[Error]` lines in the whole session are the websocket's
+`Normal closure` at shutdown, which upstream logs at error level.
+
+#### The Test Compile panel overlap, reproduced and explained
+
+Row 5 is confirmed, and the trigger is narrow panels, not Linux:
+
+```cpp
+ImGui::SameLine( ImGui::GetContentRegionAvail().x - 200 );   // ResourceServerUI.cpp:881
+```
+
+`GetContentRegionAvail().x` is the full content width at that point, so the button is placed 200 px
+from the right. Once the panel is narrower than the checkbox plus 200 px the offset lands left of
+the checkbox's right edge and imgui draws the button on top of it. Dragging the server's dock
+splitter in reproduces it exactly. **Deliberately not fixed** - `ResourceServerUI.cpp` is upstream
+and platform-neutral, and the phase document's "do not" list says to record such bugs rather than
+fix them. It will do the same thing on Windows.
+
+#### One thing that was not a defect after all
+
+P7.6's first pass saw the Outliner's selection do nothing and deliberately declined to call it a
+defect, because the device was lost later in that run. **Retested: it works.** Selecting `Boulder`
+populates the Inspector with the entity, its Static Mesh Component and its property grid, and the
+viewport's transform gizmo buttons appear.
+
+#### Two traps in driving imgui with synthetic input, neither a port defect
+
+- **`xdotool click` puts the press and the release in one frame.** At 15-30 FPS a menu opens and
+  closes inside a single frame, so menus appear not to respond and the failure is intermittent.
+  Send `mousedown`, sleep, `mouseup`. This cost an hour and looked exactly like the title bar
+  defect.
+- **SDL's own drag and resize do not respond to synthetic pointer events under Xvfb.** Resize from
+  a window edge does not either, and that path was never touched, so neither result says anything
+  about the hit test. That is why the table above was measured from inside the code instead.
+
+#### A Shipping build was attempted, and this machine cannot link one
+
+The hit test's new call is inside `#if EE_DEVELOPMENT_TOOLS`, and `ImguiX_Linux.cpp` compiles to
+nothing without it, so Shipping is the configuration that proves the guard. **All 607 of its
+compile steps pass**, which is what was being checked. The link then fails in `ld` rather than in
+the code - `LLVMgold.so: cannot open shared object file` - because
+`External/LLVM/lib/LLVMgold.so` does not exist in this machine's LLVM install. No Shipping binary
+has ever been linked here; the 2026-08-31 "Shipping links" entry was the first machine. Recorded
+in [Still open](#still-open).
+
+#### Still blocked, and why
+
+Minimize and maximize (row 4) still need a window manager that implements them; i3 is the only one
+installed and the developer declined an install. Row 9 needs a different driver. **P5.16 raytracing
+is untouched** and is the largest thing left in the GPU queue.
+
+---
 
 ### 2026-09-01 - P7.6 first pass. The editor opens a map, and the hang that killed it is fixed
 

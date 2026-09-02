@@ -36,7 +36,7 @@ work to do next.
 > | P7.3 Resource Server | done. It serves on `127.0.0.1:5556`, spawns compiler workers and draws its full UI |
 > | P7.4 `OpenInExplorer` | done, in review as PR #69. It was not a verification task; the function was opening the wrong applications |
 > | P7.5 Hot reload | four links of five, in review as PR #70. The fifth needs a GPU that can keep the editor alive |
-> | P7.6 Editor shakedown | not started |
+> | P7.6 Editor shakedown | shaken down 2026-09-02. See [Acceptance criteria](#acceptance-criteria) |
 >
 > **[Progress.md](../Progress.md) is the authority on what each task actually did**, and the task
 > descriptions below are the original plan. Where they disagree, Progress.md is right.
@@ -272,8 +272,17 @@ platform-neutral upstream bugs. See Conventions rule 3.
 at the top and the queues in [Blocked.md](../Blocked.md). **Say which of these you could not
 check, rather than marking them met or failed.**
 
-Met so far: 1, 2, 4 and 7. Criterion 6 is met to the point where the server pushes
-`ResourceUpdated` to a connected client; the editor acting on it is the unproved part.
+Met: 1, 2, 4, 5, 6, 7, 9, 10, and 12. **Criterion 6 is fully met** as of 2026-09-02 - a material
+rewritten with the rename-over-original pattern changed the live viewport, with the Resource
+Server's request table as the independent record.
+
+**Criterion 3 is met except for minimize and maximize**, which i3 does not implement, so they
+cannot be exercised here. **Criterion 8 is met except for the ragdoll editor**, which needs a
+Skeleton resource that `Data/` does not contain. **Criterion 11 has still never been run** - no
+Windows build has happened at any point in this port.
+
+The 2026-09-02 entry in [Progress.md](../Progress.md) has the detail, including the two defects
+that had to be fixed before the shakedown could see anything.
 
 1. `Build/Linux_Release/Esoterica.Applications.Editor` builds, links, and launches.
 2. `Build/Linux_Release/Esoterica.Applications.ResourceServer` builds, links, and runs. **The
