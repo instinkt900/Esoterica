@@ -228,8 +228,15 @@ There is no `KillEsotericaProcesses.sh`; only the `.bat` exists.
 pkill -f "Esoterica.Applications"
 ```
 
-Worth running after a crash. A Resource Server left holding 5556 makes the next launch look like
-a networking failure.
+Worth running after a crash. Anything left holding 5556 makes the next launch look like a
+networking failure.
+
+**The server is not the only thing that can hold the port.** Its `ResourceCompiler -worker`
+children inherit the listening socket, and they can outlive it: after one editor session the
+server was gone while two workers were still `LISTEN`ing on 5556, reparented to `init`. A
+Resource Server started after that cannot bind, so the symptom is a networking error with no
+server anywhere in `ps`. The `pkill` above matches the workers too, which is why it is worth
+running even when no server appears to be up.
 
 ## Troubleshooting
 
@@ -238,7 +245,7 @@ a networking failure.
 | `FileNotFoundError: ... 'clang++'` from `NinjaGen.py` | `External/LLVM/bin` is not on `PATH` |
 | `Connection refused` on `127.0.0.1:5556`, continuously | The Resource Server target was never built |
 | `Couldn't start resource server (.../EsotericaResourceServer.exe)` | The `[Resource]` keys are missing from `Esoterica.ini` |
-| `Cant open network connection on port: 5556` | A Resource Server is already running. `pkill -f "Esoterica.Applications"` |
+| `Cant open network connection on port: 5556` | A Resource Server is already running, **or orphaned `ResourceCompiler -worker` processes still hold the inherited socket with no server running**. `pkill -f "Esoterica.Applications"` |
 | `NinjaGen.py` reports 8 `BuildGenerator` problems | Expected. It is a Windows-only application |
 | `vkCreateShaderModule` rejects a capability the device has | Stale SPIR-V. Re-run `CompileShaders.sh`, then `NinjaGen.py` |
 | Editor UI does not undock into separate windows | A Wayland session. Log into X11 |
