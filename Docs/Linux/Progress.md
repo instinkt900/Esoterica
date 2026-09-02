@@ -535,7 +535,7 @@ correct-enough to keep going and wrong enough to sweep before the port is called
 | What | Where | Why it was deferred | What it costs |
 |---|---|---|---|
 | ~~The cluster culling argument buffer is never cleared~~ **Fixed.** The editor passes `maxNumCommands` = 146 where the engine passes 1, so 145 dispatches a frame read stale argument slots. Real, and **not** the P7.6 editor hang, which was the `EE_IndirectRoot` inheritance below | `Renderer_ForwardShading.cpp:732` | Was deferred as "one line in an upstream engine file", on the assumption that `maxNumCommands` stays 1 | Nothing now. See the P7.6 deadlock entry below |
-| Attachment transitions use `ALL_COMMANDS` and all-access masks | `TransitionAttachmentIfNeeded`, `RHI_Vulkan.cpp` | Nothing at the call site says what last touched the image or what the pass will do to it | Over-synchronisation. Correct, slow. Belongs with the other `ALL_COMMANDS` sites above |
+| ~~Attachment transitions use `ALL_COMMANDS` and all-access masks~~ **Decided by P8.4: permanent.** | `TransitionAttachmentIfNeeded`, `RHI_Vulkan.cpp` | Nothing at the call site says what last touched the image or what the pass will do to it | Over-synchronisation. Correct, slow. It moved to the [`ALL_COMMANDS` sites](#all_commands-sites) table with the other six, and the reasoning for all seven is there |
 | Mesh draws are dropped instead of halting | `CmdSetPipeline`, `RHI_Vulkan.cpp` | No GPU here has `VK_EXT_mesh_shader`, and halting stopped the frame before anything else could be exercised | **A frame missing its geometry is not a rendered frame.** It warns once. On hardware with mesh shaders the branch never runs |
 | A pixel shader in an indirect draw reads command 0's root **constants** | `EE_INDIRECT_PIXEL_ENTRY_INIT`, `RHI.esh` | There is no `DrawIndex` in a fragment shader, and carrying the command index across the stage boundary means a new per-primitive attribute in upstream structs | Nothing today. Exact for the root **CBV**, because `BucketResolve.esf:41` writes the same address into every command. The per-command root constants - `m_clusterOffset`, `m_renderViewIndex`, `m_clusterVisibleBuffer` - would be command 0's, and no pixel shader reads one. **A pixel shader that starts reading one gets silently wrong data past the first command** |
 | An indirect `RootSRV` cannot be read | `CreateCommandSignature`, `RHI_Vulkan.cpp` | Only `RootConstants` and `RootCBV` have indirect declarations. `DebugDrawMesh.esf` declares a `RootSRV`, so a signature can carry one | Nothing indexes it yet. A shader that did would need a third declaration macro |
@@ -570,7 +570,7 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 > | P8.1 The Windows build | not started. **The largest unmeasured risk in the port** |
 > | P8.2 Runtime shakedown | **mostly done**, 2026-09-02. Game preview runs, physics simulates, all three animation editors open. Gamepad camera control still needs a controller |
 > | P8.3 Raytracing, or the decision not to | **deferred**, 2026-09-03, by the developer. Still open - a deferral is not one of the two outcomes the task asks for |
-> | P8.4 RHI debt sweep | not started |
+> | P8.4 RHI debt sweep | **done**, 2026-09-03. Phase 5 criteria 1, 8 and 9 closed. Found an upstream translate-gizmo crash |
 > | P8.5 Shader conformance | not started |
 > | P8.6 Sanitizers and build coverage | not started |
 > | P8.7 Fork review | not started. Do this last |
@@ -593,16 +593,37 @@ matters now.
 ## `ALL_COMMANDS` sites
 
 Phase 5's "do not" list says to record every temporary `ALL_COMMANDS` barrier rather than leave it
-to be found later. All four sites are in `RHI_Vulkan.cpp`:
+to be found later. All seven sites are in `RHI_Vulkan.cpp`.
 
-| Site | Why it is there | What narrowing it needs |
-|---|---|---|
-| `QueueDeviceWait`, wait `stageMask` (P5.2) | `ID3D12CommandQueue::Wait` blocks the whole queue, and this has to mean the same thing. | Knowledge of what the waiting submit does, which the caller does not pass. |
-| `QueueSubmit`, signal `stageMask` (P5.2) | The signalled timeline value has to mean "everything in this submit finished". | Nothing. `ALL_COMMANDS` is arguably correct here rather than lazy, since that is the semantic. |
-| `VulkanPipelineStage`, `PipelineStage::All` (P5.9) | `D3D12_BARRIER_SYNC_ALL` means every stage, and so does this. The reference returns it the same way, as an early return rather than one bit among many. | Nothing. It is the meaning of the flag. |
-| `VulkanAccess`, `ResourceAccess::Common` (P5.9) | `D3D12_BARRIER_ACCESS_COMMON` is "any access", which Vulkan spells `MEMORY_READ` plus `MEMORY_WRITE`. `DeviceTextureState` starts every texture at `Common`, so this is the source mask of the first barrier on any texture. | The engine would have to say what it actually did, which the tracker does not record. Narrowing it is a change on the engine side, not here. |
-| `RecordQueueOrderingWait`, both masks (P5.3) | A Direct3D 12 queue runs its command lists in submission order and a Vulkan queue does not, so every submit waits on the previous submit's timeline value. "The previous submit finished" is the whole meaning of the wait. | Nothing. It is the semantic, the way `QueueSubmit`'s signal mask is. |
-| `RecordClearVisibilityBarrier`, destination masks (P5.10) | A clear has to be visible to whatever reads it next, and the engine's own barrier after a clear names a shader write as the source, which does not cover a Vulkan transfer write. Nothing at the call site says who the reader is. | The reader. In practice it is a compute dispatch, an indirect argument fetch or a copy to a host buffer, and naming those three would narrow it. Confirm against a captured frame first. |
+> ### **P8.4 swept these on 2026-09-03. All seven are permanent, for two different reasons.**
+>
+> **Three are not debt at all.** `QueueSubmit`'s signal mask, `PipelineStage::All` and
+> `RecordQueueOrderingWait` mean "everything", and `ALL_COMMANDS` is the Vulkan spelling of that.
+> Narrowing them would make them wrong.
+>
+> **Four are correct-but-slow, and narrowing every one of them needs information the RHI
+> abstraction does not carry.** The call site cannot say what last touched a resource or what the
+> next pass will do to it, because `RHI.h` has nowhere to put that. Adding it is a change to a
+> shared header that reaches Direct3D 12, which Phase 5 criterion 2 protects and which is
+> upstream's side of the line - see [Escalation triggers](00-Conventions.md#escalation-triggers).
+>
+> **There is also no measured reason to.** No frame here is GPU-bound, no profile names a barrier
+> stall, and **over-synchronising is the safe direction**: a barrier that is too wide costs time,
+> and one that is too narrow is a corruption bug that appears on somebody else's driver. Trading a
+> known cost for an unknown risk with no measurement is a bad trade.
+>
+> **What would reopen this:** a profile that names one of these barriers. Then narrow *that* one,
+> against a captured frame, and leave the rest.
+
+| Site | Why it is there | What narrowing it needs | P8.4 decision |
+|---|---|---|---|
+| `QueueDeviceWait`, wait `stageMask` (P5.2) | `ID3D12CommandQueue::Wait` blocks the whole queue, and this has to mean the same thing. | Knowledge of what the waiting submit does, which the caller does not pass. | **Permanent.** Needs an `RHI.h` change to carry what the waiting submit does. Reaches Direct3D 12 |
+| `QueueSubmit`, signal `stageMask` (P5.2) | The signalled timeline value has to mean "everything in this submit finished". | Nothing. `ALL_COMMANDS` is arguably correct here rather than lazy, since that is the semantic. | **Permanent, and not debt.** It is the semantic |
+| `VulkanPipelineStage`, `PipelineStage::All` (P5.9) | `D3D12_BARRIER_SYNC_ALL` means every stage, and so does this. The reference returns it the same way, as an early return rather than one bit among many. | Nothing. It is the meaning of the flag. | **Permanent, and not debt.** It is the meaning of the flag |
+| `VulkanAccess`, `ResourceAccess::Common` (P5.9) | `D3D12_BARRIER_ACCESS_COMMON` is "any access", which Vulkan spells `MEMORY_READ` plus `MEMORY_WRITE`. `DeviceTextureState` starts every texture at `Common`, so this is the source mask of the first barrier on any texture. | The engine would have to say what it actually did, which the tracker does not record. Narrowing it is a change on the engine side, not here. | **Permanent.** Needs the engine to record what it actually did. Engine-side, not RHI-side |
+| `RecordQueueOrderingWait`, both masks (P5.3) | A Direct3D 12 queue runs its command lists in submission order and a Vulkan queue does not, so every submit waits on the previous submit's timeline value. "The previous submit finished" is the whole meaning of the wait. | Nothing. It is the semantic, the way `QueueSubmit`'s signal mask is. | **Permanent, and not debt.** It is the semantic |
+| `RecordClearVisibilityBarrier`, destination masks (P5.10) | A clear has to be visible to whatever reads it next, and the engine's own barrier after a clear names a shader write as the source, which does not cover a Vulkan transfer write. Nothing at the call site says who the reader is. | The reader. In practice it is a compute dispatch, an indirect argument fetch or a copy to a host buffer, and naming those three would narrow it. Confirm against a captured frame first. | **Permanent for now.** The only one narrowable without an API change, and nothing measured says it is worth the risk |
+| `TransitionAttachmentIfNeeded`, both masks and all-access (P5.9) | An attachment has to be in the right layout before a pass uses it, and nothing at the call site says what last touched the image or what the pass will do to it. | The same information the other four want. Moved here from [Deferred on purpose](#deferred-on-purpose) by P8.4, because it is the same decision. | **Permanent.** Needs an `RHI.h` change. Reaches Direct3D 12 |
 
 ---
 
@@ -618,6 +639,105 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-03 - P8.4 RHI debt sweep. **Mesh picking works**, the barrier debt is permanent, and the translate gizmo has an upstream crash
+
+**This task was four decisions and one measurement.** The measurement passed, the four decisions
+are recorded below, and **Phase 5's criteria 1, 8 and 9 are now closed.** Only 7 and 11 are left
+there, and both need a Windows machine.
+
+**No code changed.** That is the expected shape of a debt sweep: the point was to decide, not to
+edit.
+
+#### Mesh picking is verified - Phase 5 criterion 8 is complete
+
+Three clicks in the map editor viewport on `pbrdemo`, each selecting exactly what was under the
+cursor, confirmed in both the Outliner highlight and the Inspector contents:
+
+| Clicked on | Selected |
+|---|---|
+| The boulder | `Boulder`, with its Static Mesh Component |
+| Sky, and the reflective ground | `Skydome`, with its Static Mesh and Directional Light Components |
+| The floor | `Floor`, with its Static Mesh Component |
+
+**The floor is the interesting one.** At the default camera it is edge-on, so it is about two
+pixels tall on screen - selecting it from the Outliner draws its bounds as a single yellow line
+across the viewport. Clicking that two-pixel sliver still returns `Floor`, which is a much better
+test of the picking buffer than a large target would have been. `m_lastKnownPickingPixelRadius`
+is 4, which is what makes it hittable.
+
+**Do not go looking for the floor below the horizon.** The bright band across the middle of the
+default view is the skydome's horizon, not the ground, and the large reflective blue area under it
+is the skydome as well. Both return `Skydome`, correctly. Twenty minutes went into clicking those
+two before selecting `Floor` in the Outliner showed where it actually was.
+
+#### The barrier debt is permanent, and the reasoning is in one place now
+
+The [`ALL_COMMANDS` sites](#all_commands-sites) table has a decision column, and the attachment
+transitions moved into it from [Deferred on purpose](#deferred-on-purpose) because they are the
+same decision. Seven sites, two reasons:
+
+- **Three are not debt.** `QueueSubmit`'s signal mask, `PipelineStage::All` and
+  `RecordQueueOrderingWait` mean "everything". `ALL_COMMANDS` is how Vulkan spells that.
+- **Four are correct-but-slow, and narrowing them needs information `RHI.h` does not carry.**
+  The call site cannot say what last touched a resource. Adding that is a shared-header change
+  that reaches Direct3D 12, which criterion 2 protects and Conventions rule 3 puts on upstream's
+  side of the line.
+
+**And nothing measured says it is worth it.** No profile here names a barrier stall. Over-
+synchronising costs time; under-synchronising is a corruption bug on somebody else's driver. A
+profile naming one of these is what would reopen it.
+
+#### The two `EE_UNIMPLEMENTED_FUNCTION` markers stay
+
+Criterion 1 asked for zero. **Two remain, down from 103, and neither is an unimplemented
+function** - each guards a branch inside a working function that nothing reaches. A sampler border
+colour that is not transparent black, opaque black or opaque white would need
+`VK_EXT_custom_border_color`; a static sampler would need the binding model to use one.
+
+**Each names the caller that started needing the feature, the moment one appears.** Deleting them
+trades a loud precise failure for a silent wrong result - the wrong border colour, or a sampler
+quietly not bound. Neither can be implemented without a caller to test against, and an untested
+implementation written to satisfy the wording of a criterion is worse than the marker. Criterion 1
+is now recorded as met in substance and not to the letter, with that reasoning.
+
+#### No in-engine RenderDoc trigger, for the same reason as raytracing
+
+`BeginFrameCapture` and `EndFrameCapture` are implemented and work. They have **zero callers in
+`Code/` on either backend** - `RHI_Direct3D12.cpp` implements them and nothing calls them there
+either. **Having no trigger is parity**, and adding one is a feature upstream does not have, which
+Phase 8's "do not" list forbids. RenderDoc must attach before `vkCreateInstance` anyway, so a
+trigger would not save the relaunch. The capture key is the trigger; a temporary in-engine call is
+the fallback when a specific frame has to be caught, which is what the 2026-09-01 capture did.
+Host validation still has to be off, or the engine segfaults inside `librenderdoc.so`.
+
+#### The find: the translate gizmo crashes when an axis lines up with the camera
+
+Verifying picking crashed the editor twice before it succeeded once. It is **upstream, platform-
+neutral, deterministic, and easy for a user to hit** - the default gizmo mode, an ordinary camera
+angle, and any selected entity. Written up under
+[Upstream issues observed](#upstream-issues-observed) with a gdb backtrace and a reproduction.
+**Not fixed here.**
+
+Two things about finding it that are worth reusing:
+
+- **`gdb` cannot attach on this machine** - `ptrace_scope` refuses, and `apport` swallows the core
+  dump, so `Trace/breakpoint trap (core dumped)` leaves nothing behind. **Launching the editor
+  under `gdb --batch` works**, and `-ex "handle SIGTRAP stop nopass" -ex run -ex "bt 15"` turns an
+  assert into a backtrace. Symbol loading takes a couple of minutes; run it in the background and
+  drive the repro with `xdotool` once the window appears.
+- **A failed reproduction is not a disproof.** The deliberate attempt - pitch the camera straight
+  down with an entity selected - did not fire, because it went *past* the degenerate angle rather
+  than through it. Replaying the original sequence verbatim reproduced it first try. Replay before
+  concluding it is intermittent.
+
+- Files added: none.
+- Upstream files edited: none. **No code changed at all.**
+- Docs: Phase 5 criteria 1, 8 and 9 closed; the `ALL_COMMANDS` table gained a decision column and a
+  seventh row; the attachment-transition entry in Deferred on purpose points at it; Blocked.md's
+  mesh picking row is deleted.
+- Acceptance criteria met: Phase 8 criterion 7 (mesh picking verified from an editor viewport), and
+  P8.4's own "every item is either fixed or has a recorded decision".
 
 ### 2026-09-02 - P8.2 Runtime shakedown. **The engine simulates**, and an unaligned `mprotect` was silently doing nothing
 
@@ -7284,6 +7404,49 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `ImguiGizmo_Translate.cpp:76` - selecting an entity while looking down a world axis kills the editor
+
+**The most reachable upstream bug this port has found.** Found by P8.4 on 2026-09-03 while
+verifying mesh picking, and **deterministically reproducible**.
+
+`TranslationGizmo::SetupManipulators` builds each axis's screen-space direction with
+
+```cpp
+( m_axes[axisIdx].m_axisEndSS - ctx.m_positionSS ).ToDirectionAndLength2( m_axes[axisIdx].m_axisDirSS, m_axes[axisIdx].m_axisLengthSS );
+```
+
+then `TryFlipAxes` passes two of those to `Math::CalculateAngleBetweenUnitVectors`, which asserts
+that both are unit length. **When an axis points nearly at the camera its screen-space projection
+is nearly zero long, `ToDirectionAndLength2` yields a zero direction, and the assert fires.**
+
+Backtrace, from the editor launched under gdb:
+
+```
+#2  EE::Math::CalculateAngleBetweenUnitVectors           Code/Base/Math/MathUtils.h:115
+#3  TranslationGizmo::SetupManipulators::$_1( 0, 1 )     ImguiGizmo_Translate.cpp:76
+#4  TranslationGizmo::SetupManipulators                  ImguiGizmo_Translate.cpp:99
+#5  GizmoBase::UpdateAndDraw                             ImguiGizmo_Base.cpp:45
+#6  ImGuiX::Gizmo::UpdateAndDraw                         ImguiGizmo.cpp:229
+#7  MapEditor::DrawViewportUI                            MapEditor.cpp:435
+```
+
+The failing pair is `axisIdx0 = 0`, `axisIdx1 = 1` - **X against Y**, not the vertical axis.
+
+To reproduce, in the map editor on `pbrdemo`: hold right mouse in the viewport, hold `S` for about
+three seconds to back the camera along its own forward axis, nudge the pitch down slightly, release,
+then click any entity. The gizmo appears and the editor dies with
+`Trace/breakpoint trap (core dumped)`.
+
+**Why it matters:** this is the *default* gizmo mode, and "line the camera up with a world axis and
+click something" is an ordinary thing to do in a map editor. `ImguiGizmo_Scale.cpp:71` has the same
+call on the same kind of value, so the scale gizmo is presumably reachable the same way.
+
+**Platform-neutral - `Code/Engine/Imgui/Gizmos/` and `Code/Base/Math/MathUtils.h` are untouched by
+this port - so Windows has it too.** It only halts in a build with `EE_DEVELOPMENT_TOOLS`; with
+asserts compiled out, `CalculateAngleBetweenUnitVectors` returns a meaningless angle and the gizmo
+mis-flips its axes, which is cosmetic. Not fixed here, per Conventions rule 3 and Phase 8's "do
+not" list.
 
 ### `GLTF.cpp:111` - the node scale assert is inverted, so glTF skeletal import always fails
 

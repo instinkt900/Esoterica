@@ -81,11 +81,12 @@ collision table.
 RTX 3090 with host validation on and zero validation messages, which exercised P5.1 to P5.10,
 P5.13 and P5.17. **Their individual "Not verified" lists are historical.** A frame capture on the
 same machine then closed P5.12, P5.15 and most of criterion 8, and a temporary in-engine harness
-closed P5.11. See the "GPU-blocked queue, part 1" and P5.11 entries in Progress.md. What is left:
+closed P5.11. See the "GPU-blocked queue, part 1" and P5.11 entries in Progress.md.
 
-| # | Group | What to check first | Detail in |
-|---|---|---|---|
-| 6 | **Mesh picking.** The last unverified item in criterion 8. Gated on `IsPickingEnabled()` inside `#if EE_DEVELOPMENT_TOOLS`, so it needs an editor viewport. Click an entity in the map editor and confirm the picked entity is the one under the cursor | Phase 5 criterion 8, and [P8.4](Phases/Phase8-Completion.md#p84---rhi-debt-sweep) |
+**Nothing is left in this group.** **P8.4 verified mesh picking on 2026-09-03** - the last
+unverified item in Phase 5 criterion 8 - by clicking three entities in the map editor viewport and
+confirming each time that the selected entity was the one under the cursor, including a floor that
+is edge-on and about two pixels tall on screen.
 
 **P5.16 raytracing is no longer a row here.** It is not blocked on hardware: the 3090 has the
 extensions and the code is written. It is blocked on there being **nothing that calls it** - zero
@@ -97,7 +98,7 @@ either backend. That makes it a decision rather than a measurement, and it moved
 
 | # | What to check | Why | Detail in |
 |---|---|---|---|
-| 7 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
+| 5 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
 
 ---
 
@@ -136,7 +137,7 @@ machine assumes they are waiting on hardware.
 | 2 | **Raytracing has no callers on either backend.** A scratch harness, or a recorded decision that it is unreachable. Not a hardware wait | [P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to) | Progress.md, 2026-09-02 docs entry |
 | 3 | **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should.** `DebugDrawPrimitiveOutput` was fixed by P5.20; `PrimitiveOutput` in `RendererTypes.esh` was not, because `MaterialShaderInput::New` copies the struct into a local and DXC then builds SPIR-V that spirv-val rejects. Two ways out, neither cheap: a packed `uint` with accessors, which reaches Direct3D 12; or a fourth `Code/Scripts/DXCPatches` entry. **Not urgent** - NVIDIA renders correctly without it - but another driver need not be so forgiving | [P8.5](Phases/Phase8-Completion.md#p85---shader-conformance) | [Rendering: where we are](Progress.md#still-open) |
 | 4 | **The six sanitizer configurations have never been built.** They all generate; no output directory has ever existed. TSan is the interesting one on an engine with a task system | [P8.6](Phases/Phase8-Completion.md#p86---sanitizers-and-build-coverage) | Progress.md, 2026-09-02 docs entry |
-| 5 | **The items in [Deferred on purpose](Progress.md#deferred-on-purpose).** Known shortcuts, chosen rather than missed. Each is correct-enough to keep going and wrong enough to sweep before the port is called done. Not duplicated here | [P8.4](Phases/Phase8-Completion.md#p84---rhi-debt-sweep) | [Progress.md](Progress.md#deferred-on-purpose) |
+| 5 | ~~**The items in [Deferred on purpose](Progress.md#deferred-on-purpose).**~~ **Swept by P8.4 on 2026-09-03.** All seven `ALL_COMMANDS` barrier sites and both `EE_UNIMPLEMENTED_FUNCTION` markers are now permanent with a recorded reason, and the RenderDoc trigger is deliberately not wired up. The reasoning is in the [`ALL_COMMANDS` sites](Progress.md#all_commands-sites) table and the P8.4 entry | [P8.4](Phases/Phase8-Completion.md#p84---rhi-debt-sweep) | [Progress.md](Progress.md), P8.4 entry |
 
 ---
 
