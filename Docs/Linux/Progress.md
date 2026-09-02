@@ -32,6 +32,15 @@ them; that file is how they are found. A task that leaves something unverified a
 > **The GPU-blocked queue is being worked through on the 3090.** P5.12, P5.15 and four of the
 > seven features in criterion 8 are verified, and so is P5.11. What is left there is **P5.16
 > raytracing** and the rows that need the editor rather than the engine.
+>
+> ### **The editor opens a map and renders it.**
+>
+> P7.6's first pass, 2026-09-01. `demo/render/pbr/pbrdemo.map` in the map editor, host validation
+> on, zero validation messages, and a clean shutdown with no leaks. **Two defects: the title bar
+> cannot reliably be clicked** (a stale imgui hover state in the hit test), and
+> **`GetEnumInfo<T>()` was MSVC-only**, which killed the editor whenever a physics property grid
+> was drawn - fixed, escalated and approved. A `VK_ERROR_DEVICE_LOST` seen twice is **not** yet
+> attributed to the port: both sightings were on a virtual display. See the entry below.
 
 **Phase 7 is in flight, and P7.6 is what is left in it.** The whole tree builds in Debug and
 Release, and **nothing in it fails to compile.** `Esoterica.Applications.Editor` and
@@ -504,7 +513,7 @@ correct-enough to keep going and wrong enough to sweep before the port is called
 
 | What | Where | Why it was deferred | What it costs |
 |---|---|---|---|
-| The cluster culling argument buffer is never cleared | `Renderer_ForwardShading.cpp:730`, beside the two counter clears | One line in an **upstream engine file**, and Direct3D 12 never needed it because its indirect count stops the walk | The indirect compute loop is only correct while `maxNumCommands` is 1, which is what the pbrdemo scene happens to pass. Beyond that a command past the GPU-written count reads a stale slot |
+| ~~The cluster culling argument buffer is never cleared~~ **Fixed.** The editor passes `maxNumCommands` = 146 where the engine passes 1, so 145 dispatches a frame read stale argument slots. Real, and **not** the P7.6 editor hang, which was the `EE_IndirectRoot` inheritance below | `Renderer_ForwardShading.cpp:732` | Was deferred as "one line in an upstream engine file", on the assumption that `maxNumCommands` stays 1 | Nothing now. See the P7.6 deadlock entry below |
 | Attachment transitions use `ALL_COMMANDS` and all-access masks | `TransitionAttachmentIfNeeded`, `RHI_Vulkan.cpp` | Nothing at the call site says what last touched the image or what the pass will do to it | Over-synchronisation. Correct, slow. Belongs with the other `ALL_COMMANDS` sites above |
 | Mesh draws are dropped instead of halting | `CmdSetPipeline`, `RHI_Vulkan.cpp` | No GPU here has `VK_EXT_mesh_shader`, and halting stopped the frame before anything else could be exercised | **A frame missing its geometry is not a rendered frame.** It warns once. On hardware with mesh shaders the branch never runs |
 | A pixel shader in an indirect draw reads command 0's root **constants** | `EE_INDIRECT_PIXEL_ENTRY_INIT`, `RHI.esh` | There is no `DrawIndex` in a fragment shader, and carrying the command index across the stage boundary means a new per-primitive attribute in upstream structs | Nothing today. Exact for the root **CBV**, because `BucketResolve.esf:41` writes the same address into every command. The per-command root constants - `m_clusterOffset`, `m_renderViewIndex`, `m_clusterVisibleBuffer` - would be command 0's, and no pixel shader reads one. **A pixel shader that starts reading one gets silently wrong data past the first command** |
@@ -521,21 +530,17 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 
 ## In flight
 
-> ### **Phase 7. Three PRs are open, and P7.6 has not started.**
+> ### **Phase 7. Everything before P7.6 is merged, and P7.6 has had its first pass.**
 >
 > | Task | State |
 > |---|---|
-> | P7.0, P7.1, P7.3 | merged |
-> | P7.2 file and message dialogs | **PR #68** |
-> | P7.4 `OpenInExplorer` | **PR #69**, stacked on #68 |
-> | P7.5 hot reload | **PR #70**, stacked on #69. Documentation only; no defect found |
-> | P7.6 editor shakedown | not started, and it needs the RTX 3090 machine |
+> | P7.0, P7.1, P7.2, P7.3, P7.4, P7.5 | merged (#68, #69 and #70 landed on 2026-09-01) |
+> | P7.6 editor shakedown | **first pass done.** The editor opens a map; two defects found, one fixed |
 >
-> The three are stacked because they all add an entry to this file in the same place. GitHub
-> retargets each to `main` as the one below it merges.
->
-> **P7.6 is the whole of what is left in Phase 7**, and it cannot be done on the laptop: the
-> editor dies about three seconds after it reaches its frame loop. See [Blocked.md](Blocked.md).
+> **P7.6 is the whole of what is left in Phase 7.** The first pass is the 2026-09-01 entry below.
+> What remains needs an **awake, unlocked** RTX 3090 desktop: the tools that were never opened, and
+> a loaded run to settle whether the `VK_ERROR_DEVICE_LOST` is the editor or the virtual display.
+> The rows are in [Blocked.md](Blocked.md).
 
 ---
 
@@ -576,6 +581,260 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-01 - P7.6 first pass. The editor opens a map, and the hang that killed it is fixed
+
+**The editor has now been used, not just launched.** It draws its whole docked UI on the RTX 3090,
+opens `demo/render/pbr/pbrdemo.map` in the map editor and renders it - sky, reflective ground,
+geometry - with the Outliner listing `pbrdemo`/`Boulder`/`Floor`/`Skydome`, host validation on and
+**zero validation messages, zero errors and zero warnings**. It also spawns the Resource Server
+itself, which compiled and served five resources on demand.
+
+**P7.6 is not finished.** This is the first pass: two defects found, one fixed, and a third
+observation that must not be recorded as a defect yet. The rows are in [Blocked.md](Blocked.md).
+
+#### The whole session ran on a virtual display, and that is worth reusing
+
+`Xvfb :99 -screen 0 2560x1440x24` plus `i3 -c <minimal config>`, driven with `xdotool` and captured
+with `maim -u -i <window>`. **NVIDIA presents to Xvfb**: `vkcube` picked the RTX 3090 there and drew
+correctly, and so did the editor. Nothing appears on the developer's own desktop, which is the
+point - the alternative takes over the machine.
+
+Two limits, both learned the hard way and both in the caveats below: the device is lost after two
+or three minutes there, and **`maim -u` is required** because the rendered cursor otherwise changes
+every hash you compare.
+
+#### The title bar hit test reads a stale imgui hover state, and it is not cosmetic
+
+`LinuxApplication::BorderlessWindowHitTest` (`Application_Linux.cpp:453`) asks
+`EditorUI::GetBorderlessTitleBarInfo`, which returns `ImGui::IsAnyItemHovered()`
+(`EditorUI.cpp:234`). **SDL calls the hit test while draining the motion event, before imgui has
+processed that motion**, so the flag always describes the *previous* cursor position. Measured with
+a gdb `dprintf` on the live editor - cursor, then the hovered flag it reported:
+
+```
+700,700 (client area)                       -> 0
+ 79,20  (Editor menu, visibly highlighted)  -> 0     wrong, the item IS hovered
+2446,20 (minimize)                          -> 1
+2492,20 (maximize)                          -> 1
+2538,20 (close)                             -> 1
+300,20  (EMPTY title bar)                   -> 1     wrong, nothing is hovered
+ 79,20  (Editor menu)                       -> 0
+```
+
+Every value is the one before it. One motion behind, exactly.
+
+**The user-visible cost is that the application menus can be unreachable.** Drag the window by the
+same empty title bar point and it works or does nothing depending only on where the pointer came
+from - from the client area it moved the window 400,200 to 550,270, from the close button it did
+not move at all. Clicking a menu after arriving from the client area loses the click; nudging three
+pixels first opens it. Within one session the title bar can stay unclickable while a click on the
+map editor's own `Window` menu forty pixels below works immediately, because SDL coalesces motion
+events and which position was last evaluated is not predictable.
+
+**Not fixed, on purpose.** The fix belongs in this fork's own `ImguiX_Linux.cpp`, which already
+computes the menu and control sub-rects (`windowControlsStartPosX`, `menuSectionFinalWidth`, lines
+36-50): test the cursor against those rather than against a frame-scoped imgui flag. That removes
+the frame-order dependency instead of racing it.
+
+#### `GetEnumInfo<T>()` was MSVC-only, and it killed the editor
+
+Opening **Resources > Resource Importer** killed the editor on
+`EE_ASSERT( pObjectCategoryEnumInfo != nullptr )`,
+`PropertyGrid_CollisionSettings.cpp:61`. The property grid is innocent.
+`TypeRegistry::GetEnumInfo<T>()` (`TypeRegistry.h:101`) did this:
+
+```cpp
+char const* pEnumName = typeid( T ).name();
+TypeID const enumTypeID( pEnumName + 5 );
+```
+
+MSVC returns `"enum EE::Physics::ObjectCategory"` and `+ 5` skips exactly `"enum "`. **The Itanium
+ABI returns the mangled name.** Measured with the clang in `External/LLVM`:
+
+```
+typeid().name() = "N2EE7Physics14ObjectCategoryE"
+name()+5        = "Physics14ObjectCategoryE"
+registered ID   = "EE::Physics::ObjectCategory"
+```
+
+So the template overload returned **nullptr for every enum on Linux**, and every caller that
+asserts on the result took the editor down. Four callers, all in
+`PropertyGrid_CollisionSettings.cpp`. It is the only `typeid().name()` site in `Code/` outside
+ThirdParty.
+
+**Escalated and approved**, because Rule 2 does not cover it: the Windows body is wrapped in
+`#if _WIN32` and an `#elif defined( __linux__ )` branch added beside it - **15 lines added, 0
+modified**, the Windows branch byte for byte the original. The ABI-specific half is
+`Platform::DemangleTypeInfoName` in this fork's own `Platform_Linux.h`, which is where the other
+MSVC compatibility shims already live, so `TypeRegistry.h` gains no include. The `TypeID` is cached
+per type because the demangle allocates and property grids call this every frame. Registered in
+[TouchedFiles.md](TouchedFiles.md). Verified: the importer no longer asserts and the editor
+survives it.
+
+#### The editor hang: a direct draw inherited the previous indirect draw's root arguments. **Fixed**
+
+**The developer found it and had to correct this entry twice.** Opening the map and left-clicking
+once in the viewport - enough to select an entity - froze the whole editor, hard enough to need a
+`kill -9`. Two earlier claims that it was fixed were wrong, and both came from bad measurement
+rather than a bad hypothesis; the mistakes are listed at the end because they cost most of a day.
+
+**It is a GPU fault, not a deadlock.** The kernel names it, once per hung run:
+
+```
+NVRM: Xid (PCI:0000:01:00): 109, pid=..., channel 0x56, errorString CTX SWITCH TIMEOUT
+```
+
+Xid 109 is a context that could not be preempted - a dispatch that never terminates. The main
+thread sits in `QueueHostWait` (`RHI_Vulkan.cpp`), every other thread idle, the GPU parked at
+210 MHz, and the queue counters 15 graphics and 6 compute submits behind. **Every wait at the stall
+is satisfied**: a 31,922-line submit trace showed no unsatisfiable waits and no cycles, and the
+argument strides measured 48/48 with the dispatch arguments at offset 32. Nothing was waiting on
+anything - the GPU had simply accepted a command buffer and never finished it.
+
+#### What it was
+
+`EE_IndirectRoot` is the push constant block P5.17 added so a shader can find its own command in an
+argument buffer. `EE_DECLARE_INDIRECT_ROOT_CONSTANTS` (RHI.esh:190) chooses how to read the root
+constants from it:
+
+```
+if ( EE_IndirectRoot.m_stride == 0 )  EE_g_RootConstants = RootConstants;                  // direct
+else                                  EE_g_RootConstants = vk::RawBufferLoad<Type>( ... );  // indirect
+```
+
+**Only `CmdExecuteIndirect` ever wrote that block**, so it kept whatever the last indirect call left
+in it. A *direct* draw recorded after an indirect one therefore saw a non-zero `m_stride`, took the
+indirect path, and loaded its root constants from the previous call's argument buffer at a stale
+device address.
+
+`DebugDraw.esf` is where that bites, because the debug draw pass uses one shader both ways: an
+indirect draw for debug meshes, then `CmdSetPipeline`, `CmdSetRootConstants` and a **direct**
+`CmdDispatchMesh` for the debug commands. The direct dispatch came back with a garbage
+`m_numDebugDrawCommands` and garbage command addresses, and the mesh shader that ran on them never
+terminated.
+
+**Why only the editor, and only after a click.** The direct dispatch is guarded by
+`if ( numCommands )`. The engine submits no debug geometry, so it never runs there at all.
+The editor only has debug geometry once something is selected - which is exactly the developer's
+trigger, and why an editor with a map open but nothing selected survives.
+
+#### The fix
+
+Zero the block on every pipeline bind, in `CmdSetPipeline` (`RHI_Vulkan.cpp`, this fork's own
+file). Every draw binds a pipeline first, and `CmdExecuteIndirect` pushes the real block
+immediately before its own dispatch, so the indirect path is untouched.
+
+#### How it was found, and how it was verified
+
+Bisected with a probe script that starts the Resource Server separately, opens the map, **checks
+the viewport is actually rendering** before trusting the run, fires the single left click, and then
+reads liveness from `/proc/<pid>/stat` CPU ticks and the kernel Xid count:
+
+| Build | verdict |
+|---|---|
+| baseline | FROZEN, xid=1 |
+| debug draw pass disabled | alive |
+| debug draw pass on, only the direct `CmdDispatchMesh` disabled | alive |
+| unbounded indirect mesh dispatch disabled instead | FROZEN - not that one |
+| mesh dispatch size clamped to 4096 groups | FROZEN - not the dispatch size |
+| **the fix** | alive, three probe runs and a six-round soak, zero Xid |
+
+**The debug draw pass now draws.** A selected entity's bounds appear in the viewport as a yellow
+line, which is the first debug primitive this port has ever produced - see the row it retires in
+[Blocked.md](Blocked.md).
+
+#### Two fixes that came out of the hunt and are NOT the hang
+
+Both are real defects, both verified, neither fixes the freeze. They are kept because they are
+correct on their own terms:
+
+- **The cluster culling argument buffer was never cleared** (`Renderer_ForwardShading.cpp`).
+  `CmdExecuteIndirect` documents the invariant - "the engine clears the buffer for us" - and the
+  clear did not exist. Vulkan has no indirect dispatch count, so the RHI records one dispatch per
+  possible command and the ones past the GPU-written count read their slots regardless. Measured
+  `maxNumCommands` = 146 in the editor against 1 in the engine.
+- **An unbarriered write-after-write on the cluster buffer** (`RenderSystem.h`). The whole-buffer
+  copy on growth and a later sub-range copy in the same frame both write the same bytes with no
+  order between them. Reported by `SYNC-HAZARD-WRITE-AFTER-WRITE` and gone after the barrier.
+
+#### The measurement mistakes, recorded so they are not repeated
+
+- **The submit trace contained two processes.** The editor and the Resource Server share a
+  terminal, so counting `[SUB]` lines counted the server's submits too and a frozen editor looked
+  busy. Start the server separately, or filter by queue pointer.
+- **`ps`/`top -b -n1` report CPU averaged over process lifetime**, so a process that hung two
+  minutes ago still reads 50%. Sample `/proc/<pid>/stat` twice instead.
+- **A clean run means nothing if the map closed partway.** Two "five minutes clean" results were
+  worthless because a stray click had closed the map tab. The probe now checks viewport brightness
+  before believing a run.
+- **The virtual display is not a substitute for the real one.** Xvfb reproduces the fault only
+  sometimes, and turned two lucky runs into a false "fixed".
+
+#### The device loss on the virtual display was the same defect
+
+`vkQueueSubmit2` returns **`VK_ERROR_DEVICE_LOST`** - read as `$eax = -4` at the loader boundary,
+since the release build optimises `result` away - and from then on every submit and every
+`vkWaitSemaphores` fails:
+
+```
+RHI_Vulkan.cpp:2352  EE_ASSERT( result == VK_SUCCESS )   SubmitToQueue
+RHI_Vulkan.cpp:2241  the same assert                     QueueHostWait
+#1 SubmitToQueue  #2 RenderSystem::SubmitFrame (RenderSystem.cpp:927)
+#3 Engine::Update (Engine.cpp:710)  #4 LinuxApplication::Run (Application_Linux.cpp:555)
+```
+
+No validation message precedes it, and `dmesg` is restricted here so no Xid could be read.
+
+**This was the same defect, and the Xvfb suspicion was wrong.** Where the real display simply
+stalled forever, the virtual display's driver escalated the same never-completing work to
+`VK_ERROR_DEVICE_LOST` after a minute or two. Both went away with the argument buffer clear.
+
+The suspicion was reasonable and worth recording as a warning: the two device losses were both on
+Xvfb, and the only long clean session at that point was on the real display. It was the developer's
+own reproduction - a hard hang on an awake, unlocked desktop - that broke the tie. **A caveat held
+long enough to be tested is cheap; the same caveat asserted as a conclusion would have sent the
+next session chasing the display server.**
+
+#### Three things that look like defects and are not
+
+- **Running the editor under gdb freezes it on any dialog.** Every file and message dialog
+  fork/execs `zenity`; under gdb the forked child can be left in tracing-stop while the editor
+  blocks forever in `poll()`. Symptom: identical frames, 0.2% CPU, main thread wchan `do_poll`, a
+  child in state `tl`. Attach gdb for shutdown and crash work, never for dialog work.
+- **i3 has no iconify, so the minimize button cannot work.** `xdotool windowminimize` on the editor
+  is equally a no-op. Maximize is the same story - i3 does not implement it either, so both buttons
+  are untestable here and need a WM that does.
+- **The zenity save dialog's filter reads "(None)".** The editor passes
+  `--file-filter=*.map | *.map` and the combo still opens unfiltered - and the identical zenity
+  command run standalone does the same, so it is GTK on Ubuntu 24.04, not the port. Criterion 4's
+  "filter by extension" is offered, not applied, on this distro.
+
+#### What ran, and what is still untouched
+
+Verified working: the editor launches and draws its full docked UI at 13-119 FPS; the map editor
+opens and renders pbrdemo; the resource browser's tree, search box, row selection and seven-item
+context menu; data paths display with forward slashes; the zenity save dialog opens from the map
+editor with the right start directory; window resize relayouts the UI and resizes the swapchain
+(1685x1291 to 1598x998 to 2560x1440); the Resource Server is spawned by the editor, serves it, and
+PR #71's "still connected clients" prompt renders and answers; and **the title bar close button
+works with a clean shutdown** - "Shutdown Started", "No device memory leaked", gone in under two
+seconds, which is criterion 10 for the editor.
+
+Still untouched: the importer's own window (the crash is fixed, the window has not been seen), the
+dependency viewer, system info, bulk update, the animation graph and ragdoll editors, property
+grids, mesh picking, debug draw, hot reload's last link and multi-viewport drag-out.
+
+**One observation is deliberately not recorded as a defect.** Selecting an entity in the Outliner
+did nothing - the Inspector stayed "Nothing To Inspect" and the expander would not toggle - but the
+device was lost minutes later in that same run, so it may be a symptom of that rather than a defect
+of its own. Retest it first on an awake real display.
+
+#### A stale table, corrected
+
+[In flight](#in-flight) listed PRs #68, #69 and #70 as open. All three merged on 2026-09-01.
+
+---
 
 ### 2026-09-01 - P5.11 query pools. The frequency is the right way up, and the whole path runs
 

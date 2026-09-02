@@ -730,6 +730,14 @@ namespace EE::Render
             RHI::CmdClearBuffer( pCommandBuffer_DepthPass, m_pInstanceCulling_CounterBuffer, 0 );
             RHI::CmdClearBuffer( pCommandBuffer_DepthPass, m_pClusterCulling_CounterBuffer, 0 );
 
+            // The cluster culling argument buffer has to start the frame zeroed. Vulkan has no
+            // indirect dispatch count, so CmdExecuteIndirect spends the count on the CPU and
+            // records one dispatch per possible command; a command past the GPU-written count
+            // reads its slot anyway. Zeroed, that slot is a (0,0,0) dispatch and a legal no-op -
+            // left stale, it is whatever the last frame wrote, and a garbage group count hangs
+            // the GPU. Direct3D 12 never needed this because its count stops the walk.
+            RHI::CmdClearBuffer( pCommandBuffer_DepthPass, m_ClusterCulling_ArgumentBuffer.m_pBuffer, 0 );
+
             #if EE_DEVELOPMENT_TOOLS
             m_debugDrawPass.ClearBuffers( pCommandBuffer_DepthPass, frameIndex );
             #endif

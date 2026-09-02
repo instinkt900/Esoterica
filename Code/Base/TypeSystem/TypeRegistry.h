@@ -98,9 +98,22 @@ namespace EE::TypeSystem
         template<typename T, typename = std::enable_if_t<std::is_enum<T>::value>>
         EnumInfo const* GetEnumInfo() const
         {
+            #if _WIN32
             char const* pEnumName = typeid( T ).name();
             TypeID const enumTypeID( pEnumName + 5 );
             return GetEnumInfo( enumTypeID );
+            #elif defined( __linux__ )
+            // The Itanium ABI returns a mangled name, so it is demangled rather than offset past
+            // "enum ". See DemangleTypeInfoName in Platform_Linux.h. Cached per type, because the
+            // demangle allocates and the property grids call this every frame.
+            static TypeID const enumTypeID = [] ()
+            {
+                char demangledName[256] = { 0 };
+                Platform::DemangleTypeInfoName( typeid( T ).name(), demangledName, sizeof( demangledName ) );
+                return TypeID( demangledName );
+            }();
+            return GetEnumInfo( enumTypeID );
+            #endif
         }
 
         //-------------------------------------------------------------------------

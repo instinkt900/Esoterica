@@ -3511,6 +3511,31 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_boundPipelineLayout = pVulkanRootSignature->m_pipelineLayout;
         pVulkanCommandBuffer->m_boundBindPoint = pVulkanPipeline->m_bindPoint;
 
+        // **A direct draw must not inherit the previous indirect draw's root argument block.**
+        //
+        // `EE_IndirectRoot` lives in push constants and `CmdExecuteIndirect` is the only thing
+        // that writes it, so it keeps whatever the last indirect call left there. A shader built
+        // from an indirect-capable declaration decides which way to read its root constants on
+        // `EE_IndirectRoot.m_stride == 0` (RHI.esh, EE_DECLARE_INDIRECT_ROOT_CONSTANTS): zero
+        // means "use what was pushed", anything else means "load them from the command in the
+        // argument buffer". A direct draw recorded after an indirect one therefore read its root
+        // constants out of the *previous* call's argument buffer, at a stale device address.
+        //
+        // `DebugDraw.esf` is the shader this reaches: the debug draw pass issues an indirect draw
+        // for debug meshes and then a direct `CmdDispatchMesh` for the debug commands, both with
+        // the same shader. The direct dispatch came back with a garbage `m_numDebugDrawCommands`
+        // and garbage command addresses, and the mesh shader that ran on them never terminated -
+        // **Xid 109 CTX SWITCH TIMEOUT, which is the P7.6 editor hang.** It only bit once the
+        // editor had debug geometry to draw, which is why selecting an entity triggered it and
+        // why the engine, which submits none, never saw it.
+        //
+        // Zeroing it on every pipeline bind restores the "direct" meaning. Every draw binds a
+        // pipeline first, and CmdExecuteIndirect pushes the real block immediately before its own
+        // dispatch, so the indirect path is unaffected.
+        IndirectRootPushConstants const directDrawRootPushConstants = {};
+        vkCmdPushConstants( pVulkanCommandBuffer->m_commandBuffer, pVulkanRootSignature->m_pipelineLayout,
+                            VK_SHADER_STAGE_ALL, 0, sizeof( directDrawRootPushConstants ), &directDrawRootPushConstants );
+
         // **Heap set 1 is bound here, not in BeginCommandBuffer.**
         //
         // Direct3D 12 calls SetDescriptorHeaps once per command buffer, at :2917. Vulkan cannot
