@@ -11,3 +11,7 @@ Build/
 compile_commands.json
 .ninja_deps
 .ninja_log
+
+# Test content fetched by Docs/Linux/Scripts/FetchTestAssets.sh. Third-party assets and
+# generated descriptors, deliberately not committed.
+/Data/PortTests/

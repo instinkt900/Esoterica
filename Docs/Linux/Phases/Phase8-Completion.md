@@ -22,7 +22,7 @@ could ever go upstream.
 > | Task | State |
 > |---|---|
 > | P8.1 The Windows build | not started. **The largest unmeasured risk in the port** |
-> | P8.2 Runtime shakedown | not started. Nothing has been observed simulating |
+> | P8.2 Runtime shakedown | **mostly done**, 2026-09-02. Game preview runs, physics simulates, a skeletal asset opens in all three animation editors. Left: a gamepad, and evaluating a graph |
 > | P8.3 Raytracing, or the decision not to | not started |
 > | P8.4 RHI debt sweep | not started |
 > | P8.5 Shader conformance | not started |
