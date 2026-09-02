@@ -15,6 +15,7 @@
 #include <windows.h>
 #elif defined( __linux__ )
 #include <sys/mman.h>
+#include <unistd.h>
 #endif
 
 //-------------------------------------------------------------------------
@@ -251,7 +252,22 @@ namespace EE
             VirtualAlloc( pStart, size, MEM_COMMIT, PAGE_READWRITE );
             InterlockedAdd64( &s_totalVirtualMemoryCommitted, size );
             #else
-            mprotect( pStart, size, PROT_READ | PROT_WRITE );
+            // VirtualAlloc( MEM_COMMIT ) commits every page the range touches and does not care
+            // whether pStart is page-aligned. mprotect does: an unaligned address fails with
+            // EINVAL and leaves the pages PROT_NONE, so the next access to them segfaults.
+            // PageAllocator::Commit passes base + committedElements, which is page-aligned only by
+            // accident, so round the range out to page boundaries to match Windows behaviour.
+            static size_t const pageSize = (size_t) sysconf( _SC_PAGESIZE );
+            uintptr_t const requestedStart = reinterpret_cast<uintptr_t>( pStart );
+            uintptr_t const alignedStart = requestedStart & ~( pageSize - 1 );
+            size_t const alignedSize = ( requestedStart - alignedStart ) + size;
+
+            int const result = mprotect( reinterpret_cast<void*>( alignedStart ), alignedSize, PROT_READ | PROT_WRITE );
+            EE_ASSERT( result == 0 );
+            (void) result;
+
+            // Track the requested size rather than the page-aligned size, so the counter means the
+            // same thing on both platforms.
             __atomic_fetch_add( &s_totalVirtualMemoryCommitted, (int64_t) size, __ATOMIC_SEQ_CST );
             #endif
         }

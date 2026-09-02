@@ -55,9 +55,15 @@ verification and debt rather than porting. The whole tree builds in Debug and Re
 127.0.0.1:5556, spawns its compiler workers and draws its full UI. Per-task state is in
 [In flight](#in-flight).
 
-**Two things have never been checked at all, and they are the whole of Phase 8's risk.** No
-Windows build has been run at any point in this port, and **the engine has never been observed
-simulating** - every measurement here is a static scene held for about thirty seconds.
+**One thing has never been checked at all, and it is the whole of Phase 8's remaining risk: no
+Windows build has been run at any point in this port.**
+
+**The engine simulates.** P8.2, 2026-09-02: "Play Map" starts and stops game preview cleanly, three
+dynamic physics bodies fall and settle on a static collision mesh, camera control works from
+keyboard and mouse, and a skeletal asset opens in the skeleton, animation graph and ragdoll editors.
+That run also found and fixed a port bug that segfaulted the editor on the first skeletal mesh it
+ever loaded - an unaligned `mprotect` in `VirtualMemoryCommit` that was failing silently. See the
+entry below.
 
 **The engine and the editor no longer need `-packaged`.** `EnsureResourceServerIsRunning` was
 Windows-only and returned false, so the network resource provider could never start. P7.3 opened
@@ -562,7 +568,7 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 > | Task | State |
 > |---|---|
 > | P8.1 The Windows build | not started. **The largest unmeasured risk in the port** |
-> | P8.2 Runtime shakedown | not started. Nothing has been observed simulating |
+> | P8.2 Runtime shakedown | **mostly done**, 2026-09-02. Game preview runs, physics simulates, all three animation editors open. Gamepad camera control still needs a controller |
 > | P8.3 Raytracing, or the decision not to | not started |
 > | P8.4 RHI debt sweep | not started |
 > | P8.5 Shader conformance | not started |
@@ -612,6 +618,147 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-02 - P8.2 Runtime shakedown. **The engine simulates**, and an unaligned `mprotect` was silently doing nothing
+
+**"Play Map" has now been pressed, and a physics body has been seen to move.** Both were the
+largest functional unknowns left after Windows. The session also found and fixed **a real Linux
+port bug that crashed the editor the first time a skeletal mesh was ever loaded**.
+
+#### What was verified
+
+- **Game preview starts and stops cleanly.** Three Play Map / Stop Playing cycles in a row, the
+  editor alive after each, and no new errors in the log beyond the documented startup
+  `Connection refused` retries.
+- **Physics runs.** Three dynamic sphere bodies dropped from 25 m, 35 m and 45 m onto
+  `Floor.physmesh`, collided with each other, settled at a resting centre height of 1.486 m for a
+  1.5 m radius, and went to sleep. Both the engine and the editor's game preview do it.
+- **Camera control works from keyboard and mouse** in a running engine. Hold right mouse in the
+  viewport, then `W` moves and mouse delta looks - `Component_ToolsCamera.cpp`. This closes the
+  keyboard and mouse halves of Phase 6 criterion 3. **Gamepad is still not verified**: no
+  controller is attached to this machine, and the only `*-event-joystick` node is the Keychron
+  keyboard's HID artifact. That is a new row in [Blocked.md](Blocked.md).
+- **A skeletal asset is imported and all three editors open with it.** The skeleton editor shows an
+  8-bone hierarchy with its animation clip and preview mesh, the animation graph editor builds a
+  default root graph with graph view, variation editor and debugger, and **the ragdoll editor opens
+  with the character skeleton and renders its skinned preview mesh**. The ragdoll editor was a row
+  in Blocked.md for exactly this reason; it is deleted.
+
+#### The port bug: `mprotect` cannot take an unaligned address, and nobody checked
+
+Opening the skeleton editor **segfaulted the whole editor**:
+
+```
+Caught signal: Segmentation fault
+EE::Memory::CopyToWriteCombined
+EE::Render::RenderSystem::QueueMeshUpdate
+EE::Render::RenderSystem::StartResourceUpdates
+EE::Engine::Update
+```
+
+Not an alignment assert - asserts are live in Release and none fired. `PageAllocator::Commit`
+(`Code/Base/Render/PageAllocator.h:38`) grows the allocator with
+
+```cpp
+Memory::VirtualMemoryCommit( m_pPageMemory + m_pageMemoryComitted, requiredMemoryComitted - m_pageMemoryComitted );
+```
+
+so the start address is `base + committedElements`, which is page-aligned only by accident.
+`VirtualAlloc( MEM_COMMIT )` commits every page the range touches and does not care.
+**`mprotect` does care: an unaligned address fails with `EINVAL` and the pages stay `PROT_NONE`.**
+The return value was never checked, so the commit silently did nothing and the next read faulted.
+
+Measured, rather than assumed, with a temporary log in `VirtualMemoryCommit`:
+
+```
+mprotect ptr=0x7f6ab2000000 size=2048 pageOffset=0    result=0  errno=0
+mprotect ptr=0x7f6ab2000800 size=2048 pageOffset=2048 result=-1 errno=22
+```
+
+**This is the port's own bug, in the port's own `#else` branch** - `Memory.cpp` has been in
+[TouchedFiles.md](TouchedFiles.md) since Phase 1. The fix rounds the range out to page boundaries
+to match `VirtualAlloc`, and asserts on the result so the next one is loud. The skeleton editor,
+the animation graph editor and the ragdoll editor then all open, and the ragdoll editor renders a
+skinned mesh.
+
+**Why it hid for eight phases:** it only bites when an allocator grows across a page boundary from
+an unaligned offset. The initial commits are 2048 bytes at a page-aligned base, and Linux rounds
+*length* up to a page, so the first growth landed inside a page that was already mapped. **A
+skeletal mesh was the first thing to push it past one.** Anything that grows a `PageAllocator`
+further can hit it, so this was not a skeletal-mesh bug.
+
+#### Test content is fetched, not committed
+
+`Data/` ships no skeleton, no animation and no non-skeletal-only meshes, and `PBRDemo.map` has no
+physics components at all. Both gaps are closed by
+[`Docs/Linux/Scripts/FetchTestAssets.sh`](Scripts/FetchTestAssets.sh), which writes everything into
+`Data/PortTests/` - a **gitignored** directory. No third-party asset enters the fork's history, and
+Conventions rule 6 still holds for every tracked file in `Data/`.
+
+Validate what it writes without a GUI:
+
+```bash
+cd Build/Linux_Release
+./Esoterica.Applications.ResourceCompiler -compile data://porttests/rig/rig.skeleton
+```
+
+**The empty `.ag` and `.ragdoll` it writes deliberately fail to compile.** They are authoring
+files: a graph with no nodes and a ragdoll with no bodies are exactly what the editors exist to
+fill in, and both editors open them and say so.
+
+#### glTF skeletal import does not work, and it is upstream's
+
+The Khronos glTF sample assets would have been the tidier source - CC BY 4.0, stable URLs, no FBX.
+**Fox, RiggedFigure, RiggedSimple and CesiumMan all fail**, so the script uses assimp's
+BSD-licensed FBX test models through ufbx instead. Recorded under
+[Upstream issues observed](#upstream-issues-observed); platform-neutral, so Windows has it too.
+
+#### Three traps that cost time and are not port defects
+
+- **`pkill -f "Esoterica.Applications"` kills the calling shell.** An agent's shell has the pattern
+  in its own command line, so `pkill -f` matches it. This killed two sessions outright, with only
+  an exit code to show for it. There was no `KillEsotericaProcesses.sh`, only the `.bat`; there is
+  now, and it matches on `/proc/<pid>/exe` the way the `.bat` matches on image name. It also sends
+  `SIGKILL`, matching `taskkill /F` - **`SIGTERM` is ignored while an application is showing a
+  modal error dialog**.
+- **An error dialog can hold port 5556 on its own.** After a failed start, `zenity` had inherited
+  the Resource Server's listening socket and kept it after every Esoterica process was gone. The
+  documented orphaned-worker symptom, from a process nothing would think to look for.
+  `KillEsotericaProcesses.sh` now names whoever still holds the port.
+- **The Resource Server must stay on a visible workspace.** An i3 `assign` rule to park it out of
+  the way leaves its window unmapped, and an unmapped Resource Server **stops servicing requests**:
+  it still binds and listens, then every request times out and the application dies with
+  `Failed to load required engine module resources`. Ask for a wider virtual screen instead.
+
+#### The virtual display is now a script
+
+Previous sessions set up `Xvfb` plus a minimal `i3` by hand each time.
+[`Docs/Linux/Scripts/VirtualDisplay.sh`](Scripts/VirtualDisplay.sh) is that, with `start`, `stop`,
+`shot`, `status` and `run`. It writes its own i3 config rather than using the developer's, which
+starts `xss-lock` - a lock screen inside the virtual display would replace every screenshot with
+i3lock's image. NVIDIA presents to Xvfb, as before; `vkcube` reports the RTX 3090 there.
+
+`ffmpeg -f x11grab` replaces `maim`, which is not installed on this machine. Recording a video and
+tiling frames with `-vf "fps=1,tile=5x4"` reads motion far better than a series of stills.
+
+#### One dead end worth not repeating
+
+**The first physics map simulated correctly and looked completely static.** A boulder at mesh scale
+6 dropped over the origin lands *around* the default camera, so every frame was the inside of a
+rock. Twenty minutes went into reading the box3d integration for a bug that was not there. The map
+the script writes now puts three smaller boulders off to the sides at three heights.
+
+- Files added: `Docs/Linux/Scripts/VirtualDisplay.sh`, `Docs/Linux/Scripts/FetchTestAssets.sh`,
+  `KillEsotericaProcesses.sh`.
+- Upstream files edited: `Code/Base/Memory/Memory.cpp` (already in TouchedFiles.md; row updated).
+  `.gitignore` gains `/Data/PortTests/`.
+- Acceptance criteria met: Phase 8 criterion 4 (game preview runs, a physics body moves),
+  criterion 5 (skeletal asset imported, animation graph editor and ragdoll editor open with it),
+  and criterion 6 **partly** - keyboard and mouse yes, gamepad not verified.
+- Built and run in `Linux_Release`. `Build/Linux_Debug/libEsoterica.Base.so` also links, which is
+  the configuration where the new assert is live. **A full Debug build was not attempted** and
+  **no Windows build was run** - the change is inside the existing `#else`, so Direct3D 12 sees
+  none of it.
 
 ### 2026-09-02 - Dependencies. `DownloadDependencies.sh` pins the `protoc` that matches libprotobuf
 
@@ -7137,6 +7284,53 @@ Also noted, and not fixed:
   definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
 - `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
   contain.
+
+### `GLTF.cpp:111` - the node scale assert is inverted, so glTF skeletal import always fails
+
+Found by P8.2 while looking for a rigged asset. `Import::gltf::GetNodeTransform` reads:
+
+```cpp
+float scale = 1.0f;
+if ( pNode->has_scale )
+{
+    // TODO: log warning
+    EE_ASSERT( pNode->scale[0] != pNode->scale[1] || pNode->scale[1] != pNode->scale[2] );
+    scale = pNode->scale[0];
+}
+```
+
+It asserts that the scale is **non**-uniform. The condition is inverted - the surrounding code wants
+a uniform scale, and takes `scale[0]` as if it had one. Any glTF whose skeleton nodes carry a scale
+trips it.
+
+Two related asserts sit on the same path and fire on the assets that get past the first:
+`GLTF.cpp:435` (correctly requiring a uniform scale) and `Transform.h:71` (the same check inside the
+`Transform` constructor).
+
+Measured against the Khronos glTF sample assets, all four of which fail:
+
+| Asset | Skeleton | Skeletal mesh | Animation |
+|---|---|---|---|
+| Fox | compiles | `Transform.h:71` | "Root scaling detected!" |
+| RiggedFigure | compiles | `Transform.h:71` | `GLTF.cpp:435` |
+| RiggedSimple | compiles | compiles | `GLTF.cpp:435` |
+| CesiumMan | `GLTF.cpp:111` | `Transform.h:71` | `GLTF.cpp:111` |
+
+**Platform-neutral, so Windows has it too, and the "TODO: log warning" says the author knew the
+handling was unfinished.** Not fixed here, per Conventions rule 3. It is why
+`FetchTestAssets.sh` uses FBX through ufbx rather than glTF.
+
+### `UFbx::ReadAnimation` asserts on an animation whose last key sits on the stack end time
+
+`huesitos.fbx`, from assimp's test models, imports its skeleton and skinned mesh fine and then fails
+its animation on
+
+```
+time <= ( pAnimStack->time_end + Math::Epsilon )
+```
+
+A one-epsilon boundary condition in the ufbx import path. Platform-neutral. Found by P8.2, not
+chased further, because `animation_with_skeleton.fbx` imports all three resources and was enough.
 
 ### `Server_WS::ConnectClient` asserts that the client is not already in the socket map
 

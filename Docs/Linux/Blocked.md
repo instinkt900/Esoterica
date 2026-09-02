@@ -62,8 +62,18 @@ editor to a fraction of its normal work.
 |---|---|---|---|
 | 1 | **The title bar minimize and maximize buttons.** **Close is verified** - it exits cleanly with no leaks. The other two cannot be tested under i3, which implements neither; `xdotool windowminimize` is equally a no-op. Needs a WM that iconifies, and installing one was declined on 2026-09-02 | `ImguiX_Linux.cpp`, `Application_Linux.cpp` | Progress.md, P7.6 entries |
 | 2 | **The Resource Server's Test Compile panel** draws "Force Recompile" and "Request Compilation" on top of each other once the panel is narrow. **Reproduced and explained on 2026-09-02** - `SameLine( GetContentRegionAvail().x - 200 )` at `ResourceServerUI.cpp:881` goes left of the checkbox on a narrow panel. Upstream and platform-neutral, so it is left for an upstream report and a Windows check, not fixed here | `ResourceServerUI.cpp:881` | Progress.md, 2026-09-02 entry |
-| 3 | **The ragdoll editor has never been opened**, because it needs a Skeleton resource and `Data/` has none - no `.skel`, no `.anim`, and the only FBXs are non-skeletal. Needs a skeletal asset imported first, not a different machine | `Code/EngineTools/Physics/` | Progress.md, 2026-09-02 entry |
-| 4 | **The seven `OpenInExplorer` call sites other than the resource browser's.** The implementation is proved - nautilus opened the folder and selected the item - so what is left is only whether each site builds the right path | `EditorTool_ResourceImporter.cpp`, `DataPathPicker.cpp`, `ResourcePickers.cpp`, `ResourceServerUI.cpp` | Progress.md, P7.4 and 2026-09-02 entries |
+| 3 | **The seven `OpenInExplorer` call sites other than the resource browser's.** The implementation is proved - nautilus opened the folder and selected the item - so what is left is only whether each site builds the right path | `EditorTool_ResourceImporter.cpp`, `DataPathPicker.cpp`, `ResourcePickers.cpp`, `ResourceServerUI.cpp` | Progress.md, P7.4 and 2026-09-02 entries |
+
+**The ragdoll editor row is gone.** P8.2 imported a skeletal asset with
+[`Docs/Linux/Scripts/FetchTestAssets.sh`](Scripts/FetchTestAssets.sh) and the ragdoll editor opens
+with it, renders its skinned preview mesh, and shows its bone hierarchy, preview controls and self
+collision table.
+
+### Needs a gamepad plugged into this machine
+
+| # | What to check | Where | Detail in |
+|---|---|---|---|
+| 4 | **Camera control from a gamepad in a running engine.** P8.2 closed the keyboard and mouse halves of Phase 6 criterion 3 - hold right mouse in a viewport, then `W`/`A`/`S`/`D` move and mouse delta looks. The gamepad half is untested because **no controller is attached**: there is no `/dev/input/js*`, and the only `*-event-joystick` node belongs to the Keychron keyboard. Phase 6 tested the gamepad at the device level on other hardware, so this is the "works for camera control" half only | `Component_ToolsCamera.cpp` | Progress.md, P8.2 entry |
 
 ### Phase 5 groups the correct frame did not cover
 
@@ -75,7 +85,7 @@ closed P5.11. See the "GPU-blocked queue, part 1" and P5.11 entries in Progress.
 
 | # | Group | What to check first | Detail in |
 |---|---|---|---|
-| 5 | **Mesh picking.** The last unverified item in criterion 8. Gated on `IsPickingEnabled()` inside `#if EE_DEVELOPMENT_TOOLS`, so it needs an editor viewport. Click an entity in the map editor and confirm the picked entity is the one under the cursor | Phase 5 criterion 8, and [P8.4](Phases/Phase8-Completion.md#p84---rhi-debt-sweep) |
+| 6 | **Mesh picking.** The last unverified item in criterion 8. Gated on `IsPickingEnabled()` inside `#if EE_DEVELOPMENT_TOOLS`, so it needs an editor viewport. Click an entity in the map editor and confirm the picked entity is the one under the cursor | Phase 5 criterion 8, and [P8.4](Phases/Phase8-Completion.md#p84---rhi-debt-sweep) |
 
 **P5.16 raytracing is no longer a row here.** It is not blocked on hardware: the 3090 has the
 extensions and the code is written. It is blocked on there being **nothing that calls it** - zero
@@ -87,7 +97,7 @@ either backend. That makes it a decision rather than a measurement, and it moved
 
 | # | What to check | Why | Detail in |
 |---|---|---|---|
-| 6 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
+| 7 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
 
 ---
 
@@ -122,7 +132,7 @@ machine assumes they are waiting on hardware.
 
 | # | What to do | Task | Detail in |
 |---|---|---|---|
-| 1 | **The engine has never simulated.** "Play Map" has never been pressed, no physics body has been seen to move, and no animation graph has been evaluated. Needs a skeletal asset imported first, since `Data/` has none. **The largest item in the port after the Windows build** | [P8.2](Phases/Phase8-Completion.md#p82---runtime-shakedown) | Progress.md, 2026-09-02 docs entry |
+| 1 | **An animation graph has still never been evaluated.** P8.2 closed the rest of this row - game preview starts and stops, three physics bodies fall and settle, and a skeletal asset opens in the skeleton, animation graph and ragdoll editors. What is left is running a graph: give the graph a skeleton in the Variation Editor, put the clip in it, and press "Preview Graph". Needs nothing but time; `Docs/Linux/Scripts/FetchTestAssets.sh` already provides the skeleton and clip | [P8.2](Phases/Phase8-Completion.md#p82---runtime-shakedown) | Progress.md, P8.2 entry |
 | 2 | **Raytracing has no callers on either backend.** A scratch harness, or a recorded decision that it is unreachable. Not a hardware wait | [P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to) | Progress.md, 2026-09-02 docs entry |
 | 3 | **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should.** `DebugDrawPrimitiveOutput` was fixed by P5.20; `PrimitiveOutput` in `RendererTypes.esh` was not, because `MaterialShaderInput::New` copies the struct into a local and DXC then builds SPIR-V that spirv-val rejects. Two ways out, neither cheap: a packed `uint` with accessors, which reaches Direct3D 12; or a fourth `Code/Scripts/DXCPatches` entry. **Not urgent** - NVIDIA renders correctly without it - but another driver need not be so forgiving | [P8.5](Phases/Phase8-Completion.md#p85---shader-conformance) | [Rendering: where we are](Progress.md#still-open) |
 | 4 | **The six sanitizer configurations have never been built.** They all generate; no output directory has ever existed. TSan is the interesting one on an engine with a task system | [P8.6](Phases/Phase8-Completion.md#p86---sanitizers-and-build-coverage) | Progress.md, 2026-09-02 docs entry |
