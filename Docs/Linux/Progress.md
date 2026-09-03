@@ -623,8 +623,8 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 > | P9.1 The mechanical merge | **done**, 2026-09-03. Three conflicts resolved, source list resynced, 841/841 builds. Upstream's dead FFX radix sort had to be excluded first |
 > | P9.2 `ClusterCulling.esf` shim | **done**, 2026-09-03. Reapplied onto upstream's new 128-thread kernel; the file differs from upstream by the shim alone |
 > | P9.3 The indirect argument buffers | **done**, 2026-09-03. Only the culling one needs zeroing, and that was checked rather than assumed. Verified in the editor, which passes `maxNumCommands` = 146 |
-> | P9.4 The new culling pipeline, on Vulkan | **mostly done**, 2026-09-03. **The engine and the editor both render pbrdemo, validation-clean.** Two defects found and fixed. Left: comparing the frame against a pre-merge reference |
-> | P9.5 Post-merge audit and provenance | not started. Do this last. The audit is run; the sync point and merge notes are not yet recorded |
+> | P9.4 The new culling pipeline, on Vulkan | **done**, 2026-09-03. **Engine and editor both render pbrdemo in Debug and Release, validation-clean.** Four defects found and fixed; the developer confirmed the frame |
+> | P9.5 Post-merge audit and provenance | **done**, 2026-09-03. Audit clean, sync point and merge notes recorded, five registry gaps closed, post-merge baseline measured for P8.7 |
 >
 > **Upstream pushed a 281-file commit and the merge discipline has to be tested rather than
 > assumed.** Phase 8 and Phase 9 are independent; neither blocks the other, P8.1 included.
@@ -817,6 +817,40 @@ than carried over. `RHI_Vulkan.cpp`'s `Dispatch` path ignores the counter buffer
 `InterlockedAdd` leaves stale slots, while `InstanceCulling.esf` writing slot `groupID`
 unconditionally for every page does not - and its `CmdExecuteIndirect` passes no count buffer at
 all. Verified in the editor, which passes `maxNumCommands` = 146 where the engine passes 1.
+
+#### P9.5: the post-merge baseline, for P8.7 to compare against
+
+Measured against the merged tree, so the fork review starts from a post-merge number rather than a
+pre-merge one. `Code/` only, versus `upstream/main`:
+
+| | |
+|---|---|
+| Divergence | **131 files, +18,936 / -385** |
+| Files this fork **adds** | **40** |
+| Upstream files this fork **modifies** | **91** |
+| Of those, **5 changed lines or fewer** | **54 of 91** |
+| Fork-owned `RHI_Vulkan` / `_Linux` / `Linux/` files | 28 |
+
+**The shape is the point, not the total.** +18,936 insertions against 385 deletions, and 54 of the
+91 touched upstream files change five lines or fewer. The port is overwhelmingly *additive*, which
+is what made three conflicts out of 281 files possible. The four biggest edits to upstream files are
+all already-known and already-registered: `NinjaGen.py` (762 lines - the deliberate rewrite,
+[see the special case](01-UpstreamMerges.md#special-case-codescriptsninjagenninjagenpy)), `RHI.esh`
+(199 - P5.17 and open question 8), `Reflector.cpp` (109) and
+`ShaderReflection_ShaderCompiler.cpp` (77).
+
+**The audit ran clean.** No new `_WIN32`, `_MSC_VER` or `windows.h` path outside thirdparty;
+`SyncUpstream.py` up to date; `SourceLists.py` 0 problems; the `ExcludedFromBuild` invariant still 0.
+
+**Five registry gaps found and closed**, none of which anything had complained about: three more
+`<eastl/sort.h>` case fixes (`Entity.cpp`, `EntityWorld.cpp`,
+`ResourceCompiler_AnimationClip.cpp`), one dropped `inline` (`NodeGraph_FlowGraph.h`), and
+`EntitySerializationTools.cpp` from P9.1. **A wrong registry is a defect in the merge procedure**,
+because step 3 of the next merge is only mechanical if the registry is right.
+
+The sync point and the generalisable lessons are in
+[01-UpstreamMerges.md](01-UpstreamMerges.md#merge-notes) - that is where the next merge will look,
+not here.
 
 #### What is not closed
 

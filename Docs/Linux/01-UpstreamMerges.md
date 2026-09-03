@@ -166,9 +166,66 @@ does this file look like that" has no answer.
 | Date | Upstream commit | Notes |
 |---|---|---|
 | 2026-08-13 | `6813cf9` | Fork point for the Linux port plan. The survey in [README.md](README.md) reflects this commit. |
+| 2026-09-03 | `47e6293` | "Push Esoterica Main @800". The first real merge, and [Phase 9](Phases/Phase9-UpstreamMerge.md). 281 files, +5,668 / -36,670: new spatial-hash light culling, a new instance and cluster culling system with a compaction pass, FFX parallel sort, animation graph changes, resource server rework, `FileRegistry` to `DataFileSystem`. **Three conflicts, one hunk each**, and upstream touched no `RHI/`, `Vulkan/` or `Linux/` file. **The conflicts were not the cost** - see the merge notes below. |
 
 ## Merge notes
 
 <!-- Append notable resolutions here. Newest first. -->
 
-*(none yet)*
+### 2026-09-03, `47e6293`
+
+**Read this before the next merge.** [Progress.md](Progress.md)'s P9.1-P9.4 entry has the full
+detail; this is the part that generalises.
+
+**Three single-hunk conflicts, and none of the real work was in them.** The conflicts took a
+morning. Six defects took the rest, and no conflict marker pointed at any of them. Budget the next
+merge accordingly: the conflict count tells you almost nothing about the cost.
+
+#### The three conflicts, and how they were resolved
+
+| File | Resolution |
+|---|---|
+| `EditorUI.h` | Include collision only, from `FileRegistry.h` to `DataFileSystem.h`. Kept both sides. |
+| `ClusterCulling.esf` | Upstream rewrote the kernel - 128 threads, `Buffer<uint4> clusterRecordBuffer`, 128-bit groupshared masks. **P5.17's shim was reapplied onto the new body rather than merged into the old one**, so the file now differs from upstream by exactly the two indirect declaration macros, the `__spirv__` rename block, and the two entry macros. |
+| `Renderer_ForwardShading.cpp` | Upstream deleted the whole "Clear Buffers" block that held the Vulkan indirect-argument zeroing and moved clearing into a new `pCommandBuffer_GeometryCulling`. The zeroing was reapplied there. **Only `ClusterCulling_ArgumentBuffer` needs it**, and that was checked rather than carried over: `ClusterCompaction.esf` appends through an `InterlockedAdd` so its slots go stale, while `InstanceCulling.esf` writes slot `groupID` unconditionally for every page and passes no count buffer. |
+
+#### The five things that cost more than the conflicts
+
+1. **A new upstream `.esf` reached by `CmdExecuteIndirect` needs P5.17's shim, and nothing warns
+   you.** `ClusterCompaction.esf` arrived without it, upstream passes `nullptr` for its root
+   constants because they come per-command from the argument buffer, so on Vulkan `RootCBV` read as
+   zero, every buffer handle was 0, and **the frame was black with no validation message** -
+   reading descriptor 0 is legal. Not the compiler, not validation, not the build. **Next merge:
+   diff the new `.esf` files against the `CmdExecuteIndirect` call sites.**
+2. **`WaveMatch` has no core Vulkan lowering.** Core SM 6.5 on Direct3D 12, and DXC can only emit
+   `OpGroupNonUniformPartitionNV`. Enabling `VK_NV_shader_subgroup_partitioned` made the Linux
+   renderer NVIDIA-only; see the queue in [Blocked.md](Blocked.md).
+3. **Dead upstream code can stop the whole build.** The FFX radix sort has no callers and does not
+   compile on *any* platform, and because the Reflector runs its shader pass before type
+   reflection, it generated zero typeinfo and nothing linked. Excluded in `Reflector.cpp` and
+   `Exclusions.txt`.
+4. **A stored pointer to caller-owned settings.** `RenderSystem::Initialize` began keeping
+   `&settings`; both `ResourceServer` entry points pass a stack local. Fixed in this fork's Linux
+   sibling; **the Win32 one still dangles.**
+5. **An assert that never fired became one that always does.** `EE_ASSERT( "LOST CONNECTION!!" )`
+   asserts on a string literal. Upstream made it `EE_TRACE_HALT`, which turned an invisible startup
+   race into a guaranteed abort. Fixed by tolerating `IsConnecting()`.
+
+#### Procedural corrections
+
+- **Step 3's command is wrong for this purpose.** `git diff --name-only HEAD..upstream/main` is the
+  whole fork divergence - 282 files here - not what the merge brings. Use the merge base *before*
+  merging, and the merge commit's first parent *after*:
+  ```bash
+  git diff --name-only $( git merge-base HEAD upstream/main ) upstream/main   # before: 143 files
+  git diff --stat <merge-commit>^1 HEAD -- <path>                            # after
+  ```
+  **After the merge is committed, `git merge-base HEAD upstream/main` IS `upstream/main`**, so any
+  diff against it comes back empty and reads as "upstream did not touch this file". That produced
+  two wrong conclusions in this merge before it was noticed.
+- **Check the registry by filename, not by grepping paths out of the document.** The path spellings
+  in [TouchedFiles.md](TouchedFiles.md) are not uniform; a path-based sweep reported 11 gaps of
+  which 7 were false. Five real gaps were found and registered.
+- **Run Debug, not just Release.** Release compiles its asserts out. Four of the six defects above
+  were found in Release, and the dangling settings pointer only surfaced when the developer ran the
+  Debug editor - Release had been reading freed stack and surviving.

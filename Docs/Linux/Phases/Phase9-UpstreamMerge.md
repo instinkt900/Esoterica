@@ -25,11 +25,11 @@ this document does not repeat it. Then [00-Conventions.md](../00-Conventions.md)
 >
 > | Task | State |
 > |---|---|
-> | P9.1 The mechanical merge | not started. Three conflicts, one of them trivial, plus the source-list resync |
-> | P9.2 `ClusterCulling.esf` - reapply the indirect-dispatch shim | not started |
-> | P9.3 The indirect argument buffers have no home | not started. **A wrong answer here hangs the GPU, it does not fail to compile** |
-> | P9.4 The new culling pipeline, on Vulkan | not started. **The real work.** None of upstream's new culling code has ever run against this backend |
-> | P9.5 Post-merge audit and provenance | not started. Do this last |
+> | P9.1 The mechanical merge | **done**, 2026-09-03. Three conflicts resolved; upstream's dead FFX radix sort had to be excluded before anything would build |
+> | P9.2 `ClusterCulling.esf` - reapply the indirect-dispatch shim | **done**, 2026-09-03. Reapplied onto upstream's new 128-thread kernel |
+> | P9.3 The indirect argument buffers have no home | **done**, 2026-09-03. Only the culling buffer needs zeroing; verified in the editor at `maxNumCommands` = 146 |
+> | P9.4 The new culling pipeline, on Vulkan | **done**, 2026-09-03. Renders in Debug and Release, validation-clean. **Four defects**, none of them in a conflict |
+> | P9.5 Post-merge audit and provenance | **done**, 2026-09-03. Sync point and merge notes recorded; five registry gaps closed |
 >
 > **P9.1 first, and it unblocks everything else.** P9.2 and P9.3 can then go in either order.
 > P9.4 needs the RTX 3090 machine and needs P9.1 to P9.3 done.
