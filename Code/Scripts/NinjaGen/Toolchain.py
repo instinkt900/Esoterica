@@ -176,8 +176,12 @@ SANITIZERS = {
 # configuration; instrumenting it measures the wrong binary and takes far longer to build.
 SANITIZED_BASE_CONFIGURATIONS = ( 'Debug', 'Release' )
 
-def build_configurations( configuration_names ):
-    """Returns every configuration the generator emits, for the names in Esoterica.slnx."""
+def build_configurations( configuration_names, repo_root = None ):
+    """Returns every configuration the generator emits, for the names in Esoterica.slnx.
+
+    `repo_root` is optional so that Checks.py can ask for the flag shape without a tree. Pass it
+    for a real build: Shipping needs it to find a linker that can read bitcode.
+    """
 
     configurations = []
 
@@ -187,6 +191,18 @@ def build_configurations( configuration_names ):
                 f'no flag mapping for configuration "{name}". Add one to BASE_CONFIGURATIONS.' )
 
         defines, compiler_flags, linker_flags = BASE_CONFIGURATIONS[name]
+
+        # Shipping compiles with -flto, so the linker has to read LLVM bitcode. GNU ld can only
+        # do that through LLVMgold.so, which the official LLVM release archives do not ship - the
+        # link then fails with "LLVMgold.so: cannot open shared object file" after all 607 compile
+        # steps pass. Whether it works at all comes down to whether a distro LLVM happens to be
+        # installed, and that plugin would be a different major version to the pinned clang.
+        #
+        # ld.lld reads bitcode natively and ships in the same archive as the compiler, so use it.
+        # This is the same reasoning as find_linker_flags, applied to a whole configuration rather
+        # than to one project.
+        if '-flto' in linker_flags and repo_root is not None:
+            linker_flags = tuple( linker_flags ) + tuple( find_linker_flags( repo_root ) )
         configurations.append(
             Configuration( name, name, defines, compiler_flags, linker_flags ) )
 

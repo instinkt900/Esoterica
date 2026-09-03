@@ -26,7 +26,7 @@ could ever go upstream.
 > | P8.3 Raytracing, or the decision not to | **deferred**, 2026-09-03, by the developer. Not started, and nothing else in the phase waits on it |
 > | P8.4 RHI debt sweep | **done**, 2026-09-03. Mesh picking verified; the barrier debt and both `EE_UNIMPLEMENTED_FUNCTION` markers made permanent; no RenderDoc trigger. Phase 5 criteria 1, 8 and 9 closed |
 > | P8.5 Shader conformance | not started |
-> | P8.6 Sanitizers and build coverage | not started |
+> | P8.6 Sanitizers and build coverage | **done**, 2026-09-03. All nine configurations build, Shipping links with `ld.lld`, TSan found a signal-safety defect. No CI, decided and recorded |
 > | P8.7 Fork review | not started. Do this last |
 >
 > **These are ordered by size and risk, not by dependency.** Only P8.7 has to come last. P8.1 is

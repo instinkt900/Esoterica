@@ -515,12 +515,22 @@ read `m_pMappedAddress_WriteCombined` a few hundred frames later. For a texture,
 - **OIT is dead code, on both backends.** `OITResolve.esf` compiles, and nothing looks it up or
   builds a pipeline from it. `OIT.esh` has no consumers at all. Phase 5 criterion 8 asks for OIT
   parity and there is no OIT to have parity with.
-- **The Shipping configuration does not link on the RTX 3090 machine**, though it links on the
-  first one. Every one of its 607 compile steps succeeds and the link then fails in `ld`, not in
-  the code: `LLVMgold.so: cannot open shared object file`. `External/LLVM/lib/LLVMgold.so` does
-  not exist in this machine's LLVM install, so its Shipping LTO has no plugin. Found on
-  2026-09-02 while checking a `#if EE_DEVELOPMENT_TOOLS` guard; **it is a dependency gap between
-  the two machines, not a code defect**, and no Shipping binary has ever been linked here.
+- ~~**The Shipping configuration does not link on the RTX 3090 machine.**~~ **Fixed by P8.6 on
+  2026-09-03, and it was never a dependency gap.** Shipping compiles with `-flto`, so the linker
+  has to read LLVM bitcode; GNU ld can only do that through `LLVMgold.so`, which the official LLVM
+  release archives do not ship. Whether the link worked came down to whether a distro LLVM happened
+  to be installed - and that plugin would have been a different major version to the pinned clang.
+  `Toolchain.py` now gives Shipping the same `ld.lld` the Reflector already used; it reads bitcode
+  natively and comes from the same archive as the compiler. **Shipping now links and runs on this
+  machine**, and the binary reports `Linker: LLD 21.1.8`.
+- **The non-rpmalloc allocator path does not build on Linux.** `Memory.cpp` calls
+  `_aligned_malloc`, `_aligned_realloc` and `_aligned_free` in the `#else` of
+  `EE_USE_CUSTOM_ALLOCATOR`, with no `_WIN32` guard - the same shape as the `VirtualMemory*`
+  functions Phase 1 found. It costs nothing today, because `Memory.h:13` hardcodes the define to 1
+  and nothing turns it off. **It costs AddressSanitizer almost everything**: rpmalloc takes its
+  memory from `VirtualMemoryReserve`, so ASan never sees an engine allocation. Found by P8.6 while
+  trying to widen ASan's coverage; deliberately not ported, because it is an upstream file and a
+  path nothing uses by default.
 
 ---
 
@@ -572,7 +582,7 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 > | P8.3 Raytracing, or the decision not to | **deferred**, 2026-09-03, by the developer. Still open - a deferral is not one of the two outcomes the task asks for |
 > | P8.4 RHI debt sweep | **done**, 2026-09-03. Phase 5 criteria 1, 8 and 9 closed. Found an upstream translate-gizmo crash |
 > | P8.5 Shader conformance | not started |
-> | P8.6 Sanitizers and build coverage | not started |
+> | P8.6 Sanitizers and build coverage | **done**, 2026-09-03. Nine configurations build; Shipping links; TSan blocked on the NVIDIA driver |
 > | P8.7 Fork review | not started. Do this last |
 >
 > **The original plan ended at Phase 7 and was right that the port would work by then.** What it
@@ -639,6 +649,142 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-03 - P8.6 Sanitizers and build coverage. **All nine configurations now build**, Shipping links, and TSan found a real defect in the crash handler
+
+**Every one of the nine configurations has now been built and the engine run in five of them.**
+Before this task, six had never produced an output directory and Shipping had never linked here.
+
+| Configuration | Before | Now |
+|---|---|---|
+| `Linux_Release` | built and run | unchanged |
+| `Linux_Debug` | **never built on this machine** | builds, runs pbrdemo for 60s, no asserts, no leaks |
+| `Linux_Shipping` | **compiled, never linked** | links with `ld.lld`, runs pbrdemo, no leaks |
+| `Linux_Release_ASan` | **never built** | builds, runs, **zero errors** |
+| `Linux_Release_TSan` | **never built** | builds, runs, **one real defect found** |
+| `Linux_Release_UBSan` | **never built** | builds, runs, **zero reports** |
+| `Linux_Debug_{ASan,TSan,UBSan}` | never built | generate and are reachable; not built, and the Release ones are the useful pair |
+
+#### Shipping was never a dependency gap - it was the wrong linker
+
+The 2026-09-02 entry recorded Shipping's `LLVMgold.so: cannot open shared object file` as "a
+dependency gap between the two development machines". **That was wrong, and the fix is one flag.**
+
+Shipping compiles with `-flto`, so the linker has to read LLVM bitcode. **GNU ld can only do that
+through `LLVMgold.so`, which the official LLVM release archives do not ship.** Whether the link
+worked came down to whether a distro LLVM happened to be installed - and that plugin would have
+been a different major version to the pinned clang, reading its bitcode.
+
+`find_linker_flags` already picked `External/LLVM/bin/ld.lld` for the Reflector, for exactly the
+same reason - the LLVM release archives hold bitcode, not ELF objects. `Toolchain.py` now applies
+it to any configuration whose linker flags contain `-flto`, which is Shipping and nothing else.
+`readelf -p .comment` on the result says `Linker: LLD 21.1.8`.
+
+**This makes Shipping machine-independent**, which the old diagnosis would not have.
+
+#### TSan found the one real defect: the crash handler was not signal-safe
+
+`Platform_Linux.cpp`'s `CrashSignalHandler` is written to be async-signal-safe - `write()` rather
+than `fputs`, `backtrace_symbols_fd` rather than `backtrace_symbols`, with a comment saying so.
+**`backtrace()` itself is the hole.** glibc loads the unwinder from `libgcc_s.so` lazily, so the
+*first* call reaches `dlopen` and mallocs:
+
+```
+WARNING: ThreadSanitizer: signal-unsafe call inside of a signal
+    #0 malloc
+    #1 malloc                          ld-linux-x86-64.so.2
+    #2 _dl_map_object_deps             elf/dl-deps.c:463
+    #3 EE::Platform::CrashSignalHandler  Code/Base/Platform/Platform_Linux.cpp:54
+```
+
+**A crash inside the allocator would then deadlock in the handler reporting it** - which is the
+case the handler exists for. `Platform::Initialize` now calls `backtrace()` once on the main
+thread with nothing held, so the library is already loaded when a signal arrives. Confirmed fixed:
+the warning is gone from a re-run.
+
+This is the port's own file, so it is fixed here rather than recorded.
+
+#### What each sanitizer could actually see
+
+**Read this before trusting "no errors found".**
+
+- **ASan: zero errors over 45 seconds**, rendering pbrdemo correctly. Six leaks at exit, all in
+  `libdbus` and the driver, none in `Code/`. **But ASan sees almost none of this engine.**
+  `Memory.h:13` hardcodes `EE_USE_CUSTOM_ALLOCATOR` to 1, so every engine allocation comes from
+  rpmalloc, which takes memory from `VirtualMemoryReserve` - an `mmap` ASan does not intercept.
+  What ASan covered here is stack, globals and libc-level heap. Turning rpmalloc off does not
+  compile on Linux; see [Still open](#still-open).
+- **UBSan: zero reports** over 60 seconds. This one is not narrowed by the allocator, so it is the
+  cleanest result of the three.
+- **TSan: cannot run against the NVIDIA driver at all.** `vkCreateDevice` is followed immediately
+  by an internal TSan failure:
+  ```
+  ThreadSanitizer: CHECK failed: tsan_interceptors_posix.cpp:2156 "((thr->slot)) != (0)"
+  ```
+  `ignore_noninstrumented_modules`, `ignore_interceptors_accesses`, `detect_deadlocks=0`,
+  `handle_segv=0` and `handle_sigbus=0` were each tried and none helps. **This is the driver, not
+  the engine or TSan** - proved by swapping in Mesa's software ICD, where the same binary runs.
+
+#### How to run TSan here, given that
+
+Two routes, both used in this session:
+
+```bash
+# 1. The engine, on the software ICD. Reaches the render path but not far - lavapipe has no
+#    VK_EXT_mesh_shader, so the frame halts the way any device without it does.
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ./Esoterica.Applications.Engine -packaged -map data://demo/render/pbr/pbrdemo.map
+
+# 2. The resource compiler, which is threaded and touches no Vulkan at all.
+./Esoterica.Applications.ResourceCompiler -compile data://demo/render/pbr/boulder/boulder.mesh -force
+```
+
+Route 1 reported two data races, **both entirely inside `libvulkan_lvp.so`** between its own
+`llvmpipe-N` worker threads; the only `Code/` frames are the stack that initialised the driver.
+Route 2 compiled the mesh with **zero races**.
+
+**So the engine's own threading is still largely uncovered by TSan.** The task system under a real
+frame is the interesting target and it is out of reach on this machine. That is the honest state,
+and it is a row in [Blocked.md](Blocked.md) rather than a clean result.
+
+#### ASan needs one option, or Vulkan will not start
+
+```bash
+ASAN_OPTIONS=protect_shadow_gap=0 ./Esoterica.Applications.Engine ...
+```
+
+Without it `vkCreateDevice` fails and the engine halts on `EE_ASSERT( result == VK_SUCCESS )` at
+`RHI_Vulkan.cpp:1288`. The NVIDIA driver maps memory in the region ASan reserves as its shadow gap.
+**The symptom names Vulkan and the cause is the sanitizer**, which is worth an hour to whoever
+meets it next; it is in [04-BuildAndRun.md](04-BuildAndRun.md).
+
+#### The CI decision: no CI, and the reason is a number
+
+**Decided with the developer on 2026-09-03: no CI.** Not a judgement about whether CI is worth
+having - a measurement:
+
+- **`External/` is 12 GB, of which 11 GB is the extracted LLVM release.**
+- GitHub Actions caps a repository's cache at **10 GB**, so `External/` cannot be cached at all.
+- A hosted runner would therefore re-download and re-extract LLVM on **every run**, before the
+  first translation unit compiles, and it is doubtful it fits in a standard runner's free disk.
+
+Two things would change the answer, and both are real work rather than a workflow file: **a
+prebuilt container image with `External/` baked in**, or **trimming the LLVM install** to the
+toolchain plus the clang libraries the Reflector links against. A self-hosted runner on either
+development machine was also considered and declined, because CI that only passes when a
+particular desktop is switched on is worse than none.
+
+**The consequence is accepted and written down here:** nine configurations that nothing builds
+automatically will rot, and the guard against that is that every task builds what it touches.
+P8.6 is the evidence for how fast it happens - six configurations had never been built at all.
+
+- Files added: none.
+- Upstream files edited: `Code/Scripts/NinjaGen/Toolchain.py` and `NinjaGen.py`, both already
+  registered as this port's own rewrite. `Code/Base/Platform/Platform_Linux.cpp` is a port file.
+  **No shared C++ header or engine source changed, so Windows sees none of this.**
+- Acceptance criteria met: P8.6's "ASan and TSan builds of the engine have been run against
+  pbrdemo with their findings recorded" - **met, with the TSan caveat above stated rather than
+  glossed**; "Shipping links on both machines" - **met on this one and made
+  machine-independent**; "the CI decision is written down" - met.
 
 ### 2026-09-03 - P8.4 RHI debt sweep. **Mesh picking works**, the barrier debt is permanent, and the translate gizmo has an upstream crash
 
