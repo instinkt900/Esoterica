@@ -13,13 +13,13 @@
 
 //-------------------------------------------------------------------------
 // Linux has no system dialog API. Every desktop ships a command line helper instead, and zenity's
-// command line is the one they agree on: qarma is the Qt port of it and matedialog is the MATE
-// fork, and both take the same arguments. So we spawn whichever one is on PATH through the
-// vendored subprocess library and read the selection off its stdout.
+// command line is the one they agree on: qarma is its Qt port and matedialog the MATE fork, and both
+// take the same arguments. So whichever is on PATH gets spawned, and the selection is read off its
+// stdout.
 //
-// With no display there is nothing to show. The file dialogs then return an empty result, which
-// the caller reads as a cancel, and the message dialogs log instead. That is the case the
-// ResourceCompiler workers run in.
+// With no display there is nothing to show. The file dialogs then return an empty result, which the
+// caller reads as a cancel, and the message dialogs log instead. That is how the ResourceCompiler
+// workers run.
 //-------------------------------------------------------------------------
 
 namespace EE
@@ -179,7 +179,7 @@ namespace EE
             }
 
             // The filter argument is "--file-filter=<name> | <pattern>". m_filter holds the pattern
-            // in the Windows wide-string format, so we build it from m_extension instead.
+            // in the Windows wide-string format, so it is built from m_extension instead.
             String const displayText( String::CtorConvert(), extFilter.m_displayText.c_str() );
             args.emplace_back( String( String::CtorSprintf(), "--file-filter=%s | *.%s", displayText.c_str(), extFilter.m_extension.c_str() ) );
         }

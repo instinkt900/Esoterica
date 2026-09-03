@@ -11,9 +11,9 @@ namespace EE::Input
     {
         // SDL scancode to EE keyboard buttons.
         //
-        // **Scancodes, not keycodes.** A scancode names the physical key and does not move with
-        // the keyboard layout, which is what the Win32 sibling gets from raw input. A keycode
-        // would make W,A,S,D land somewhere else on an AZERTY or Dvorak layout.
+        // Scancodes, not keycodes. A scancode names the physical key and does not move with the
+        // layout, which is what the Win32 sibling gets from raw input. A keycode would put W,A,S,D
+        // somewhere else on an AZERTY or Dvorak layout.
         static THashMap<uint32_t, InputID> g_keyMappings;
 
         static bool ConvertScancodeToInputID( SDL_Scancode scancode, InputID& inputID )

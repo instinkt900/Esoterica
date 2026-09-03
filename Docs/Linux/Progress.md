@@ -677,6 +677,200 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-03 - Comments in the tooling and in the fork's edits to upstream files. Unplanned
+
+The last of the comment pass. Two groups: the build tooling, and the comments this fork added when it
+edited an upstream file.
+
+**The rule for an upstream file is narrower than the keep test.** Only the comments the fork added are
+in scope. An upstream comment is upstream's, whatever it says. Which lines are ours:
+
+```bash
+git diff upstream/main -- <file> | grep '^+' | grep -E '^\+\s*(//|#)'
+```
+
+Across the 88 upstream files this fork touches, about 400 comment lines are fork-added, and only 31 of
+them carried anything worth changing: 26 phase or doc-path pointers, and 5 markdown bold markers. Six
+files needed edits at all. `Memory.cpp`, `ClangParser.cpp`, `Reflector.cpp` and the rest were already
+short and why-focused.
+
+**Two greps that look like offenders and are not.** `deferred_to_phase = 'Phase 5'` in `Toolchain.py`
+is a code value, not a comment, and "Phase 5" is vocabulary this generator actually uses. And `**` in
+`Code/**/ThirdParty` is a glob, not emphasis. Both were left alone.
+
+#### The guard that proves no upstream line was touched
+
+The invariant worth reusing: **the set of upstream lines the fork does not retain must be identical
+before and after.** Alignment-independent, so a shifted diff hunk cannot produce a false pass:
+
+```bash
+comm -23 <(git show upstream/main:"$f" | sed 's/[[:space:]]*$//' | sort -u) \
+         <(sed 's/[[:space:]]*$//' "$f" | sort -u)
+```
+
+A first attempt compared the `-` lines of `git diff upstream/main` instead. That flagged `NinjaGen.py`
+for an `else:`, which turned out to be git re-aligning a hunk after a comment shrank. The line was
+never touched. **Do not use diff-line sets for this; use the `comm` form above.**
+
+#### A Python docstring is not a comment
+
+A comment stripper treats `"""..."""` as a string literal, so a docstring edit reads as a code change.
+Two docstrings were edited here, in `Toolchain.py` and `SourceLists.py`, both only to drop a doc-path
+pointer. Docstrings are prose and are in scope, but the proof has to change: compare the parsed AST
+with docstrings normalised away.
+
+```bash
+python3 -c "import ast,sys; ..."   # see the PR for the full script
+```
+
+Both files: AST identical.
+
+#### Verification
+
+- No upstream-owned line altered or lost, by the `comm` guard, across all 6 edited upstream files.
+- Comment-only by the stripper for the 6 non-Python files.
+- AST identical for the 3 Python files.
+- `ninja -f Build/Linux/Esoterica.ninja`: 841 of 841 targets.
+- `NinjaGen.py` regenerates: 13 projects, 888 sources, 9 configurations. Needs
+  `PATH=External/LLVM/bin:$PATH`, or it fails looking for `clang++`.
+- `CompileShaders.sh`: all stages compile and code generation succeeds. This is the one that matters
+  for the `.esh` edits, because `RHI.esh` is included by every shader and **the C++ build does not
+  recompile shaders**. It produced no change to any tracked file.
+
+Windows MSBuild was not run. Nothing outside a `__linux__` guard changed behaviour, and the shader
+edits are comments that DXC strips on both platforms.
+
+#### What is now done, and what is left
+
+Every hand-written file in the fork has had the pass: `RHI_Vulkan.cpp`, the 27 `_Linux` files, the
+tooling, and the fork's additions to upstream files. Nothing is outstanding.
+
+Deliberately never in scope, and worth knowing before someone "finishes the job":
+
+- `Code/**/ThirdParty/` - upstream vendors it.
+- The vendored imgui region of `ImguiPlatform_Linux.cpp`, below its banner.
+- `ninja_syntax.py` - vendored from the ninja project.
+- Every comment inherited from a `_Win32` sibling or from upstream.
+
+### 2026-09-03 - Comments in the 27 `_Linux` files. Unplanned. Comment-only, no code change
+
+The same treatment as `RHI_Vulkan.cpp`, applied to every `*_Linux.{cpp,h}` file. Same keep test, same
+style. These were in far better shape to begin with: 929 comment lines to 876, and 14% density before
+the pass rather than 23%.
+
+**Two constraints shaped this more than the keep test did, and they are the useful part of this entry.**
+
+**A comment inherited from a `_Win32` sibling is upstream text. Do not touch it.** Conventions rule 1
+wants a Linux file and its Win32 sibling to diff cleanly against each other, and rule 3 forbids
+improving upstream prose. Nineteen of the 27 files have a sibling, and roughly 130 of their comment
+lines are verbatim from it. Checked with:
+
+```bash
+diff <(grep -oE '//.*' Foo_Win32.cpp) <(grep -oE '//.*' Foo_Linux.cpp)
+```
+
+Only the `>` lines are the fork's to edit. This caught two live cases: `Application_Linux.h:58`
+("Called whenever we receive an application exit request") and `Math_Linux.h:8` ("so we need to handle
+it explicitly") both read as first-person style slips and are byte-identical to the Win32 sibling.
+Rewriting them would have created sibling drift to gain nothing.
+
+**The vendored imgui region in `ImguiPlatform_Linux.cpp` is off limits below its banner.** Lines 40 to
+1122 are upstream `imgui_impl_sdl3.cpp`, and the banner exists to say that re-sync is
+`diff <upstream> <this region>`. Its comments look exactly like candidates for this pass and are not.
+Only the fork's own banner was rewritten, 25 lines to 18, keeping the provenance, the reason rule 8 is
+deliberately broken there, and the change checklist. Verify with `git diff -U0` on that file: every
+hunk should sit above line 40.
+
+**What was cut.** 10 phase and `Progress.md` references, 4 markdown bold markers, 4 first-person or
+filler slips in fork-owned prose. Three banners lost the most: the inotify header, the crash handler,
+and the `ResourceServer` tray note.
+
+**What was kept, and is worth keeping.** Several of these comments carry the only record of a real
+trap. The `fd + 1` encoding in `FileSystemWatcher_Linux.cpp`, because the shared header's
+`IsWatching()` tests against `nullptr` and `inotify_init1` can return fd 0. The async-signal-safety
+rule in `Platform_Linux.cpp`. The `backtrace()` warm-up, which exists so a crash inside the allocator
+does not deadlock the handler reporting it. The negated gamepad Y axes. Scancodes rather than keycodes.
+None of those are visible in the code.
+
+**Verification.** The comment stripper over all 27 files against `HEAD`: identical output, 3983 code
+lines, no diff. Then a full `ninja -f Build/Linux/Esoterica.ninja` - 844 of 844 targets, every binary
+linked. The Windows MSBuild build was not run; every file is inside `#ifdef __linux__` and no code
+changed.
+
+#### What the next session should know
+
+- **Diff against the Win32 sibling before editing any comment in a `_Linux` file.** The one-liners
+  above each function are usually upstream's. This is the rule this task exists to record.
+- The 8 files with no sibling are wholly the fork's: the three `Application_Linux` pairs,
+  `ComPtr_Linux.h`, `ImguiX_Linux.h`, `InputDevice_XBoxController_Linux.cpp`,
+  `SystemDialogs_Linux.cpp` and `FileSystemWatcher_Linux.cpp`.
+- Still untouched: the build tooling. `NinjaGen/*.py`, `DownloadDependencies.sh`, `RunReflection.sh`
+  and `CompileShaders.sh` have had no pass. Python, so a `#` stripper is needed to prove the same
+  property.
+
+### 2026-09-03 - Comments in `RHI_Vulkan.cpp`. Unplanned. Comment-only, no code change
+
+The comments in `RHI_Vulkan.cpp` had grown into essays. They narrated the porting effort instead of
+explaining the code, and they leaned on context that only exists in the sessions that wrote them.
+Rewritten against one rule.
+
+**The rule.** Keep a comment only if it answers a question the code cannot:
+
+1. Why this value or flag, and not the obvious alternative.
+2. A Vulkan/D3D12 divergence that would cause a bug if a reader assumed parity.
+3. A deliberate divergence from the D3D12 backend.
+4. A workaround for a driver, API or tooling defect.
+5. A cross-file invariant, such as a layout mirrored in `RHI.esh`.
+
+Delete otherwise. Restatements of the code, Vulkan tutorials, history, provenance, and anything
+whose answer is "because that is what the function is called".
+
+| | before | after |
+|---|---|---|
+| Total lines | 8053 | 7372 |
+| Comment lines | 1860 (23%) | 1182 (16%) |
+| Code lines | 4920 | 4920 |
+| Phase and `Progress.md` references | 113 | 0 |
+| Markdown `**bold**` in comments | 128 | 0 |
+| `File.cpp:1234` references | 59 | 0 |
+
+**Two comments were wrong, not just wordy.** Both were superseded by work recorded in this file:
+
+- `QueueDeviceWait` called its `ALL_COMMANDS` mask "the correct-but-untuned choice the phase
+  document allows". P8.4 classified it permanent and not debt on 2026-09-03.
+- The indirect-draw banner said "No engine call site takes the working path today, so nothing in the
+  frame draws yet". P5.17 landed and the frame runs past it.
+
+Both deleted. A comment that contradicts this file is worse than no comment.
+
+**Nothing was lost.** The eight largest rationale topics - queue submission ordering, surface
+creation, the headless path, raytracing reachability, the bindless model, the `ALL_COMMANDS` sites,
+indirect draws, and scratch buffer sizing - are all recorded here already, and in more detail than
+the comments carried. The entries hold the rejected alternatives and the follow-up verdicts that the
+comments never had.
+
+**Verification.** A string-literal-aware comment stripper run over `HEAD` and over the working copy
+produces byte-identical output: 4920 code lines, no diff. That is the proof the change is
+comment-only. `RHI_Vulkan.cpp.o` then builds in `Linux_Debug` with 236 warnings, the same count as
+`HEAD`, all of them from EABase and VMA headers.
+
+The Windows MSBuild build was not run. The whole file sits inside `#ifdef __linux__` and no code
+changed, so Windows cannot see this.
+
+#### What the next session should know
+
+- **The style for this file is settled.** Short, why-focused, no phase identifiers, no `Progress.md`
+  pointers, no line numbers, no markdown emphasis. One term per concept: "the D3D12 backend", not a
+  mix of "the reference", "the specification" and "Direct3D 12".
+- **Do not put line numbers in a comment.** They rot silently. `TouchedFiles.md:83` still points at
+  `RHI_Vulkan.cpp:5394` for a `RG32_UInt` buffer view; that line was raytracing code even before
+  this task touched anything. Left alone, because it was already wrong and is not this task's to fix.
+- **The other Linux files still carry the old style.** `Platform_Linux.cpp`, `Application_Linux.cpp`,
+  `ImguiPlatform_Linux.cpp` and the NinjaGen scripts were not touched. Same treatment when asked.
+- 16% is an outcome, not a target. The keep test was applied per comment. `RHI_Direct3D12.cpp` sits
+  at 1.8% and is worth reading for voice, but Vulkan diverges from D3D12 in more places than a
+  straight port would, and those divergences are where most of the surviving comments sit.
+
 ### 2026-09-03 - P8.5 Shader conformance. One item fixed, three made permanent, and a workaround that renders a black frame
 
 **All four items are now decided.** One was fixed outright, and the other three are permanent with

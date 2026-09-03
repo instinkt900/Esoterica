@@ -57,10 +57,9 @@ namespace EE
         // Confirm exit if there are still connected clients, as the Win32 sibling does.
         //
         // ShowEx rather than Confirmation, because the three results have to be told apart.
-        // Confirmation collapses "the user said No" and "no dialog could be shown" into one
-        // false, and a server that cannot show a dialog would then refuse every exit and trap
-        // the user in a window that will not close. ShowEx returns Cancel for the second case,
-        // and the message has already gone to the log by then, so exiting is the right answer.
+        // Confirmation collapses "the user said No" and "no dialog could be shown" into one false,
+        // so a server with no display would refuse every exit and trap the user in a window that
+        // will not close. ShowEx returns Cancel for that case, and exiting is the right answer.
         MessageDialog::Result const result = MessageDialog::ShowEx( Severity::Warning, MessageDialog::Type::YesNo, "Resource Server", "There are still connected clients!\nAre you sure you want to exit the Resource Server?" );
         return result != MessageDialog::Result::No;
     }
@@ -118,9 +117,8 @@ namespace EE
         // The Win32 sibling asserts WasInitialized() here, and that assert is wrong on both
         // platforms: Run() calls Shutdown() when Initialize() fails, before m_initialized is
         // set. It fires whenever the server cannot start - a second instance losing the race
-        // for port 5556 is the ordinary case. Return early instead, because the members below
-        // would otherwise be torn down without having been created. Logged as an upstream issue
-        // in Docs/Linux/Progress.md rather than fixed in the upstream file.
+        // for port 5556 is the ordinary case. Return early instead, because the members below would
+        // otherwise be torn down without having been created.
         if ( !WasInitialized() )
         {
             return true;
@@ -216,14 +214,13 @@ namespace EE
 //-------------------------------------------------------------------------
 // Single instance
 //-------------------------------------------------------------------------
-// The Windows entry point creates a named mutex and refuses to start twice. This is the same
-// guard, and it is not optional: a second server loses the race for port 5556, and
-// ResourceServerContext::Initialize then returns false having already allocated its
-// CompilerRegistry, so the destructor asserts on m_pCompilerRegistry == nullptr. The mutex is
-// what stops Windows ever reaching that. Logged as an upstream issue in Docs/Linux/Progress.md.
+// The Windows entry point creates a named mutex and refuses to start twice. The same guard, and not
+// optional: a second server loses the race for port 5556, and ResourceServerContext::Initialize then
+// returns false having already allocated its CompilerRegistry, so the destructor asserts. The mutex
+// is what stops Windows ever reaching that.
 //
-// flock, not a PID file: the kernel drops the lock when the process dies, however it dies, so a
-// crashed server never leaves a stale lock behind.
+// flock, not a PID file: the kernel drops the lock however the process dies, so a crashed server
+// never leaves a stale lock behind.
 
 static int g_singleInstanceLockFileDescriptor = -1;
 

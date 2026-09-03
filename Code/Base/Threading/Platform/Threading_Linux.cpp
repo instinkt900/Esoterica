@@ -87,14 +87,12 @@ namespace EE::Threading
     //-------------------------------------------------------------------------
     // SyncEvent
     //-------------------------------------------------------------------------
-    // The Win32 version calls CreateEvent( nullptr, TRUE, FALSE, nullptr ). The second argument
-    // is bManualReset, so this is a **manual reset** event that starts unsignalled: once
-    // signalled it stays signalled, releasing every current and future waiter, until something
-    // calls Reset() explicitly. Waiting does not clear it.
+    // The Win32 version passes bManualReset, so this is a manual reset event: once signalled it
+    // stays signalled, releasing every current and future waiter, until Reset() is called. Waiting
+    // does not clear it.
     //
-    // That is why this is a condition variable plus an explicit flag rather than a semaphore or
-    // an eventfd. notify_all, not notify_one, for the same reason. Getting this wrong gives
-    // intermittent hangs, so it is spelled out here.
+    // Hence a condition variable plus an explicit flag rather than a semaphore or an eventfd, and
+    // notify_all rather than notify_one. Getting this wrong gives intermittent hangs.
 
     namespace
     {

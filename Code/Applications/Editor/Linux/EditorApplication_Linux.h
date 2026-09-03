@@ -48,9 +48,8 @@ namespace EE
 
         virtual bool ApplicationLoop() override;
 
-        // The Win32 sibling carries LivePP_PreReload and LivePP_PostReload here. Live++ has no
-        // Linux build, EE_ENABLE_LPP stays unset, and Conventions rule 4 says to leave the
-        // define unset rather than guard the call sites, so the hooks simply do not appear.
+        // The Win32 sibling carries LivePP_PreReload and LivePP_PostReload here. Live++ has no Linux
+        // build, so EE_ENABLE_LPP stays unset and the hooks do not appear.
 
     private:
 

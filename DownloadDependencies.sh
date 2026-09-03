@@ -265,10 +265,9 @@ fetch_llvm()
 # pipeline both need it, and eight Engine Render files include generated .esh reflection headers
 # that only exist once it has run.
 #
-# Built from source, not downloaded. Microsoft ships prebuilt Linux binaries, and Phases 2 and 3
-# used them, but the SPIR-V back end crashes on the engine's mesh shaders. The fix is in
-# Code/Scripts/DXCPatches, so the source has to be compiled here. See the 2026-08-28 decision in
-# Docs/Linux/Progress.md, and Docs/Linux/Phases/Phase4-ShaderPipeline.md.
+# Built from source, not downloaded. Microsoft's prebuilt Linux binaries crash in the SPIR-V back
+# end on the engine's mesh shaders, and the fix is in Code/Scripts/DXCPatches, so the source has to
+# be compiled here.
 #
 # This takes tens of minutes and is by far the slowest dependency. It is also the only one whose
 # output differs from what upstream ships, which is why the patches carry a full explanation
@@ -405,10 +404,9 @@ fetch_dxc()
     # on a variable that is already an array of bool. The check was rewritten upstream since.
     # v2026.3, which is what DXC vendors and validates with internally, accepts all 46 stages.
     #
-    # Acceptance criterion 3 of Phase 4 is checked with spirv-val, so the criterion is only
-    # meaningful against the validator that matches the compiler. Building it costs about a
-    # minute against DXC's twenty, and needs no extra download: the source is already in the
-    # clone.
+    # Shader output is validated with spirv-val, which is only meaningful against the validator that
+    # matches the compiler. Building it costs about a minute against DXC's twenty, and needs no
+    # extra download, because the source is already in the clone.
     info "building spirv-val from DXC's vendored SPIRV-Tools"
     cmake -S "${source_dir}/external/SPIRV-Tools" -B "${source_dir}/build-spirv-tools" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
@@ -704,9 +702,9 @@ fetch_renderdoc()
     info "RenderDoc header installed"
 }
 
-# SDL3. Phase 6 windowing and input: the window, the event loop, keyboard, mouse, gamepad, and
-# the Vulkan surface that Phase 5's swapchain binds. Dear ImGui's imgui_impl_sdl3.cpp is the
-# platform backend the port uses in place of the vendored imgui_impl_win32.cpp.
+# SDL3. Windowing and input: the window, the event loop, keyboard, mouse, gamepad, and the Vulkan
+# surface the swapchain binds. Dear ImGui's imgui_impl_sdl3.cpp is the platform backend the port uses
+# in place of the vendored imgui_impl_win32.cpp.
 #
 # Built from source, not taken from the distribution. This answers open question 4: Ubuntu 24.04
 # LTS, the development target, has no libsdl3-dev at all. SDL3 first shipped in January 2025 and

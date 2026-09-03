@@ -14,18 +14,13 @@
 #include <vulkan/vulkan.h>
 #include <dlfcn.h>
 
-// SPIRV-Reflect replaces ID3D12ShaderReflection. See the P4.4 entry in Docs/Linux/Progress.md
-// for why the dependency belongs to Phase 5 rather than Phase 4.
+// SPIRV-Reflect replaces ID3D12ShaderReflection.
 #include "spirv_reflect.h"
 
 #include "renderdoc_app.h"
 
-// VMA's implementation goes in exactly one translation unit, and this is the only Vulkan one.
-//
-// The pragma silences roughly 200 -Wnullability-completeness warnings raised by the header
-// under -Wall -Wextra. They are noise: nothing first-party uses nullability attributes, and the
-// Linux build passes no -Werror, so this keeps the build log readable rather than changing what
-// is diagnosed anywhere else.
+// VMA's implementation belongs in exactly one translation unit, and this is the only Vulkan one.
+// The pragma silences the header's nullability warnings, which no first-party code raises.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnullability-completeness"
 #define VMA_IMPLEMENTATION
@@ -35,16 +30,7 @@
 //-------------------------------------------------------------------------
 // Vulkan RHI backend
 //-------------------------------------------------------------------------
-// The Linux sibling of RHI_Direct3D12.cpp, which is the specification. Phase 5 replaces the
-// Phase 1 stubs group by group; Docs/Linux/Progress.md records which groups are real.
-//
-// Implemented so far: P5.1, device, context and memory. Everything else still halts. A stub
-// that returned quietly would surface as a baffling failure much later; one that halts names
-// the function Phase 5 still owes you.
-//
-// Two decisions from Phase 4 are hard prerequisites, both recorded in Docs/Linux/Progress.md:
-// the bindless binding model, which CreateContext below checks the device against, and
-// clip-space Y, which the viewport inverts in P5.8 and the shader compiler does not.
+// The Linux counterpart of RHI_Direct3D12.cpp, which is the reference for behaviour.
 //-------------------------------------------------------------------------
 
 namespace eastl
@@ -62,8 +48,7 @@ namespace EE::Memory::Allocators
 {
     static MemoryAllocator g_Vulkan( "Vulkan" );
 
-    // RHI_Direct3D12.cpp defines this too, at :98. Exactly one backend is compiled per platform,
-    // so the definition has to exist here or nothing in RHI.h that names the allocator links.
+    // One backend is compiled per platform, so this has to be defined here as well as in the D3D12 backend.
     MemoryAllocator g_RHI( "RHI" );
 }
 
@@ -74,35 +59,27 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Device requirements
     //-------------------------------------------------------------------------
-    // Fixed by the Phase 4 binding model. See the "P4.3 The bindless binding model" entry in
-    // Docs/Linux/Progress.md, which names every set, binding and feature bit.
-    //
-    // The shaders are already compiled for this model, and there is no fallback path, so a
-    // device that cannot meet these is refused rather than worked around.
+    // Fixed by the bindless binding model. The shaders are compiled for it and there is no
+    // fallback path, so a device that cannot meet these is refused rather than worked around.
 
     static char const* const g_requiredDeviceExtensions[] =
     {
-        // Set 1 binding 0 aliases six descriptor types on one binding, which is what this
-        // extension exists for. DXC's emulated heap emits exactly that.
+        // Set 1 binding 0 aliases six descriptor types, which is what DXC's emulated heap emits.
         VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME,
         // CmdSetRootConstants and CmdSetRootParameter are push descriptor writes into set 0.
         VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
-        // P5.3 needs it, and a device is created once, so it is enabled here rather than
-        // forcing device recreation when the swapchain arrives.
+        // Enabled up front because the device is created once, long before the swapchain.
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     };
 
-    // The two heaps, in set 1. The counts are Direct3D 12's, from its CreateContext at
-    // RHI_Direct3D12.cpp:2229 and :2236. Keeping them identical is what makes a handle mean the
-    // same thing on both backends, and both fit under UINT16_MAX so InvalidResourceHandle stays
-    // outside either heap.
+    // The D3D12 backend's counts, kept identical so a handle means the same thing on both backends.
+    // Both fit under UINT16_MAX, which keeps InvalidResourceHandle outside either heap.
     static constexpr uint32_t g_resourceHeapSize = 64 * 1023;
     static constexpr uint32_t g_samplerHeapSize = 2048;
 
-    // P5.17's indirect root block. **The only push constant range the backend uses.**
-    // CmdExecuteIndirect fills it and the shader reads its own command out of the argument
-    // buffer with it, because no Vulkan indirect draw rebinds a descriptor per command. The
-    // layout is mirrored in RHI.esh as EE_IndirectRootPushConstants; the two must agree.
+    // The only push constant range the backend uses. No Vulkan indirect draw rebinds a descriptor
+    // per command, so the shader reads its own command out of the argument buffer instead.
+    // Mirrored in RHI.esh as EE_IndirectRootPushConstants; the two must agree.
     struct IndirectRootPushConstants
     {
         uint64_t                                            m_argumentBufferAddress = 0;
@@ -117,9 +94,7 @@ namespace EE::Render::RHI
     static constexpr uint32_t g_resourceHeapBinding = 0;
     static constexpr uint32_t g_samplerHeapBinding = 1;
 
-    // Every type the engine's shaders pull out of ResourceDescriptorHeap. DXC's emulated heap
-    // emits one OpTypeRuntimeArray per HLSL resource type, all decorated with this one binding,
-    // which is what VK_EXT_mutable_descriptor_type exists for.
+    // DXC's emulated heap emits one OpTypeRuntimeArray per HLSL resource type, all on this one binding.
     static constexpr VkDescriptorType g_resourceHeapMutableTypes[] =
     {
         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,           // Texture2D, Texture2DArray, Texture3D, TextureCube
@@ -130,9 +105,7 @@ namespace EE::Render::RHI
         VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,          // no shader today, but GetBufferHandle accepts ConstantBuffer
     };
 
-    // Vulkan 1.3 is the baseline, so dynamic rendering, synchronization2, timeline semaphores,
-    // descriptor indexing and buffer device address are all core. Only the feature bits that
-    // are optional within core need asking for.
+    // Vulkan 1.3 is the baseline, so only the bits that stay optional within core need asking for.
     struct RequiredFeatures
     {
         VkPhysicalDeviceVulkan13Features                    m_vulkan13 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
@@ -141,8 +114,7 @@ namespace EE::Render::RHI
         VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT    m_mutableDescriptorType = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT };
         VkPhysicalDeviceFeatures2                           m_features2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
 
-        // Chains the structures onto m_features2. Call after any copy, because copying moves
-        // the structures and leaves every pNext pointing at the original.
+        // Call after any copy: copying leaves every pNext pointing at the original.
         void Chain()
         {
             m_features2.pNext = &m_vulkan11;
@@ -153,28 +125,19 @@ namespace EE::Render::RHI
         }
     };
 
-    // RHI.h declares this and RHI_Direct3D12.cpp defines it at :1291. Exactly one backend is
-    // compiled per platform, so the definition has to exist here too: Context derives from it,
-    // and instantiating VulkanContext emits references to its vtable, typeinfo and destructor.
+    // Emits the vtable and typeinfo that VulkanContext needs. One backend is compiled per
+    // platform, so this has to be defined here as well as in the D3D12 backend.
     EE_BASE_API GenericResource::~GenericResource() = default;
 
-    // Defined in the queues section below, next to the first caller that needed it.
     struct VulkanContext;
     static void SetVulkanObjectName( VulkanContext* pVulkanContext, VkObjectType objectType, uint64_t objectHandle, StringView debugName );
 
-    // Defined in the draw commands section, which sits after EndCommandBuffer. Dynamic
-    // rendering has a begin and an end, and several things have to close it.
     struct VulkanCommandBuffer;
     static void FlushRendering( VulkanCommandBuffer* pVulkanCommandBuffer );
     static void SuspendRendering( VulkanCommandBuffer* pVulkanCommandBuffer );
     static void FlushBarriers( VulkanCommandBuffer* pVulkanCommandBuffer );
 
-    // The one DataFormat to VkFormat mapping, defined in the resources section below next to
-    // its first caller. FillDeviceCapabilities is far above it and asks the device about every
-    // format, so it needs the declaration here.
     static VkFormat VulkanFormat( DataFormat format );
-
-    // Defined in the state mapping section, which sits after the samplers that need it.
     static VkCompareOp VulkanCompareOp( CompareMode mode );
 
     //-------------------------------------------------------------------------
@@ -185,45 +148,27 @@ namespace EE::Render::RHI
         uint64_t                                            m_numBytes = 0;
     };
 
-    // Vulkan has no equivalent of DXGI's live-object report, which the Direct3D 12 backend uses
-    // in ReportDeviceMemoryLeaks. That call runs after DestroyContext, by which point the VMA
-    // allocator that knows the answer is gone, so DestroyContext records what it saw here.
+    // Vulkan has no equivalent of DXGI's live-object report. ReportDeviceMemoryLeaks runs after
+    // DestroyContext has freed the VMA allocator, so DestroyContext records what it saw here.
     static uint64_t g_leakedDeviceAllocations = 0;
     static uint64_t g_leakedDeviceAllocationBytes = 0;
 
-    // **VK_EXT_mesh_shader is optional, and a barrier has to know.** VulkanPipelineStage maps
-    // PipelineStage::NonPixelShader onto every shader stage, and the task and mesh stage bits are
-    // only legal once the extension is enabled. That function is handed flags and no Context, so
-    // the answer lives here, next to the other file static the same problem produced.
-    //
-    // One context at a time, which is what the engine creates. CreateContext sets it and
-    // DestroyContext clears it.
+    // VulkanPipelineStage is handed flags and no Context, but the task and mesh stage bits are
+    // only legal once VK_EXT_mesh_shader is enabled. Set by CreateContext, cleared by DestroyContext.
     static bool g_meshShaderEnabled = false;
 
     // Said once, not once per dropped draw. See CmdSetPipeline.
     static bool g_warnedAboutDroppedMeshDraws = false;
 
-    // **Every Linux surface measured offers only the BGRA spelling of the 8-bit formats** - Intel
-    // UHD 620, NVIDIA MX250 and llvmpipe all do. The engine hardcodes the RGBA spelling for the
-    // pipelines and
-    // the offscreen targets on its present path - ImguiRenderer.cpp:115 and :236,
-    // RenderPass_DebugDraw.cpp:487, RenderPass_PostProcess.cpp:19 and :58 - because DXGI hands
-    // out RGBA and nothing there has to ask. Dynamic rendering demands the pipeline's attachment
-    // format match the image exactly, so the two spellings cannot meet in the middle.
-    //
-    // SubstituteSwapchainColorFormat is what makes them agree: every *render target* named in
-    // the RGBA spelling is created and drawn into in the BGRA one. It is a relabel, not a
-    // swizzle - a shader's red output lands in the format's red component wherever that byte
-    // sits - so the picture is identical. See the swapchain surface format note in
-    // CreateSwapchain for the same argument.
-    //
-    // **Render targets only.** A sampled texture uploaded from CPU bytes really is in the order
-    // the engine says, and relabelling one would swap its channels on screen.
-    //
-    // **Unconditional rather than driven by what the swapchain chose.** Pipelines are built in
-    // Shaders::Initialize, which runs before there is a window to make a surface from, so a flag
-    // set at swapchain creation is still false when the pipelines that need it are made.
-    // CreateSwapchain asks for the same substituted spelling first, so the two cannot disagree.
+    // Linux surfaces offer only the BGRA spelling of the 8-bit formats, while the engine hardcodes
+    // RGBA for its present-path render targets. Dynamic rendering demands the pipeline's attachment
+    // format match the image exactly, so the two spellings have to be made to agree.
+    //  - A relabel, not a swizzle. A shader's red output lands in the format's red component, so
+    //    the picture is identical.
+    //  - Render targets only. A sampled texture really is in the order the engine says, and
+    //    relabelling one would swap its channels on screen.
+    //  - Unconditional, because pipelines are built before there is a window to make a surface
+    //    from. CreateSwapchain asks for the same spelling, so the two cannot disagree.
     static DataFormat SubstituteSwapchainColorFormat( DataFormat format )
     {
         switch ( format )
@@ -234,17 +179,13 @@ namespace EE::Render::RHI
         }
     }
 
-    // **The pipeline dynamic state list has the same problem**, and no Context either.
-    // CreateGraphicsOrMeshPipeline declares VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR only when
-    // the extension is enabled, because declaring a dynamic state from a disabled extension is a
-    // validation error. Set and cleared alongside g_meshShaderEnabled.
+    // Declaring a dynamic state from a disabled extension is a validation error, and
+    // CreateGraphicsOrMeshPipeline has no Context to ask. Set alongside g_meshShaderEnabled.
     static bool g_fragmentShadingRateEnabled = false;
 
-    // **CreateBuffer has no Context either**, and a raytracing build reads its inputs and stores
-    // its result in ordinary buffers, which need usage bits that only exist once
-    // VK_KHR_acceleration_structure is enabled. Naming a usage bit from a disabled extension is
-    // a validation error, so every buffer gets them only when this is true. Third and last of
-    // these; see g_meshShaderEnabled for why they exist at all.
+    // Naming a usage bit from a disabled extension is a validation error, and CreateBuffer has no
+    // Context to ask. Raytracing builds read and write ordinary buffers, so every buffer needs
+    // the acceleration structure usage bits once the extension is on.
     static bool g_raytracingEnabled = false;
 
     struct VulkanContext : Context
@@ -255,38 +196,31 @@ namespace EE::Render::RHI
         VkDevice                                                        m_device = VK_NULL_HANDLE;
         VmaAllocator                                                    m_resourceAllocator = VK_NULL_HANDLE;
 
-        // Stored without its pNext chain. The subgroup properties it is queried with live on
-        // the stack in FillDeviceCapabilities, and keeping the pointer would dangle.
+        // Stored without its pNext chain, which points at FillDeviceCapabilities' stack.
         VkPhysicalDeviceProperties                                      m_physicalDeviceProperties = {};
         VkPhysicalDeviceMemoryProperties                                m_memoryProperties = {};
 
         // VMA holds this by pointer for the allocator's whole life, so it cannot be a local.
         VkAllocationCallbacks                                           m_hostAllocationCallbacks = {};
 
-        // Set 1 of the Phase 4 binding model: one layout for every pipeline in the engine,
-        // allocated once and bound once. CmdSetPipeline binds it, because a pipeline with a
-        // different set 0 layout disturbs it.
+        // One layout for every pipeline in the engine. CmdSetPipeline rebinds it, because a
+        // pipeline with a different set 0 layout disturbs it.
         VkDescriptorSetLayout                                           m_heapSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool                                                m_heapDescriptorPool = VK_NULL_HANDLE;
         VkDescriptorSet                                                 m_heapDescriptorSet = VK_NULL_HANDLE;
 
-        // Index allocators for the two heaps. HandleAllocator is platform-neutral and is the
-        // same one the Direct3D 12 backend uses for its descriptor heaps, so a handle is
-        // allocated the same way on both sides.
+        // The same allocator the D3D12 backend uses, so a handle is allocated the same way on both sides.
         HandleAllocator<GenericResourceHandle>                          m_resourceHeapAllocator;
         HandleAllocator<GenericResourceHandle>                          m_samplerHeapAllocator;
 
-        // Chosen here because vkCreateDevice takes the queue create infos. P5.2 turns these
-        // into Queue objects. An index of ~0U means the device exposes no such family and the
-        // graphics family stands in, which is legal: every graphics family also supports
-        // compute and transfer.
+        // Chosen here because vkCreateDevice takes the queue create infos. An index of ~0U means
+        // the device exposes no such family, and the graphics family stands in, which is legal.
         uint32_t                                                        m_graphicsQueueFamily = ~0U;
         uint32_t                                                        m_computeQueueFamily = ~0U;
         uint32_t                                                        m_transferQueueFamily = ~0U;
 
-        // How many VkQueues were actually created from each family, and which one CreateQueue
-        // hands out next. A family the device only exposes one queue on gives every RHI queue
-        // the same VkQueue, which is correct but serialises them.
+        // A family exposing one queue gives every RHI queue the same VkQueue, which is correct
+        // but serialises them.
         struct QueueFamilyAllocation
         {
             uint32_t                                        m_familyIndex = ~0U;
@@ -296,13 +230,11 @@ namespace EE::Render::RHI
 
         TInlineVector<QueueFamilyAllocation, 3>                         m_queueFamilyAllocations;
 
-        // The distinct queue families in use, which is what a CONCURRENT resource has to list.
-        // See SetSharingMode, next to the buffers and textures that read it.
+        // The distinct families in use, which is what a CONCURRENT resource has to list. See SetSharingMode.
         TInlineVector<uint32_t, 3>                                      m_sharingQueueFamilies;
 
-        // Queue::m_unifiedMemory, which Direct3D 12 reads from D3D12MA's IsUMA(). True when
-        // every device-local memory type is also host-visible, which is what a shared-memory
-        // GPU looks like from here.
+        // True when every device-local memory type is also host-visible. D3D12 reads the same
+        // answer from D3D12MA's IsUMA().
         bool                                                            m_isUnifiedMemory = false;
 
         template<typename T>
@@ -322,25 +254,19 @@ namespace EE::Render::RHI
             }
         }
 
-        // VK_EXT_debug_utils is an extension, so its entry points are not exported by the
-        // loader and have to be looked up. Null when the extension is not present.
+        // Extension entry points are not exported by the loader. Null when the extension is absent.
         PFN_vkSetDebugUtilsObjectNameEXT                                m_vkSetDebugUtilsObjectName = nullptr;
-        // Core in Vulkan 1.4 as vkCmdPushDescriptorSet, but the baseline here is 1.3, so it is
-        // the KHR entry point and has to be looked up.
+        // Core in Vulkan 1.4, but the baseline here is 1.3, so it is the KHR entry point.
         PFN_vkCmdPushDescriptorSetKHR                                   m_vkCmdPushDescriptorSet = nullptr;
-        // The other half of VK_EXT_debug_utils. Null when the extension is not present, which
-        // is the same condition that leaves m_vkSetDebugUtilsObjectName null.
         PFN_vkCmdBeginDebugUtilsLabelEXT                                m_vkCmdBeginDebugUtilsLabel = nullptr;
         PFN_vkCmdEndDebugUtilsLabelEXT                                  m_vkCmdEndDebugUtilsLabel = nullptr;
 
         // Optional, unlike everything in the required feature list. See CreateQueryPool.
         bool                                                            m_pipelineStatisticsQuery = false;
 
-        // **VK_EXT_mesh_shader is optional too, and for a harder reason.** The engine has no
-        // capability flag for mesh shaders and no fallback path - `RenderPass_DebugDraw` calls
-        // `CmdDispatchMesh` outright - so Direct3D 12 simply assumes the hardware has them.
-        // Requiring the extension here would refuse a device the rest of the engine renders on
-        // perfectly well, so it is asked for when present and asserted at the point of use.
+        // The engine has no capability flag for mesh shaders and no fallback path, so D3D12
+        // assumes the hardware has them. Requiring the extension would refuse a device the rest
+        // of the engine renders on fine, so it is asked for when present and asserted at use.
         bool                                                            m_meshShader = false;
         PFN_vkCmdDrawMeshTasksEXT                                       m_vkCmdDrawMeshTasks = nullptr;
         PFN_vkCmdDrawMeshTasksIndirectEXT                               m_vkCmdDrawMeshTasksIndirect = nullptr;
@@ -350,9 +276,8 @@ namespace EE::Render::RHI
         bool                                                            m_fragmentShadingRate = false;
         PFN_vkCmdSetFragmentShadingRateKHR                              m_vkCmdSetFragmentShadingRate = nullptr;
 
-        // Raytracing: VK_KHR_acceleration_structure, VK_KHR_ray_tracing_pipeline and
-        // VK_KHR_deferred_host_operations, which the first of the three depends on. All three
-        // together or none, and optional like the rest. See the P5.16 section.
+        // VK_KHR_acceleration_structure, VK_KHR_ray_tracing_pipeline and the deferred host
+        // operations the first depends on. All three together or none, and optional like the rest.
         bool                                                            m_raytracing = false;
         PFN_vkCreateAccelerationStructureKHR                            m_vkCreateAccelerationStructure = nullptr;
         PFN_vkDestroyAccelerationStructureKHR                           m_vkDestroyAccelerationStructure = nullptr;
@@ -367,8 +292,7 @@ namespace EE::Render::RHI
         void*                                                           m_pRenderDocLibrary = nullptr;
         RENDERDOC_API_1_0_0*                                            m_pRenderDocAPI = nullptr;
 
-        // Filled by P5.5 and P5.6 as buffers and textures are created. GetResourceAllocation-
-        // Statistics reads them, and DestroyContext asserts they are back to zero.
+        // GetResourceAllocationStatistics reads these, and DestroyContext asserts they are back to zero.
         THashMap<TBitFlags<DescriptorTypeFlags>, ResourceAllocStats>    m_bufferStats{ Memory::Allocators::g_RHI };
         THashMap<TBitFlags<DescriptorTypeFlags>, ResourceAllocStats>    m_textureStats{ Memory::Allocators::g_RHI };
     };
@@ -408,8 +332,7 @@ namespace EE::Render::RHI
         return extensions;
     }
 
-    // Every reason a device can be rejected, so that the log can name the missing thing rather
-    // than saying "no suitable device".
+    // Returns the missing feature by name, so the log can say more than "no suitable device".
     static char const* GetDeviceRejectionReason( VkPhysicalDevice physicalDevice )
     {
         VkPhysicalDeviceProperties properties = {};
@@ -439,42 +362,36 @@ namespace EE::Render::RHI
         if ( !available.m_vulkan12.timelineSemaphore )              { return "timelineSemaphore"; }
         if ( !available.m_vulkan12.bufferDeviceAddress )            { return "bufferDeviceAddress"; }
         if ( !available.m_vulkan12.drawIndirectCount )              { return "drawIndirectCount"; }
-        // The constant buffer layout rule: the Reflector passes -fvk-use-dx-layout, so the
-        // device has to accept scalar block layout or every cbuffer reads at the wrong offsets.
+        // The Reflector passes -fvk-use-dx-layout, so without this every cbuffer reads at the wrong offsets.
         if ( !available.m_vulkan12.scalarBlockLayout )              { return "scalarBlockLayout"; }
         if ( !available.m_vulkan12.descriptorIndexing )             { return "descriptorIndexing"; }
         if ( !available.m_vulkan12.runtimeDescriptorArray )         { return "runtimeDescriptorArray"; }
         if ( !available.m_vulkan12.descriptorBindingPartiallyBound ){ return "descriptorBindingPartiallyBound"; }
         if ( !available.m_vulkan12.descriptorBindingVariableDescriptorCount ) { return "descriptorBindingVariableDescriptorCount"; }
-        // The engine writes handles into the heap while command buffers that reference it are
-        // recording, exactly as CopyDescriptorsSimple does on Direct3D 12.
+        // The engine writes handles into the heap while command buffers that reference it are recording.
         if ( !available.m_vulkan12.descriptorBindingSampledImageUpdateAfterBind )  { return "descriptorBindingSampledImageUpdateAfterBind"; }
         if ( !available.m_vulkan12.descriptorBindingStorageImageUpdateAfterBind )  { return "descriptorBindingStorageImageUpdateAfterBind"; }
         if ( !available.m_vulkan12.descriptorBindingStorageBufferUpdateAfterBind ) { return "descriptorBindingStorageBufferUpdateAfterBind"; }
         if ( !available.m_vulkan12.descriptorBindingUniformTexelBufferUpdateAfterBind ) { return "descriptorBindingUniformTexelBufferUpdateAfterBind"; }
-        // Every type in the heap's mutable list has to support update-after-bind, and the list
-        // holds a storage texel buffer for RWBuffer<T>. Missed by P5.5; see Docs/Linux/Progress.md.
+        // Every type in the heap's mutable list needs update-after-bind, and the list holds a
+        // storage texel buffer for RWBuffer<T>.
         if ( !available.m_vulkan12.descriptorBindingStorageTexelBufferUpdateAfterBind ) { return "descriptorBindingStorageTexelBufferUpdateAfterBind"; }
-        // FilterMode::Min and FilterMode::Max on a sampler. RenderSystem::Initialize creates
-        // COMMON_SAMPLER_LINEAR_CLAMP_MAX, so this is used on the first frame.
+        // FilterMode::Min and Max. RenderSystem::Initialize creates a Max sampler on the first frame.
         if ( !available.m_vulkan12.samplerFilterMinmax )            { return "samplerFilterMinmax"; }
         // NonUniformResourceIndex in the shaders indexes the heap with a divergent index.
         if ( !available.m_vulkan12.shaderSampledImageArrayNonUniformIndexing )  { return "shaderSampledImageArrayNonUniformIndexing"; }
         if ( !available.m_vulkan12.shaderStorageImageArrayNonUniformIndexing )  { return "shaderStorageImageArrayNonUniformIndexing"; }
         if ( !available.m_vulkan12.shaderStorageBufferArrayNonUniformIndexing ) { return "shaderStorageBufferArrayNonUniformIndexing"; }
         if ( !available.m_vulkan12.shaderUniformTexelBufferArrayNonUniformIndexing ) { return "shaderUniformTexelBufferArrayNonUniformIndexing"; }
-        // The same RWBuffer<T> storage texel buffer the update-after-bind row above names. It is
-        // in the heap, so NonUniformResourceIndex reaches it too, and the shaders declare the
-        // StorageTexelBufferArrayNonUniformIndexing capability. The update-after-bind half of
-        // this pair was added when P5.5 missed it; this half was missed with it.
+        // The same RWBuffer<T> storage texel buffer. It is in the heap, so NonUniformResourceIndex
+        // reaches it too.
         if ( !available.m_vulkan12.shaderStorageTexelBufferArrayNonUniformIndexing ) { return "shaderStorageTexelBufferArrayNonUniformIndexing"; }
         if ( !available.m_mutableDescriptorType.mutableDescriptorType ) { return "mutableDescriptorType"; }
 
         return nullptr;
     }
 
-    // Higher is better. Mirrors DXGI_GPU_PREFERENCE, which is what the Direct3D 12 backend asks
-    // the factory for, rather than inventing a different notion of "best".
+    // Higher is better. Mirrors DXGI_GPU_PREFERENCE rather than inventing a different notion of "best".
     static uint32_t ScoreDevice( VkPhysicalDevice physicalDevice, DeviceSelectionPreference preference )
     {
         VkPhysicalDeviceProperties properties = {};
@@ -492,8 +409,7 @@ namespace EE::Render::RHI
             return 1u;
 
             default:
-            // CPU and Other. The Direct3D 12 backend skips DXGI_ADAPTER_FLAG3_SOFTWARE outright,
-            // so a software device is a last resort here too.
+            // CPU and Other. The D3D12 backend skips software adapters, so they are a last resort here too.
             return 0u;
         }
     }
@@ -533,9 +449,8 @@ namespace EE::Render::RHI
 
         EE_ASSERT( pVulkanContext->m_graphicsQueueFamily != ~0U );
 
-        // A device with no dedicated async family is normal, and the graphics family stands in.
-        // Every graphics-capable family also supports compute and transfer, so this is correct
-        // rather than a fallback that loses work.
+        // Every graphics-capable family also supports compute and transfer, so standing in is
+        // correct rather than a fallback that loses work.
         if ( pVulkanContext->m_computeQueueFamily == ~0U )
         {
             pVulkanContext->m_computeQueueFamily = pVulkanContext->m_graphicsQueueFamily;
@@ -546,8 +461,7 @@ namespace EE::Render::RHI
             pVulkanContext->m_transferQueueFamily = pVulkanContext->m_graphicsQueueFamily;
         }
 
-        // The distinct families, for SetSharingMode. One entry means the device has a single
-        // family and nothing is ever shared across one.
+        // The distinct families, for SetSharingMode.
         uint32_t const families[] = { pVulkanContext->m_graphicsQueueFamily, pVulkanContext->m_computeQueueFamily, pVulkanContext->m_transferQueueFamily };
         for ( uint32_t familyIndex : families )
         {
@@ -571,9 +485,8 @@ namespace EE::Render::RHI
         VkPhysicalDeviceLimits const& limits = properties2.properties.limits;
         DeviceCapabilities& capabilities = pVulkanContext->m_deviceCapabilities;
 
-        // Direct3D 12 reports DedicatedVideoMemory from the adapter description. The Vulkan
-        // equivalent is the size of the heaps marked device local; on an integrated GPU that is
-        // shared system memory, which is also what DXGI reports there.
+        // The Vulkan equivalent of DXGI's DedicatedVideoMemory is the size of the device-local
+        // heaps. On an integrated GPU that is shared system memory, which is what DXGI reports there too.
         for ( uint32_t heapIndex = 0; heapIndex < pVulkanContext->m_memoryProperties.memoryHeapCount; ++heapIndex )
         {
             VkMemoryHeap const& heap = pVulkanContext->m_memoryProperties.memoryHeaps[heapIndex];
@@ -583,8 +496,7 @@ namespace EE::Render::RHI
             }
         }
 
-        // Direct3D 12 reads this from D3D12MA's IsUMA(). The Vulkan equivalent is that no
-        // memory is device-only: every device-local type can also be mapped.
+        // The Vulkan equivalent of D3D12MA's IsUMA(): no memory is device-only.
         pVulkanContext->m_isUnifiedMemory = true;
         for ( uint32_t typeIndex = 0; typeIndex < pVulkanContext->m_memoryProperties.memoryTypeCount; ++typeIndex )
         {
@@ -600,9 +512,8 @@ namespace EE::Render::RHI
         capabilities.m_uploadBufferTextureAlignment = uint32_t( limits.optimalBufferCopyOffsetAlignment );
         capabilities.m_uploadBufferTextureRowAlignment = uint32_t( limits.optimalBufferCopyRowPitchAlignment );
 
-        // 13 DWORDs, copied from the Direct3D 12 backend rather than derived. It is an AMD
-        // packet-size heuristic that has no Vulkan meaning, and the value only feeds the
-        // engine's own root signature sizing, which must agree across both backends.
+        // Copied from the D3D12 backend rather than derived. It is an AMD packet-size heuristic
+        // with no Vulkan meaning, and it only feeds root signature sizing, which must agree across both.
         capabilities.m_optimalRootSignatureSizeInDWORDs = 13;
 
         capabilities.m_numWaveLanes = subgroupProperties.subgroupSize;
@@ -619,9 +530,8 @@ namespace EE::Render::RHI
         if ( subgroupOperations & VK_SUBGROUP_FEATURE_QUAD_BIT )             { capabilities.m_waveOpsSupportFlags.SetFlag( WaveOpsSupportFlags::Quad ); }
         if ( subgroupOperations & VK_SUBGROUP_FEATURE_PARTITIONED_BIT_NV )   { capabilities.m_waveOpsSupportFlags.SetFlag( WaveOpsSupportFlags::Partitioned ); }
 
-        // Matches the Direct3D 12 backend, which sets these to NotSupported with a TODO. P5.15
-        // owns variable rate shading, and reporting a capability the backend cannot honour
-        // would make the engine issue calls that halt.
+        // Matches the D3D12 backend. Reporting a capability the backend cannot honour would make
+        // the engine issue calls that halt.
         capabilities.m_shadingRate = ShadingRate::NotSupported;
         capabilities.m_shadingRateCaps = ShadingRateCaps::NotSupported;
         capabilities.m_shadingRateTexelWidth = 0;
@@ -629,31 +539,22 @@ namespace EE::Render::RHI
 
         // drawIndirectCount is required above, so multi-draw indirect is always available.
         capabilities.m_multiDrawIndirect = true;
-        // Direct3D 12 command signatures can set root constants per draw and Vulkan's indirect
-        // draws cannot. P5.13 decides whether a compute pre-pass covers the gap; until then
-        // this is false, which is the honest answer and the one that keeps the engine off the
-        // path that does not exist yet.
+        // D3D12 command signatures set root constants per draw and Vulkan indirect draws cannot.
         capabilities.m_indirectRootConstant = false;
         // VK_EXT_fragment_shader_interlock is the equivalent, and nothing enables it yet.
         capabilities.m_rasterizerOrderViews = false;
-        // Breadcrumbs are DRED, whose equivalent is VK_AMD_buffer_marker or
-        // VK_NV_device_diagnostic_checkpoints. Neither is wired up.
+        // The equivalent of DRED is VK_AMD_buffer_marker or VK_NV_device_diagnostic_checkpoints.
+        // Neither is wired up.
         capabilities.m_breadcrumbs = false;
-        // HDR needs a swapchain colour space, which is P5.3's business.
+        // HDR needs a swapchain colour space that nothing selects yet.
         capabilities.m_hdr = false;
 
-        // What the device can do with each DataFormat, asked one format at a time. Mirrors the
-        // loop in RHI_Direct3D12.cpp:2205, including which question each array answers:
-        //
-        //   D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE   -> VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
-        //   D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE -> VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT
-        //   D3D12_FORMAT_SUPPORT1_RENDER_TARGET   -> VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT
-        //
-        // m_canRenderTargetWriteTo is colour only on both backends. Direct3D 12 reports depth
-        // through a separate D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL bit that the reference does not
-        // read, so a depth format reads false here exactly as it does there.
-        //
-        // Optimal tiling, because CreateTexture creates every image with VK_IMAGE_TILING_OPTIMAL.
+        // What the device can do with each DataFormat, mirroring the D3D12 backend's loop:
+        //   SHADER_SAMPLE   -> SAMPLED_IMAGE_BIT
+        //   UAV_TYPED_STORE -> STORAGE_IMAGE_BIT
+        //   RENDER_TARGET   -> COLOR_ATTACHMENT_BIT
+        // m_canRenderTargetWriteTo is colour only on both backends, so a depth format reads false
+        // here exactly as it does there. Optimal tiling, because CreateTexture uses it for every image.
         for ( uint32_t formatIndex = 0; formatIndex < NumDataFormats; ++formatIndex )
         {
             VkFormat const vulkanFormat = VulkanFormat( DataFormat( formatIndex ) );
@@ -685,9 +586,8 @@ namespace EE::Render::RHI
         void*
     )
     {
-        // The validation layers call this from whichever thread tripped the check, which may be
-        // one the engine's allocator has never seen. RHI_Direct3D12.cpp does the same in its
-        // info queue callback.
+        // The layers call this from whichever thread tripped the check, which the engine's
+        // allocator may never have seen.
         if ( !Memory::HasInitializedThreadHeap() )
         {
             Memory::InitializeThreadHeap();
@@ -695,8 +595,7 @@ namespace EE::Render::RHI
 
         if ( severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT )
         {
-            // Phase 5 treats a validation error as a build break. Halting here is what makes
-            // that true rather than aspirational.
+            // A validation error is a build break, and halting here is what makes that true.
             EE_LOG_FATAL_ERROR( LogCategory::Render, "RHI/Validation", "%s", pCallbackData->pMessage );
         }
         else if ( severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT )
@@ -762,33 +661,27 @@ namespace EE::Render::RHI
             }
             else
             {
-                // Not fatal, and worth saying out loud: Phase 5 asks for validation to stay on
-                // throughout, and a missing layer package is the usual reason it silently is not.
+                // Not fatal, but a missing layer package is the usual reason validation is silently off.
                 EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "VK_LAYER_KHRONOS_validation is not installed, so validation is off. Install vulkan-validationlayers." );
             }
         }
         else
         {
-            // Object names and command buffer markers are worth having whenever the extension
-            // is present, with or without the validation layer. P5.12 uses them.
+            // Object names and command buffer markers are worth having with or without the layer.
             if ( HasExtension( availableInstanceExtensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME ) )
             {
                 instanceExtensions.emplace_back( VK_EXT_DEBUG_UTILS_EXTENSION_NAME );
             }
         }
 
-        // Surface extensions, for P5.3
+        // Surface extensions
         //-------------------------------------------------------------------------
-        // **The instance has to carry these even though no window exists yet.** A VkSurfaceKHR
-        // may only be created from an instance that enabled its platform extension, the instance
-        // is created once, and the window arrives in Phase 6. So they go on now.
+        // A VkSurfaceKHR may only be created from an instance that enabled its platform extension,
+        // and the instance is created once, before any window exists. So every platform the loader
+        // reports is enabled now.
         //
-        // Named by string rather than by macro on purpose. VK_KHR_XLIB_SURFACE_EXTENSION_NAME
-        // only exists once VK_USE_PLATFORM_XLIB_KHR is defined, which drags X11 headers into a
-        // file that has no other reason to see them. The strings are frozen by the specification.
-        //
-        // Every platform the loader reports is enabled, because which one the window system
-        // turns out to be is Phase 6's answer, not this file's.
+        // Named by string rather than by macro: the macros only exist once VK_USE_PLATFORM_*_KHR
+        // is defined, which drags X11 headers into a file with no other reason to see them.
         static char const* const surfaceExtensions[] =
         {
             "VK_KHR_surface",
@@ -824,14 +717,9 @@ namespace EE::Render::RHI
 
         // RenderDoc
         //-------------------------------------------------------------------------
-        // **After vkCreateInstance, and that is the whole point.**
-        //
-        // dlopen with RTLD_NOLOAD attaches to a RenderDoc that is already loaded and never loads
-        // one that is not there. On Windows RenderDoc injects itself into the process before
-        // main, so GetModuleHandleA finds it whenever this runs. On Linux it arrives as an
-        // implicit Vulkan layer, and the loader only maps librenderdoc.so while servicing
-        // vkCreateInstance. Probing before that call always missed it, so the API was never
-        // connected and in-app capture could not work at all.
+        // After vkCreateInstance, which matters: on Linux RenderDoc arrives as an implicit Vulkan
+        // layer, and the loader only maps librenderdoc.so while servicing that call. Probing any
+        // earlier always missed it. RTLD_NOLOAD attaches to a loaded RenderDoc and never loads one.
 
         if ( parameters.m_enableRenderDoc )
         {
@@ -931,8 +819,7 @@ namespace EE::Render::RHI
         pVulkanContext->m_vendorInfo.m_deviceID = FormatVendorID( deviceProperties.deviceID );
         pVulkanContext->m_vendorInfo.m_revisionID = FormatVendorID( deviceProperties.driverVersion );
         pVulkanContext->m_vendorInfo.m_deviceName = TInlineString<MaxVendorNameLength>( deviceProperties.deviceName );
-        // Raytracing core counts are not exposed by any Vulkan query. Direct3D 12 does not fill
-        // this either; it is vendor telemetry, and nothing in the engine reads it.
+        // No Vulkan query exposes raytracing core counts, and the D3D12 backend does not fill this either.
         pVulkanContext->m_vendorInfo.m_numRaytracingCores = 0;
 
         EE_LOG_MESSAGE
@@ -943,9 +830,8 @@ namespace EE::Render::RHI
             pVulkanContext->m_vendorInfo.m_deviceName.c_str()
         );
 
-        // Vulkan has no equivalent of a Direct3D 12 linked node adapter. Multi-GPU is explicit
-        // device groups, which the engine never asks for, so the mode is always Single and
-        // there is exactly one node.
+        // Vulkan has no linked node adapter. Multi-GPU is explicit device groups, which the
+        // engine never asks for.
         pVulkanContext->m_numLinkedNodes = 1;
         pVulkanContext->m_unlinkedNodeIndex = 0;
         pVulkanContext->m_deviceMode = DeviceMode::Single;
@@ -954,10 +840,9 @@ namespace EE::Render::RHI
         // Device
         //-------------------------------------------------------------------------
 
-        // One VkQueue per RHI queue where the family allows it. Two RHI queues sharing one
-        // VkQueue is legal but it makes a cross-queue QueueDeviceWait between them a deadlock:
-        // the wait would be for a value that only a later submit on the same VkQueue signals.
-        // Asking for distinct queues up front is what keeps that from being possible.
+        // One VkQueue per RHI queue where the family allows it. Two RHI queues sharing a VkQueue
+        // makes a cross-queue QueueDeviceWait between them a deadlock, because the value it waits
+        // for is only signalled by a later submit on that same VkQueue.
         uint32_t numQueueFamilies = 0;
         vkGetPhysicalDeviceQueueFamilyProperties( pVulkanContext->m_physicalDevice, &numQueueFamilies, nullptr );
         TVector<VkQueueFamilyProperties> queueFamilyProperties( numQueueFamilies );
@@ -984,8 +869,7 @@ namespace EE::Render::RHI
                 pAllocation = &pVulkanContext->m_queueFamilyAllocations.back();
             }
 
-            // Never ask for more queues than the family has. A family with one queue is normal
-            // on integrated parts.
+            // A family with one queue is normal on integrated parts.
             if ( pAllocation->m_numQueues < queueFamilyProperties[familyIndex].queueCount )
             {
                 pAllocation->m_numQueues++;
@@ -1001,9 +885,8 @@ namespace EE::Render::RHI
             queueCreateInfos.emplace_back( queueCreateInfo );
         }
 
-        // Ask only for what GetDeviceRejectionReason already verified is present. Enabling a
-        // feature the device does not have is a validation error, and enabling one nothing uses
-        // costs performance on some drivers.
+        // Ask only for what GetDeviceRejectionReason verified. Enabling an absent feature is a
+        // validation error, and enabling an unused one costs performance on some drivers.
         RequiredFeatures enabledFeatures = {};
         enabledFeatures.Chain();
 
@@ -1032,10 +915,9 @@ namespace EE::Render::RHI
 
         enabledFeatures.m_mutableDescriptorType.mutableDescriptorType = VK_TRUE;
 
-        // **Asked for when the device has it, and never required.** P5.11 needs it to create a
-        // PipelineStatistics query pool, nothing in the engine creates one, and refusing a whole
-        // device over an unused capability would be wrong. CreateQueryPool asserts on the flag
-        // rather than on the device.
+        // Asked for when present, never required. Nothing in the engine creates a
+        // PipelineStatistics query pool, so CreateQueryPool asserts on the flag rather than
+        // refusing the whole device.
         RequiredFeatures availableFeatures = {};
         availableFeatures.Chain();
         vkGetPhysicalDeviceFeatures2( pVulkanContext->m_physicalDevice, &availableFeatures.m_features2 );
@@ -1045,39 +927,20 @@ namespace EE::Render::RHI
 
         // 16-bit types
         //-------------------------------------------------------------------------
-        // **The engine's shaders use them, so these are not optional.** MeshData.esh,
-        // CommonPacking.esh, XeGTAO.esh, RendererTypes.esh and several .esf files declare
-        // float16_t and uint16_t, DXC emits the matching SPIR-V capabilities, and
-        // vkCreateShaderModule rejects a module whose capabilities the device did not enable.
-        // Direct3D 12 has no equivalent step: Native16BitShaderOps is a capability the driver
-        // either has or does not, with nothing to switch on.
+        // Not optional: the engine's shaders declare float16_t and uint16_t, DXC emits the matching
+        // SPIR-V capabilities, and vkCreateShaderModule rejects a module whose capabilities the
+        // device did not enable. D3D12 has no equivalent step.
         //
-        // Found by running the engine for the first time in P6.7. The first shader
-        // vkCreateShaderModule saw was InstancePickingResolve, and validation said "SPIR-V
-        // Capability Int16 was declared, but one of the following requirements is required
-        // (VkPhysicalDeviceFeatures::shaderInt16)".
-        //
-        // Asked for rather than required, and logged when absent, because a device without them
-        // fails at the shader that needs one rather than at device creation, and that names the
-        // shader.
+        // Asked for rather than required, and logged when absent, so a device without them fails
+        // at the shader that needs one. That names the shader.
         enabledFeatures.m_features2.features.shaderInt16 = availableFeatures.m_features2.features.shaderInt16;
         enabledFeatures.m_vulkan12.shaderFloat16 = availableFeatures.m_vulkan12.shaderFloat16;
         enabledFeatures.m_vulkan11.storageBuffer16BitAccess = availableFeatures.m_vulkan11.storageBuffer16BitAccess;
         enabledFeatures.m_vulkan11.uniformAndStorageBuffer16BitAccess = availableFeatures.m_vulkan11.uniformAndStorageBuffer16BitAccess;
         enabledFeatures.m_vulkan11.storagePushConstant16 = availableFeatures.m_vulkan11.storagePushConstant16;
 
-        // **The fifth 16-bit feature, and no shader needs it any more.** A 16-bit type in an
-        // Input or Output variable is gated separately from the buffer accesses above, and
-        // Direct3D 12 does not split it out: Native16BitShaderOps covers every use at once.
-        //
-        // The engine's only 16-bit interpolant was DebugDraw.esf's DebugDrawPrimitiveOutput,
-        // which carried a uint16_t TextureHandle from the mesh stage to the pixel stage. P5.20
-        // replaced it with EE_INTERSTAGE_HANDLE, a uint on SPIR-V and the 16-bit handle on
-        // Direct3D 12, so the capability is no longer declared anywhere. Compiling every .esf at
-        // every profile and grepping the SPIR-V for OpCapability StorageInputOutput16 finds zero
-        // hits; it found exactly two before. See the P5.20 entry in Progress.md.
-        //
-        // It is still enabled when the device has it, because a future shader may want it back.
+        // A 16-bit type in an Input or Output variable is gated separately from the buffer accesses
+        // above. No shader declares one any more, but it is still enabled when the device has it.
         enabledFeatures.m_vulkan11.storageInputOutput16 = availableFeatures.m_vulkan11.storageInputOutput16;
 
         if ( availableFeatures.m_features2.features.shaderInt16 != VK_TRUE ||
@@ -1088,10 +951,6 @@ namespace EE::Render::RHI
                             availableFeatures.m_vulkan12.shaderFloat16 ? "yes" : "no" );
         }
 
-        // A message, not a warning, and it says what the device is rather than what the engine
-        // will do. The old wording - "Shaders that use them will fail to create" - was true when
-        // it was written and has been wrong since P5.20. It named the first hardware gap on every
-        // start on hardware that no longer has a gap.
         if ( availableFeatures.m_vulkan11.storageInputOutput16 != VK_TRUE )
         {
             EE_LOG_MESSAGE( LogCategory::Render, "RHI/CreateContext", "This device has no storageInputOutput16. No shader in the engine declares it, so nothing depends on it." );
@@ -1099,37 +958,26 @@ namespace EE::Render::RHI
 
         // 64-bit types and subgroup operations
         //-------------------------------------------------------------------------
-        // The same story as the 16-bit block, for two more capabilities the engine's shaders
-        // declare and Direct3D 12 does not gate.
-        //
-        // shaderInt64 carries the Int64 capability. InstancePickingResolve.esf packs a depth and
-        // an instance ID into one uint64_t. shaderSubgroupExtendedTypes lets a wave operation
-        // take a 16-, 64- or 8-bit operand, which the culling shaders do.
-        //
-        // Both found by running with validation in P6.8.
+        // Two more capabilities the engine's shaders declare and D3D12 does not gate. shaderInt64
+        // carries the Int64 capability; shaderSubgroupExtendedTypes lets a wave operation take a
+        // 16-, 64- or 8-bit operand, which the culling shaders do.
         enabledFeatures.m_features2.features.shaderInt64 = availableFeatures.m_features2.features.shaderInt64;
         enabledFeatures.m_vulkan12.shaderSubgroupExtendedTypes = availableFeatures.m_vulkan12.shaderSubgroupExtendedTypes;
 
         // HLSL's `discard` compiles to OpDemoteToHelperInvocation under Shader Model 6.6, which
-        // Vulkan gates and Direct3D 12 does not. Every material pixel shader has one.
+        // Vulkan gates and D3D12 does not. Every material pixel shader has one.
         enabledFeatures.m_vulkan13.shaderDemoteToHelperInvocation = availableFeatures.m_vulkan13.shaderDemoteToHelperInvocation;
 
-        // A 64-bit InterlockedMin or InterlockedAdd. The culling shaders use them on a buffer,
-        // and the debug draw mesh shader uses one on groupshared memory, which is a separate
-        // bit again.
+        // A 64-bit InterlockedMin or InterlockedAdd. Buffer and groupshared are separate bits.
         enabledFeatures.m_vulkan12.shaderBufferInt64Atomics = availableFeatures.m_vulkan12.shaderBufferInt64Atomics;
         enabledFeatures.m_vulkan12.shaderSharedInt64Atomics = availableFeatures.m_vulkan12.shaderSharedInt64Atomics;
 
-        // P5.17's indirect draws read their own command index out of the DrawIndex builtin, which
-        // carries the DrawParameters capability. VK_KHR_shader_draw_parameters is core in Vulkan
-        // 1.1, but the feature bit still has to be asked for. Direct3D 12 has no equivalent: a
-        // command signature pushes the data instead, so nothing there needs an index.
+        // Indirect draws read their command index out of the DrawIndex builtin, which carries the
+        // DrawParameters capability. D3D12 pushes the data per draw instead, so it needs no index.
         enabledFeatures.m_vulkan11.shaderDrawParameters = availableFeatures.m_vulkan11.shaderDrawParameters;
 
         // CreateGraphicsOrMeshPipeline sets depthClampEnable from the engine's rasterizer state,
-        // which is the inverse of Direct3D 12's DepthClipEnable and so is on for any pass that
-        // does not clip. Direct3D 12 has no feature bit for it. Found by running with validation
-        // once the engine reached graphics pipeline creation, in open question 8's verification.
+        // which is the inverse of D3D12's DepthClipEnable. D3D12 has no feature bit for it.
         enabledFeatures.m_features2.features.depthClamp = availableFeatures.m_features2.features.depthClamp;
 
         if ( availableFeatures.m_features2.features.shaderInt64 != VK_TRUE ||
@@ -1142,10 +990,8 @@ namespace EE::Render::RHI
 
         // Optional device extensions
         //-------------------------------------------------------------------------
-        // The required list is the binding model's and a device missing any of it is refused.
-        // These are asked for when the device has them and asserted at the point of use, because
-        // refusing a whole device over a feature the engine only needs for one pass would be
-        // worse than halting in that pass.
+        // Asked for when present and asserted at the point of use. Refusing a whole device over a
+        // feature the engine needs for one pass would be worse than halting in that pass.
         TInlineVector<char const*, MaxDeviceExtensions> deviceExtensions;
         for ( char const* pRequiredExtension : g_requiredDeviceExtensions )
         {
@@ -1164,12 +1010,10 @@ namespace EE::Render::RHI
             // Both, because the engine's debug draw uses a task stage as well as a mesh one.
             if ( meshShaderFeatures.meshShader && meshShaderFeatures.taskShader )
             {
-                // The query above filled every bit this device supports, and the same struct is
-                // what vkCreateDevice reads, so anything left set is a feature being asked for.
-                // Ask for the two the engine uses and nothing else. multiviewMeshShader is the
-                // one that bites: it additionally requires VkPhysicalDeviceMultiviewFeatures
-                // ::multiview, which nothing here enables, and vkCreateDevice rejects that pair
-                // (VUID-VkPhysicalDeviceMeshShaderFeaturesEXT-multiviewMeshShader-07032).
+                // The query filled every bit the device supports, and vkCreateDevice reads the
+                // same struct, so anything left set is being asked for. multiviewMeshShader is
+                // the one that bites: it also requires VkPhysicalDeviceMultiviewFeatures::multiview,
+                // and vkCreateDevice rejects that pair.
                 meshShaderFeatures.multiviewMeshShader = VK_FALSE;
                 meshShaderFeatures.primitiveFragmentShadingRateMeshShader = VK_FALSE;
                 meshShaderFeatures.meshShaderQueries = VK_FALSE;
@@ -1193,12 +1037,8 @@ namespace EE::Render::RHI
             // CmdSetShadingRate takes them in one call.
             if ( fragmentShadingRateFeatures.pipelineFragmentShadingRate && fragmentShadingRateFeatures.attachmentFragmentShadingRate )
             {
-                // The query filled every bit this device supports and the same struct is what
-                // vkCreateDevice reads, so anything left set is a feature being asked for. Ask
-                // for the two the engine uses and nothing else - no shader writes a per-primitive
-                // rate, and requesting a feature the engine cannot exercise is a bug waiting for
-                // a driver that has a dependency to enforce. Same shape as the mesh shader block
-                // above, where multiviewMeshShader really did reject vkCreateDevice.
+                // Clear what the engine cannot exercise, as the mesh shader block does. No shader
+                // writes a per-primitive rate.
                 fragmentShadingRateFeatures.primitiveFragmentShadingRate = VK_FALSE;
 
                 deviceExtensions.emplace_back( VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME );
@@ -1226,13 +1066,8 @@ namespace EE::Render::RHI
             if ( accelerationStructureFeatures.accelerationStructure && rayTracingPipelineFeatures.rayTracingPipeline )
             {
                 // Ask for the two bits the backend uses and clear the rest, as the mesh shader
-                // block does. Capture-replay, host commands and indirect build are not used;
-                // descriptorBindingAccelerationStructureUpdateAfterBind is not needed either,
-                // because g_resourceHeapMutableTypes has no acceleration structure type in it.
-                //
-                // **None of this can be exercised here.** P5.16 has no callers on either backend,
-                // so a device that rejects one of these pairs is the only thing that would report
-                // it, and this one does not. See P8.3 and the P8.5 entry in Progress.md.
+                // block does. g_resourceHeapMutableTypes has no acceleration structure type, so
+                // the update-after-bind bit is not needed either.
                 accelerationStructureFeatures.accelerationStructureCaptureReplay = VK_FALSE;
                 accelerationStructureFeatures.accelerationStructureIndirectBuild = VK_FALSE;
                 accelerationStructureFeatures.accelerationStructureHostCommands = VK_FALSE;
@@ -1257,13 +1092,10 @@ namespace EE::Render::RHI
             }
         }
 
-        // **Two extensions the engine's shaders need, rather than passes the RHI exposes.**
-        // Neither has an RHI entry point to assert in, so a device without one fails at the
-        // shader that declares it, the way the 16-bit block does.
-        //
-        // InstancePickingResolve.esf reads a R64_UINT texel buffer, which DXC emits as the
-        // Int64ImageEXT capability. MaterialShaderPBR.esh and DebugDrawMesh.esf read
-        // SV_Barycentrics. Direct3D 12 folds both into the shader model.
+        // Two extensions the engine's shaders need, rather than passes the RHI exposes. Neither has
+        // an RHI entry point to assert in, so a device without one fails at the shader that
+        // declares it. InstancePickingResolve.esf reads an R64_UINT texel buffer; the material
+        // shaders read SV_Barycentrics. D3D12 folds both into the shader model.
         VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT shaderImageAtomicInt64Features = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT };
         if ( HasExtension( availableDeviceExtensions, VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME ) )
         {
@@ -1298,8 +1130,7 @@ namespace EE::Render::RHI
 
         if ( !pVulkanContext->m_meshShader )
         {
-            // Loud, because the engine has no fallback: RenderPass_DebugDraw will halt in
-            // CmdDispatchMesh the first time a development build draws anything debug.
+            // Loud, because the engine has no fallback and RenderPass_DebugDraw will halt in CmdDispatchMesh.
             EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "This device has no VK_EXT_mesh_shader, so the mesh shader path will halt if the engine reaches it." );
         }
 
@@ -1313,8 +1144,7 @@ namespace EE::Render::RHI
         result = vkCreateDevice( pVulkanContext->m_physicalDevice, &deviceCreateInfo, nullptr, &pVulkanContext->m_device );
         EE_ASSERT( result == VK_SUCCESS );
 
-        // Resolved here rather than later, because everything created from this point on names
-        // itself and SetVulkanObjectName reads it.
+        // Resolved now, because everything created from here on names itself.
         pVulkanContext->m_vkSetDebugUtilsObjectName = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkSetDebugUtilsObjectNameEXT" ) );
         pVulkanContext->m_vkCmdBeginDebugUtilsLabel = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdBeginDebugUtilsLabelEXT" ) );
         pVulkanContext->m_vkCmdEndDebugUtilsLabel = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>( vkGetInstanceProcAddr( pVulkanContext->m_instance, "vkCmdEndDebugUtilsLabelEXT" ) );
@@ -1390,8 +1220,6 @@ namespace EE::Render::RHI
 
         // Descriptor heaps
         //-------------------------------------------------------------------------
-        // Set 1 of the Phase 4 binding model. See the binding model entry in
-        // Docs/Linux/Progress.md, which fixes every number here.
 
         VkMutableDescriptorTypeListEXT mutableTypeLists[2] = {};
         mutableTypeLists[g_resourceHeapBinding].descriptorTypeCount = uint32_t( eastl::size( g_resourceHeapMutableTypes ) );
@@ -1415,15 +1243,11 @@ namespace EE::Render::RHI
         heapBindings[g_samplerHeapBinding].descriptorCount = g_samplerHeapSize;
         heapBindings[g_samplerHeapBinding].stageFlags = VK_SHADER_STAGE_ALL;
 
-        // PARTIALLY_BOUND because most of a 65472-slot heap is empty at any moment, and
-        // UPDATE_AFTER_BIND because the engine writes handles into the heap while command
-        // buffers that reference it are recording, exactly as CopyDescriptorsSimple does on
-        // Direct3D 12.
+        // PARTIALLY_BOUND because most of the heap is empty at any moment, and UPDATE_AFTER_BIND
+        // because the engine writes handles while command buffers that reference them are recording.
         //
-        // No VARIABLE_DESCRIPTOR_COUNT. The binding model entry lists it for both bindings and
-        // Vulkan does not allow that: only the highest-numbered binding in a set may carry it.
-        // It is also not needed, because both heaps are allocated at their full declared size.
-        // See the correction recorded in Docs/Linux/Progress.md.
+        // No VARIABLE_DESCRIPTOR_COUNT: only the highest-numbered binding in a set may carry it,
+        // and both heaps are allocated at their full declared size anyway.
         VkDescriptorBindingFlags const heapBindingFlags[2] =
         {
             VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
@@ -1476,18 +1300,9 @@ namespace EE::Render::RHI
         pVulkanContext->m_resourceHeapAllocator.Initialize( ( g_resourceHeapSize + 63 ) / 64 );
         pVulkanContext->m_samplerHeapAllocator.Initialize( ( g_samplerHeapSize + 63 ) / 64 );
 
-        // **Both heaps are a fixed size, so the allocator may not grow.**
-        //
-        // A Vulkan descriptor set is created once with a fixed descriptor count, exactly like the
-        // Direct3D 12 heap it mirrors, and RHI_Direct3D12.cpp:1250 turns growth off for that
-        // reason. This was missing here, so HandleAllocator kept its default growable behaviour:
-        // an allocation past the end would silently hand back a descriptor index the descriptor
-        // set does not contain, rather than the invalid handle the caller checks for, and
-        // TryShrink ran after every deallocation for no reason.
-        //
-        // **This is not what makes the frame black**; it was found looking for that and is a real
-        // divergence from the reference either way. Nothing in the pbrdemo scene comes close to
-        // the 65472-descriptor limit, so it changes no behaviour today.
+        // A descriptor set is created once with a fixed descriptor count, so the allocator must not
+        // grow. Growing would hand back an index the set does not contain, rather than the invalid
+        // handle the caller checks for.
         pVulkanContext->m_resourceHeapAllocator.SetIsGrowable( false );
         pVulkanContext->m_samplerHeapAllocator.SetIsGrowable( false );
 
@@ -1501,7 +1316,7 @@ namespace EE::Render::RHI
         // DRED has no portable Vulkan equivalent, and nothing here provides one.
         pVulkanContext->m_deviceBreadcrumbs = false;
         pVulkanContext->m_renderDoc = pVulkanContext->m_pRenderDocAPI != nullptr;
-        // AGS is Direct3D 12 only by construction. See Docs/Linux/03-Dependencies.md.
+        // AGS is D3D12 only by construction.
         pVulkanContext->m_amdAgsEnabled = false;
 
         return pVulkanContext;
@@ -1516,8 +1331,7 @@ namespace EE::Render::RHI
             return;
         }
 
-        // Every per-descriptor-type allocation must have been freed, the same check the
-        // Direct3D 12 backend makes.
+        // Every per-descriptor-type allocation must have been freed, as the D3D12 backend checks.
         for ( auto const& pair : pVulkanContext->m_bufferStats )
         {
             EE_ASSERT( pair.second.m_numAllocations == 0 );
@@ -1533,8 +1347,7 @@ namespace EE::Render::RHI
         pVulkanContext->m_resourceHeapAllocator.Shutdown();
         pVulkanContext->m_samplerHeapAllocator.Shutdown();
 
-        // The barrier mapping and the pipeline dynamic state list read these, and neither
-        // outlives a context. See their declarations.
+        // Neither the barrier mapping nor the dynamic state list outlives a context.
         g_meshShaderEnabled = false;
         g_fragmentShadingRateEnabled = false;
         g_raytracingEnabled = false;
@@ -1552,9 +1365,8 @@ namespace EE::Render::RHI
 
         if ( pVulkanContext->m_resourceAllocator != VK_NULL_HANDLE )
         {
-            // Vulkan has no global live-object registry, so anything VMA still holds is recorded
-            // here while the allocator still exists. ReportDeviceMemoryLeaks reads it, and it
-            // runs after this point; see BaseModule::ShutdownModule.
+            // Recorded while the allocator still exists, because ReportDeviceMemoryLeaks runs
+            // after this point.
             VmaTotalStatistics statistics = {};
             vmaCalculateStatistics( pVulkanContext->m_resourceAllocator, &statistics );
 
@@ -1622,7 +1434,7 @@ namespace EE::Render::RHI
         nonLocalUsageBytes = 0;
         nonLocalAvailableBytes = 0;
 
-        // "Local" is Direct3D 12's word for device memory. The Vulkan split is the
+        // "Local" is D3D12's word for device memory. The Vulkan split is the
         // DEVICE_LOCAL heap flag, which is the same distinction.
         for ( uint32_t heapIndex = 0; heapIndex < pVulkanContext->m_memoryProperties.memoryHeapCount; ++heapIndex )
         {
@@ -1665,9 +1477,8 @@ namespace EE::Render::RHI
 
         if ( pVulkanContext->m_renderDoc && pVulkanContext->m_pRenderDocAPI != nullptr )
         {
-            // RENDERDOC_DEVICEPOINTER for Vulkan is the dispatch table pointer at the start of
-            // the VkInstance, not the instance handle. RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE
-            // is the macro RenderDoc's own header provides for exactly this.
+            // For Vulkan this is the dispatch table pointer at the start of the VkInstance, not
+            // the instance handle. The macro is what RenderDoc's header provides for it.
             pVulkanContext->m_pRenderDocAPI->StartFrameCapture( RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE( pVulkanContext->m_instance ), nullptr );
         }
     }
@@ -1685,9 +1496,7 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Debug names
     //-------------------------------------------------------------------------
-    // P5.12 owns the nine SetDebugName overloads. This is the one call underneath all of them,
-    // written here because CreateQueue needs it and the phase document says to do debug utils
-    // early: a named object makes every later group easier to debug.
+    // The one call underneath all nine SetDebugName overloads.
 
     static void SetVulkanObjectName( VulkanContext* pVulkanContext, VkObjectType objectType, uint64_t objectHandle, StringView debugName )
     {
@@ -1701,9 +1510,8 @@ namespace EE::Render::RHI
             return;
         }
 
-        // A resource the device could not accept has a null handle. CreateShader skips a mesh
-        // stage that way. Naming VK_NULL_HANDLE is a validation error, so the guard lives here
-        // rather than at each call site.
+        // A resource the device could not accept has a null handle, and naming VK_NULL_HANDLE is
+        // a validation error. Guarded here rather than at every call site.
         if ( objectHandle == 0 )
         {
             return;
@@ -1723,13 +1531,10 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Queues and synchronization
     //-------------------------------------------------------------------------
-    // RHI.h exposes a monotonic counter, which is a Vulkan timeline semaphore and not a binary
-    // one. One timeline per queue, and the counter the RHI hands back is a value on it.
-    //
-    // The counter runs the way Direct3D 12 runs its fence: m_nextSemaphoreValue is the value the
-    // *next* submit will signal, so QueueGetCurrentSemaphore returns a value that has not been
-    // signalled yet. That is what the Direct3D 12 backend does with m_fenceValue, and the engine
-    // is written against it.
+    // RHI.h exposes a monotonic counter, which is a timeline semaphore here, one per queue.
+    // m_nextSemaphoreValue is the value the next submit will signal, so QueueGetCurrentSemaphore
+    // returns a value that has not been signalled yet. D3D12 runs its fence the same way, and the
+    // engine is written against that.
 
     struct VulkanQueue final : Queue
     {
@@ -1742,31 +1547,25 @@ namespace EE::Render::RHI
         uint32_t                                            m_queueFamilyIndex = ~0U;
 
         // GetQueryTimestampFrequency takes a Queue and no Context, and both numbers are per
-        // queue family. A family reporting zero valid bits cannot write a timestamp at all,
-        // which Direct3D 12 has no equivalent of.
+        // family. Zero valid bits means the family cannot write a timestamp at all.
         float                                               m_timestampPeriod = 0.0F;
         uint32_t                                            m_timestampValidBits = 0;
 
-        // Vulkan has no standalone queue wait. ID3D12CommandQueue::Wait blocks everything
-        // submitted to the queue after it, and the only Vulkan construct with that meaning is a
-        // wait attached to a submit. So QueueDeviceWait records the wait here and the next
-        // QueueSubmit drains it.
+        // Vulkan has no standalone queue wait. ID3D12CommandQueue::Wait blocks everything submitted
+        // after it, and the only Vulkan construct with that meaning is a wait attached to a submit,
+        // so QueueDeviceWait records it here and the next QueueSubmit drains it.
         //
-        // An empty submit carrying just the wait would be the obvious alternative and it is
-        // wrong: submits on one queue may overlap, so a wait in submit N does not hold back
-        // submit N+1.
+        // An empty submit carrying only the wait would be wrong: submits on one queue may overlap,
+        // so a wait in submit N does not hold back submit N+1.
         TInlineVector<VkSemaphoreSubmitInfo, 8>             m_pendingWaits;
 
         TVector<VkCommandBufferSubmitInfo>                  m_submitCommandBuffers{ Memory::Allocators::g_RHI };
     };
 
-    // Declared here rather than in the P5.4 section below, because QueueSubmit reads the handle
-    // out of it and is defined first.
     struct VulkanCommandBuffer final : CommandBuffer
     {
-        // Mirrors Direct3D12CommandBuffer::Stage. Vulkan tracks the same lifecycle itself and
-        // the validation layers enforce it, but an EE_ASSERT names the caller that got it wrong
-        // instead of a message from the layer three frames later.
+        // Vulkan tracks the same lifecycle itself, but an assert names the caller that got it
+        // wrong instead of a layer message three frames later.
         enum struct Stage
         {
             Invalid,
@@ -1779,18 +1578,13 @@ namespace EE::Render::RHI
         VkCommandBuffer                                     m_commandBuffer = VK_NULL_HANDLE;
         Stage                                               m_stage = Stage::Invalid;
 
-        // Dynamic rendering, deferred.
+        // Dynamic rendering, deferred: CmdSetRenderTargets does not begin the pass, the first draw
+        // does. The engine records image layout barriers between the two, and a barrier may not
+        // run inside dynamic rendering.
         //
-        // **CmdSetRenderTargets does not begin the pass; the first draw does.** The engine
-        // records image layout barriers *between* the two - RenderPass_SMAA.cpp:154 and
-        // RenderPass_GTAO.cpp:435 both do, and both assert that no barrier is pending at the
-        // CmdSetRenderTargets itself - and a barrier may not run inside dynamic rendering.
-        // Direct3D 12 has the same shape for its own reason: OMSetRenderTargets is state, and
-        // its batched barriers flush at the draw.
-        //
-        // m_isRendering means a pass is open now. m_needsRenderingBegin means one is configured
-        // and not yet open. The attachment configuration below outlives both, so a pass that has
-        // to be left for a barrier can be resumed by the next draw.
+        // m_isRendering means a pass is open now; m_needsRenderingBegin means one is configured
+        // and not yet open. The attachment configuration outlives both, so a pass left for a
+        // barrier can be resumed by the next draw.
         bool                                                m_isRendering = false;
         bool                                                m_needsRenderingBegin = false;
 
@@ -1801,22 +1595,17 @@ namespace EE::Render::RHI
         bool                                                m_hasDepthAttachment = false;
         bool                                                m_hasStencilAttachment = false;
 
-        // Copied from the pool this buffer was allocated from. FlushBarriers clamps every stage
-        // mask to it, and CreateCommandBuffer uses it to decide whether the buffer gets the
-        // fragment shading rate entry point at all.
+        // Copied from the pool this buffer came from. FlushBarriers clamps every stage mask to it.
         VkQueueFlags                                        m_queueFlags = 0;
 
-        // **One bit per set 0 parameter the engine has written since the last CmdSetPipeline.**
-        // CmdExecuteIndirect binds whatever is still clear, because a shader reached by an
-        // indirect draw statically uses bindings that no engine call ever fills. A direct draw
-        // gets no such help, so a genuinely forgotten binding still fails validation there.
-        // 32 bits, matching the inline capacity of m_rootParameterBindings.
+        // One bit per set 0 parameter written since the last CmdSetPipeline. CmdExecuteIndirect
+        // binds whatever is still clear, because a shader reached by an indirect draw statically
+        // uses bindings no engine call fills. A direct draw gets no such help.
         uint32_t                                            m_boundRootParameterMask = 0;
 
-        // Barriers are batched exactly as Direct3D 12 batches them at
-        // RHI_Direct3D12.cpp:1516, and flushed at the same points. Vulkan gains a second reason
-        // to batch: one vkCmdPipelineBarrier2 for the whole set lets the driver see them
-        // together, and the flush is the single place that has to leave the render pass.
+        // Batched as the D3D12 backend batches them, and flushed at the same points. One
+        // vkCmdPipelineBarrier2 also lets the driver see the whole set, and the flush is the
+        // single place that has to leave the render pass.
         TVector<VkMemoryBarrier2>                           m_globalBarriers{ Memory::Allocators::g_RHI };
         TVector<VkBufferMemoryBarrier2>                     m_bufferBarriers{ Memory::Allocators::g_RHI };
         TVector<VkImageMemoryBarrier2>                      m_imageBarriers{ Memory::Allocators::g_RHI };
@@ -1830,11 +1619,9 @@ namespace EE::Render::RHI
         // without VK_EXT_mesh_shader. Every draw against it is dropped. See CmdSetPipeline.
         bool                                                m_boundPipelineIsNull = false;
 
-        // Root constants are not Vulkan push constants; see CmdSetRootConstants. Each set of
-        // them is copied into this ring and a descriptor is pushed at the copy. One ring per
-        // command buffer, reset in BeginCommandBuffer, which is safe because Vulkan already
-        // requires the previous submission of a command buffer to have completed before it can
-        // be re-recorded.
+        // Root constants are not Vulkan push constants; see CmdSetRootConstants. Each set is
+        // copied into this ring and a descriptor pushed at the copy. Reset in BeginCommandBuffer,
+        // which is safe because Vulkan already requires the previous submission to have completed.
         Buffer*                                             m_pRootConstantRing = nullptr;
         uint64_t                                            m_rootConstantRingOffset = 0;
 
@@ -1853,9 +1640,8 @@ namespace EE::Render::RHI
         PFN_vkCmdDrawMeshTasksIndirectEXT                   m_vkCmdDrawMeshTasksIndirect = nullptr;
         PFN_vkCmdDrawMeshTasksIndirectCountEXT              m_vkCmdDrawMeshTasksIndirectCount = nullptr;
 
-        // Variable rate shading. m_shadingRateCaps is copied from DeviceCapabilities the way
-        // Direct3D 12 copies it at RHI_Direct3D12.cpp:2862, and CmdSetShadingRate guards on it
-        // exactly as the reference does.
+        // m_shadingRateCaps is copied from DeviceCapabilities, and CmdSetShadingRate guards on it
+        // as the D3D12 backend does.
         PFN_vkCmdSetFragmentShadingRateKHR                  m_vkCmdSetFragmentShadingRate = nullptr;
         TBitFlags<ShadingRateCaps>                          m_shadingRateCaps = {};
 
@@ -1864,15 +1650,13 @@ namespace EE::Render::RHI
         PFN_vkCmdTraceRaysKHR                               m_vkCmdTraceRays = nullptr;
         PFN_vkCmdTraceRaysIndirect2KHR                      m_vkCmdTraceRaysIndirect2 = nullptr;
 
-        // **Direct3D 12 binds the shading rate image with a command and Vulkan makes it a render
-        // pass attachment**, so CmdSetShadingRate can only record it and BeginRenderingIfPending
-        // chains it. Null when no image is bound.
+        // D3D12 binds the shading rate image with a command and Vulkan makes it a render pass
+        // attachment, so CmdSetShadingRate can only record it and BeginRenderingIfPending chains it.
         VkImageView                                         m_shadingRateImageView = VK_NULL_HANDLE;
         // DeviceCapabilities::m_shadingRateTexelWidth and Height, copied at creation.
         VkExtent2D                                          m_shadingRateTexelSize = {};
 
-        // The same two fields Direct3D12CommandBuffer carries at RHI_Direct3D12.cpp:1526, with
-        // the same starting value, so a marker gets the same colour on both backends.
+        // The same starting value the D3D12 backend uses, so a marker gets the same colour on both.
         float                                               m_currentDebugMarkerColorValue = 0.5F;
         int32_t                                             m_debugMarkerScopeCounter = 0;
     };
@@ -1880,32 +1664,22 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Resource types
     //-------------------------------------------------------------------------
-    // All in one place, because RHI.h declares the draw commands before the buffers, textures
-    // and pipelines they act on, so a definition next to its own functions would come too late.
-    // The functions stay in RHI.h's section order; only the types are gathered.
+    // Gathered here because RHI.h declares the draw commands before the buffers, textures and
+    // pipelines they act on. The functions keep RHI.h's order; only the types move.
 
     struct VulkanCommandPool final : CommandPool
     {
         VkCommandPool                                       m_commandPool = VK_NULL_HANDLE;
 
-        // **Which queue family this pool draws from decides what may be recorded into it.** A
-        // transfer-only or compute-only family rejects any graphics command and any barrier
-        // naming a graphics stage, and a discrete GPU really does expose such families: the RTX
-        // 3090 puts transfer on family 1, which has VK_QUEUE_TRANSFER_BIT and nothing else.
-        // Direct3D 12 needs no equivalent - a copy command list has no method for the state in
-        // question, and D3D12_BARRIER_SYNC_* carries no queue restriction at all.
+        // The pool's queue family decides what may be recorded into it. A transfer-only or
+        // compute-only family rejects any graphics command, and any barrier naming a graphics
+        // stage. D3D12 has no equivalent restriction.
         VkQueueFlags                                        m_queueFlags = 0;
 
-        // **Destroying a VkCommandPool frees every buffer allocated from it**, and a later
-        // vkFreeCommandBuffers on the dead pool is a validation error. Direct3D 12 has no such
-        // rule: an allocator and a command list are independent objects that can go in any
-        // order, so upstream feels free to destroy them in any order, and one caller does.
-        // Window::DestroySwapchain (RenderWindow.cpp:53) destroys the pools first and the
-        // buffers immediately after. Found by running it during the P6.6 bring-up.
-        //
-        // So the pool knows its buffers, and clears their handles on the way out. The buffer
-        // objects still get destroyed by their own caller; they just no longer try to free a
-        // Vulkan handle that is already gone.
+        // Destroying a VkCommandPool frees every buffer allocated from it, and a later
+        // vkFreeCommandBuffers on the dead pool is a validation error. D3D12 has no such rule, and
+        // Window::DestroySwapchain destroys pools before buffers. So the pool tracks its buffers
+        // and clears their handles on the way out.
         TInlineVector<VulkanCommandBuffer*, 8>              m_allocatedCommandBuffers;
     };
 
@@ -1915,9 +1689,8 @@ namespace EE::Render::RHI
         VkQueryType                                         m_queryType = VK_QUERY_TYPE_TIMESTAMP;
     };
 
-    // One RHI acceleration structure is a bottom level and a top level together, which is the
-    // shape RHI_Direct3D12.cpp:1452 has. Vulkan splits a structure into the VkAccelerationStructureKHR
-    // handle and the buffer that holds it, so both are here.
+    // One RHI acceleration structure is a bottom level and a top level together. Vulkan splits each
+    // into a handle and the buffer that holds it, so both are here.
     struct VulkanAccelerationStructure final : AccelerationStructure
     {
         struct Level
@@ -1930,29 +1703,26 @@ namespace EE::Render::RHI
         Level                                               m_bottomLevel = {};
         Level                                               m_topLevel = {};
 
-        // The geometry descriptions outlive this call, because CmdBuildAccelerationStructure
-        // hands the same array to the build. Direct3D 12 keeps its own for the same reason.
+        // These outlive creation, because CmdBuildAccelerationStructure hands the same array to
+        // the build.
         TVector<VkAccelerationStructureGeometryKHR>         m_geometries{ Memory::Allocators::g_RHI };
         TVector<VkAccelerationStructureBuildRangeInfoKHR>   m_buildRanges{ Memory::Allocators::g_RHI };
 
-        // Shared by both builds, sized for the larger of the two, exactly as the reference does.
+        // Shared by both builds, sized for the larger of the two.
         Buffer*                                             m_pScratchBuffer = nullptr;
 
         Buffer*                                             m_pInstanceBuffer = nullptr;
         uint64_t                                            m_instanceBufferOffset = 0;
         uint64_t                                            m_numInstances = 0;
 
-        // The top level build reads its instances through this, and it is also what
-        // VkAccelerationStructureInstanceKHR::accelerationStructureReference wants for a bottom
-        // level. Direct3D 12 uses a plain GPU virtual address for both.
+        // What VkAccelerationStructureInstanceKHR::accelerationStructureReference wants for a
+        // bottom level. D3D12 uses a plain GPU virtual address instead.
         VkDeviceAddress                                     m_bottomLevelDeviceAddress = 0;
     };
 
-    // **Nothing creates one of these, on either backend.** RHI.h declares no factory for a
-    // RaytracingShaderTable and RHI_Direct3D12.cpp never constructs its own version either, so
-    // CmdDispatchRays is unreachable by construction. The type mirrors
-    // Direct3D12RaytracingShaderTable at RHI_Direct3D12.cpp:1473 field for field so that
-    // whichever group eventually builds a table has the same shape to fill in on both sides.
+    // Nothing creates one of these on either backend: RHI.h declares no factory for a
+    // RaytracingShaderTable, so CmdDispatchRays is unreachable. The fields mirror the D3D12 type
+    // so both sides have the same shape to fill in.
     struct VulkanRaytracingShaderTable final : RaytracingShaderTable
     {
         Buffer*                                             m_pBuffer = nullptr;
@@ -1973,12 +1743,11 @@ namespace EE::Render::RHI
         VkBufferView                                        m_uniformTexelBufferView = VK_NULL_HANDLE;
         VkBufferView                                        m_storageTexelBufferView = VK_NULL_HANDLE;
 
-        // BufferFlags::SubAllocations. The Direct3D 12 backend uses a D3D12MA virtual block for
-        // exactly this, and VMA has the same thing.
+        // BufferFlags::SubAllocations, the equivalent of the D3D12 backend's virtual block.
         VmaVirtualBlock                                     m_virtualBlock = VK_NULL_HANDLE;
 
-        // A contiguous run in the resource heap, laid out the way Direct3D 12 lays it out:
-        // constant buffer first if present, then the read view, then the read-write view.
+        // A contiguous run in the resource heap, laid out as D3D12 lays it out: constant buffer
+        // first if present, then the read view, then the read-write view.
         HandleAllocator<GenericResourceHandle>::Handle      m_descriptorHandles = {};
         int8_t                                              m_srvDescriptorOffset = -1;
         int8_t                                              m_uavDescriptorOffset = -1;
@@ -1992,36 +1761,29 @@ namespace EE::Render::RHI
         VmaAllocation                                       m_allocation = VK_NULL_HANDLE;
         uint64_t                                            m_allocationSize = 0;
 
-        // Named m_vulkanFormat rather than m_format on purpose. Texture::m_format is the
-        // DataFormat the caller asked for, and a member of the same name here would hide it
-        // behind a different type depending on which pointer the reader has.
+        // Not m_format: Texture::m_format is the DataFormat the caller asked for, and a member of
+        // the same name here would hide it behind a different type.
         VkFormat                                            m_vulkanFormat = VK_FORMAT_UNDEFINED;
         VkExtent3D                                          m_extent = {};
 
         // Every aspect the image has: colour, or depth and stencil. A view picks a subset.
         VkImageAspectFlags                                  m_aspectMask = 0;
 
-        // False when the image belongs to somebody else: a swapchain image handed in through
-        // TextureParameters::m_pNativeHandle, or the texture this one aliases. The views are
-        // still ours, the image is not.
+        // False when the image belongs to somebody else: a swapchain image, or the texture this
+        // one aliases. The views are still ours, the image is not.
         bool                                                m_ownsImage = true;
 
-        // **A Vulkan image is always created in VK_IMAGE_LAYOUT_UNDEFINED**, whatever
-        // TextureParameters::m_initialState says, because those are the only two layouts
-        // vkCreateImage accepts and the other one is for linear tiling. Direct3D 12 takes the
-        // initial layout directly. So the engine believes this texture is already in
-        // m_initialState and the image is not, and P5.9 has to transition from what is recorded
-        // here rather than from the state the caller passes to the first barrier.
-        // **One layout per subresource, not one per image.** It used to be one, and a cubemap
-        // capture broke it: RenderPass_GlobalEnvironmentMap draws each face in turn, so face 1 is
-        // a colour attachment while face 0 has already been transitioned to be sampled. Vulkan
-        // tracks a layout per mip and per array layer, and so does this. Indexed
+        // vkCreateImage only accepts UNDEFINED or PREINITIALIZED, whatever
+        // TextureParameters::m_initialState says, so the engine believes the texture is already in
+        // m_initialState and the image is not. Barriers transition from what is recorded here
+        // rather than from the state the caller passes.
+        //
+        // One layout per subresource, not one per image: a cubemap capture draws each face in
+        // turn, so face 1 is a colour attachment while face 0 is already sampled. Indexed
         // mipLevel * m_arrayLayers + arrayLayer.
         TInlineVector<VkImageLayout, 6>                     m_subresourceLayouts;
 
-        // The layout of the whole image when every subresource agrees, and UNDEFINED when they
-        // do not. Only the barrier path needs the distinction; everything else asks about one
-        // subresource.
+        // UNDEFINED when the subresources disagree. Only the barrier path needs the distinction.
         VkImageLayout CurrentLayout( uint32_t mipLevel = 0, uint32_t arrayLayer = 0 ) const
         {
             uint32_t const index = mipLevel * m_arrayLayers + arrayLayer;
@@ -2043,10 +1805,9 @@ namespace EE::Render::RHI
             }
         }
 
-        // The layout the sampled-image descriptor in the heap was written with, and therefore
-        // the layout P5.9 has to put this texture in before a shader reads it. GENERAL for a
-        // texture that is also an RWTexture, because one image cannot be in two layouts and a
-        // storage image descriptor has to say GENERAL.
+        // The layout the sampled-image descriptor was written with, so the layout a barrier has to
+        // reach before a shader reads it. GENERAL for a texture that is also an RWTexture, because
+        // one image cannot be in two layouts and a storage image descriptor has to say GENERAL.
         VkImageLayout                                       m_shaderReadLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         // The view a shader samples, covering every mip and layer. One per texture.
@@ -2055,12 +1816,12 @@ namespace EE::Render::RHI
         // One storage view per mip level, because an RWTexture handle names a mip level.
         TVector<VkImageView>                                m_storageViews{ Memory::Allocators::g_RHI };
 
-        // One attachment view per subresource, indexed the way Direct3D 12 indexes its render
-        // target descriptors at RHI_Direct3D12.cpp:1387: m_mipLevels * arrayLayer + mipLevel.
+        // One attachment view per subresource, indexed as D3D12 indexes its render target
+        // descriptors: m_mipLevels * arrayLayer + mipLevel.
         TVector<VkImageView>                                m_renderTargetViews{ Memory::Allocators::g_RHI };
 
-        // A contiguous run in the resource heap, in the same order Direct3D 12 uses: the read
-        // view first if present, then one read-write view per mip level.
+        // A contiguous run in the resource heap, in D3D12's order: the read view first if present,
+        // then one read-write view per mip level.
         HandleAllocator<GenericResourceHandle>::Handle      m_descriptorHandles = {};
         int8_t                                              m_uavDescriptorOffset = -1;
 
@@ -2099,9 +1860,8 @@ namespace EE::Render::RHI
         // PUSH_DESCRIPTOR_BIT so CmdSetRootParameter is a push rather than a set allocation.
         VkDescriptorSetLayout                               m_rootParameterSetLayout = VK_NULL_HANDLE;
 
-        // The bindings that layout was built from, kept so CmdExecuteIndirect can bind the ones
-        // the engine left alone. Same order as m_descriptorReflections, so a parameter index
-        // indexes both. See BindUnboundRootParameters.
+        // Kept so CmdExecuteIndirect can bind the ones the engine left alone. Same order as
+        // m_descriptorReflections, so a parameter index indexes both.
         TInlineVector<VkDescriptorSetLayoutBinding, 32>     m_rootParameterBindings;
 
         // Copied from the context so CmdSetPipeline, which takes no Context, can bind it.
@@ -2125,10 +1885,9 @@ namespace EE::Render::RHI
         TVector<uint8_t>                                    m_cacheData{ Memory::Allocators::g_RHI };
     };
 
-    // Enough for every root constant set in one command buffer. Root constants are a handful of
-    // uint32s each, and RHI.esh declares one block per shader, so this is generous by a wide
-    // margin. It is asserted rather than wrapped: silently wrapping would overwrite constants
-    // the GPU is still reading, and the failure would look like a shader bug.
+    // Enough for every root constant set in one command buffer, by a wide margin. Asserted rather
+    // than wrapped: wrapping would overwrite constants the GPU is still reading, and the failure
+    // would look like a shader bug.
     static constexpr uint64_t g_rootConstantRingSize = 64 * 1024;
     static constexpr uint64_t g_rootConstantAlignment = 256;
 
@@ -2151,9 +1910,8 @@ namespace EE::Render::RHI
 
         EE_ASSERT( pVulkanQueue->m_queueFamilyIndex != ~0U );
 
-        // Hand out a distinct VkQueue from the family while there is one left, and repeat the
-        // last one after that. Repeating is legal, and CreateContext already asked for as many
-        // as the family allows, so it only happens on a device that cannot do better.
+        // Hand out a distinct VkQueue while the family has one left, then repeat the last. Repeating
+        // is legal, and CreateContext already asked for as many as the family allows.
         uint32_t queueIndex = 0;
         for ( VulkanContext::QueueFamilyAllocation& allocation : pVulkanContext->m_queueFamilyAllocations )
         {
@@ -2170,8 +1928,8 @@ namespace EE::Render::RHI
         vkGetDeviceQueue( pVulkanContext->m_device, pVulkanQueue->m_queueFamilyIndex, queueIndex, &pVulkanQueue->m_queue );
         EE_ASSERT( pVulkanQueue->m_queue != VK_NULL_HANDLE );
 
-        // Timestamps, for P5.11. Both numbers belong to the queue family, and GetQueryTimestamp-
-        // Frequency is handed a Queue with no Context to ask.
+        // Both numbers belong to the queue family, and GetQueryTimestampFrequency is handed a
+        // Queue with no Context to ask.
         pVulkanQueue->m_timestampPeriod = pVulkanContext->m_physicalDeviceProperties.limits.timestampPeriod;
 
         uint32_t numQueueFamilies = 0;
@@ -2193,14 +1951,9 @@ namespace EE::Render::RHI
 
         SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_QUEUE, uint64_t( pVulkanQueue->m_queue ), parameters.m_debugName );
 
-        // QueuePriority is not honoured. Vulkan fixes queue priorities at vkCreateDevice, and
-        // CreateQueue runs long after that, so the priority would need the device recreated.
-        // Nothing in the engine sets it: RenderSystem::Initialize leaves all three queues on
-        // Normal. VK_EXT_global_priority is what GlobalRealtime would need, also at device
-        // creation time. Revisit only when a caller actually asks for a priority.
-        //
-        // QueueFlags::DisableTimeout is D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT, which has
-        // no Vulkan equivalent at all. Nothing sets it either.
+        // QueuePriority is not honoured. Vulkan fixes priorities at vkCreateDevice, so honouring it
+        // would need the device recreated, and nothing in the engine asks for anything but Normal.
+        // QueueFlags::DisableTimeout has no Vulkan equivalent at all, and nothing sets it either.
 
         pVulkanQueue->m_device = pVulkanContext->m_device;
         pVulkanQueue->m_queueType = parameters.m_queueType;
@@ -2250,8 +2003,7 @@ namespace EE::Render::RHI
     {
         VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
 
-        // Value 0 is the timeline's initial value, so it is always already satisfied. The
-        // Direct3D 12 backend skips it for the same reason, and says so at its own call site.
+        // Value 0 is the timeline's initial value, so it is always already satisfied.
         if ( semaphore == 0 )
         {
             return;
@@ -2284,34 +2036,26 @@ namespace EE::Render::RHI
         waitInfo.semaphore = pVulkanQueueToWaitFor->m_timelineSemaphore;
         waitInfo.value = semaphore;
         // ALL_COMMANDS, because ID3D12CommandQueue::Wait blocks the whole queue and this has to
-        // mean the same thing. It is the correct-but-untuned choice the phase document allows,
-        // and it is recorded as an ALL_COMMANDS site in Docs/Linux/Progress.md. Narrowing it
-        // needs to know what the waiting submit will do, which the caller does not tell us.
+        // mean the same. Narrowing it needs to know what the waiting submit will do, and the
+        // caller does not say.
         waitInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
         pVulkanQueueThatWaits->m_pendingWaits.emplace_back( waitInfo );
     }
 
-    // **A Direct3D 12 queue executes its command lists in submission order, and a Vulkan queue
-    // does not.** Two `vkQueueSubmit2` calls on one `VkQueue` may overlap unless something
-    // orders them, and nothing in `RHI.h` can say so: `QueueDeviceWait` asserts that the two
-    // queues differ, so the engine has no way to make a queue wait on itself. It does not need
-    // one on Direct3D, and it relies on that - `ForwardShadingRenderer::SubmitGraphicsCommandBuffer`
+    // A D3D12 queue runs its command lists in submission order and a Vulkan queue does not: two
+    // vkQueueSubmit2 calls on one VkQueue may overlap. Nothing in RHI.h can ask for that ordering,
+    // because QueueDeviceWait asserts the two queues differ, and the engine relies on it when it
     // submits several graphics command buffers a frame with the barriers recorded across them.
     //
-    // So every submit waits on the value the previous submit on that queue signalled. That is
-    // the Direct3D semantics exactly, and it is what makes the swapchain sound as well: the
-    // acquire wait that the first submit after `AcquireNextImage` carries then holds back every
-    // later submit too, including the one that writes the swapchain image.
-    //
+    // So every submit waits on the value the previous submit signalled. That also keeps the
+    // swapchain sound: the acquire wait the first submit carries holds back every later one too.
     // ALL_COMMANDS on both ends, because "the previous submit finished" is the whole meaning.
-    // Recorded as an ALL_COMMANDS site in Docs/Linux/Progress.md.
     static void RecordQueueOrderingWait( VulkanQueue* pVulkanQueue )
     {
         uint64_t const previousValue = pVulkanQueue->m_nextSemaphoreValue - 1;
 
-        // Zero is the timeline's initial value and is always satisfied, so the first submit on a
-        // queue has nothing to wait for.
+        // Zero is the timeline's initial value, so the first submit has nothing to wait for.
         if ( previousValue == 0 )
         {
             return;
@@ -2325,10 +2069,9 @@ namespace EE::Render::RHI
         pVulkanQueue->m_pendingWaits.emplace_back( waitInfo );
     }
 
-    // The body of QueueSubmit, and of the submit QueuePresent has to make before it can present.
-    // The only difference is the binary semaphore: VkPresentInfoKHR cannot wait on a timeline, so
-    // a present needs one signalled next to the timeline value. VK_NULL_HANDLE for an ordinary
-    // submit.
+    // Shared by QueueSubmit and the submit QueuePresent has to make first. VkPresentInfoKHR cannot
+    // wait on a timeline, so a present needs a binary semaphore signalled next to the timeline
+    // value. VK_NULL_HANDLE for an ordinary submit.
     static uint64_t SubmitToQueue( VulkanQueue* pVulkanQueue, TArrayView<CommandBuffer*> commandBuffers, VkSemaphore binarySignalSemaphore )
     {
         pVulkanQueue->m_submitCommandBuffers.clear();
@@ -2372,8 +2115,8 @@ namespace EE::Render::RHI
         submitInfo.signalSemaphoreInfoCount = uint32_t( signalInfos.size() );
         submitInfo.pSignalSemaphoreInfos = signalInfos.data();
 
-        // Direct3D 12 skips ExecuteCommandLists on an empty list but still signals. Signalling
-        // with no work is exactly what an empty submit does here, so the shape is the same.
+        // D3D12 skips ExecuteCommandLists on an empty list but still signals, which is what an
+        // empty submit does here.
         VkResult const result = vkQueueSubmit2( pVulkanQueue->m_queue, 1, &submitInfo, VK_NULL_HANDLE );
         EE_ASSERT( result == VK_SUCCESS );
 
@@ -2390,43 +2133,21 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Swapchain and presentation
     //-------------------------------------------------------------------------
-    // **SwapchainParameters::m_pNativeWindowHandle is an SDL_Window* on Linux, and this file
-    // makes the VkSurfaceKHR from it.** Direct3D 12 receives an HWND and asks DXGI for a
-    // swapchain. Vulkan needs a VkSurfaceKHR, and creating one needs a window system library.
-    // Base/Render depends on no such library and must not start to, so the call goes through
-    // Platform::Linux::CreateVulkanSurface, which is the only place that knows both SDL3 and
-    // Vulkan. Nothing here includes an SDL header, and the handle crosses as a void*.
-    // CreateContext enables the surface instance extensions so that call can succeed.
-    //
-    // **This revises the first half of P5.3's answer.** P5.3 said the application would create
-    // the surface and hand it over, and there turned out to be nowhere for it to do that:
-    // EngineModule::InitializeModule calls RenderSystem::Initialize, which creates the
-    // VkInstance, and then SetNativeWindowHandle three lines later, with nothing the application
-    // owns in between. Editing EngineModule.cpp would have meant an unregistered edit to an
-    // upstream file. See the 2026-08-30 decision in Docs/Linux/Progress.md.
-    //
-    // **A null handle means headless.** Nothing with no window has a surface, and the swapchain
-    // still works. The swapchain is then a ring of ordinary offscreen render targets
-    // with no VkSwapchainKHR, AcquireNextImage cycles the index, and QueuePresent signals its
-    // timeline value and presents nothing. That is the phase document's bring-up order - render
-    // offscreen first, wire the real surface later - and it is what lets steps 6 and 7 of the
-    // ladder run the moment there is any entry point to run them from.
-    //
-    // **The application drives swapchain recreation, not the RHI.** Engine.cpp:754 and
-    // ImguiRenderer.cpp:91 both compare the window size against GetSwapchainSize() and call
-    // Window::ResizeSwapchain, and each one waits the graphics queue idle first. So this file
-    // tolerates VK_SUBOPTIMAL_KHR and VK_ERROR_OUT_OF_DATE_KHR rather than recreating behind the
-    // engine's back. That is the second answer Phase 5 owes Phase 6.
+    // SwapchainParameters::m_pNativeWindowHandle is an SDL_Window* on Linux, and this file makes
+    // the VkSurfaceKHR from it:
+    //  - Base/Render must not depend on a window system library, so the surface is made by
+    //    Platform::Linux::CreateVulkanSurface and the handle crosses as a void*.
+    //  - A null handle means headless. The swapchain is then a ring of offscreen render targets
+    //    with no VkSwapchainKHR, and QueuePresent signals its timeline value and presents nothing.
+    //  - The engine drives recreation through Window::ResizeSwapchain, so this file tolerates
+    //    VK_SUBOPTIMAL_KHR and VK_ERROR_OUT_OF_DATE_KHR rather than recreating behind its back.
 
-    // Declared here rather than with the swapchain functions below, because QueuePresent reads
-    // it and is defined first.
     struct VulkanSwapchain final : Swapchain
     {
         VkDevice                                            m_device = VK_NULL_HANDLE;
 
-        // Created by CreateSwapchain from the window handle, and destroyed by DestroySwapchain.
-        // Window::ResizeSwapchain destroys and recreates around an unchanged window, so the
-        // surface is remade with it; SDL_Vulkan_CreateSurface is cheap.
+        // Remade with the swapchain, because Window::ResizeSwapchain destroys and recreates around
+        // an unchanged window. SDL_Vulkan_CreateSurface is cheap.
         VkSurfaceKHR                                        m_surface = VK_NULL_HANDLE;
         VkSwapchainKHR                                      m_swapchain = VK_NULL_HANDLE;
 
@@ -2442,11 +2163,10 @@ namespace EE::Render::RHI
         TInlineVector<VkPresentModeKHR, 8>                  m_supportedPresentModes;
         VkPresentModeKHR                                    m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
 
-        // **Binary semaphores, because VkPresentInfoKHR has no timeline path.** This is what
-        // P5.2 left to this group. The acquire semaphores are a ring rather than one per image,
-        // because vkAcquireNextImageKHR is told which semaphore to signal before it says which
-        // image it gave. The present semaphores are one per image, which is safe because an
-        // image is not presented again until it has been acquired again.
+        // Binary semaphores, because VkPresentInfoKHR has no timeline path. The acquire semaphores
+        // are a ring rather than one per image, because vkAcquireNextImageKHR is told which
+        // semaphore to signal before it says which image it gave. The present semaphores are one
+        // per image, which is safe because an image is not presented again until it is acquired again.
         TInlineVector<VkSemaphore, MaxPendingFrames>        m_acquireSemaphores;
         TInlineVector<VkSemaphore, MaxPendingFrames>        m_presentSemaphores;
         uint32_t                                            m_nextAcquireSemaphore = 0;
@@ -2463,17 +2183,16 @@ namespace EE::Render::RHI
 
         if ( pVulkanSwapchain->m_isHeadless )
         {
-            // Nothing to present to. Direct3D 12 signals its fence after the present and returns
-            // that value, and so does this; the frame pacing the engine builds on the returned
-            // value is unchanged.
+            // Nothing to present to. D3D12 signals its fence after the present and returns that
+            // value, and so does this, so the engine's frame pacing is unchanged.
             return SubmitToQueue( pVulkanQueue, {}, VK_NULL_HANDLE );
         }
 
         VkSemaphore const presentSemaphore = pVulkanSwapchain->m_presentSemaphores[imageIndex];
 
-        // The submit comes first here where Direct3D 12 presents first and signals after, and it
-        // has to: vkQueuePresentKHR waits on a semaphore that only a submit can signal. The
-        // returned value still means "the frame is done", which is all the engine reads it for.
+        // The submit comes first where D3D12 presents first and signals after, because
+        // vkQueuePresentKHR waits on a semaphore only a submit can signal. The returned value
+        // still means "the frame is done", which is all the engine reads it for.
         uint64_t const signalSemaphore = SubmitToQueue( pVulkanQueue, {}, presentSemaphore );
 
         VkPresentInfoKHR presentInfo = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
@@ -2496,22 +2215,20 @@ namespace EE::Render::RHI
     {
         VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
 
-        // Direct3D 12 signals its fence and blocks on an event, because it has no queue-idle
+        // D3D12 signals its fence and blocks on an event, because it has no queue-idle
         // call. Vulkan has one, and it means precisely this.
         VkResult const result = vkQueueWaitIdle( pVulkanQueue->m_queue );
         EE_ASSERT( result == VK_SUCCESS );
     }
 
-    // The render targets, which are the same textures on both paths. On the real path they wrap
-    // images the presentation engine owns, which is what TextureParameters::m_pNativeHandle is
-    // for; headless they are ordinary textures this call allocates. Mirrors the parameters
-    // RHI_Direct3D12.cpp:2736 fills in.
+    // The same textures on both paths. On the real path they wrap images the presentation engine
+    // owns, which is what TextureParameters::m_pNativeHandle is for; headless they are ordinary
+    // textures this call allocates.
     static void CreateSwapchainRenderTargets( Context* pContext, VulkanSwapchain* pVulkanSwapchain, SwapchainParameters const& parameters, DataFormat renderTargetFormat, VkExtent2D extent, TArrayView<VkImage const> images )
     {
         TextureParameters textureParameters = {};
-        // The surface's extent, not the one that was asked for. A window system that has already
-        // decided the size - which is the usual case on Wayland - gives back its own, and the
-        // texture has to describe the image the presentation engine actually made.
+        // The surface's extent, not the one that was asked for. Wayland usually decides the size
+        // itself, and the texture has to describe the image that was actually made.
         textureParameters.m_width = extent.width;
         textureParameters.m_height = extent.height;
         textureParameters.m_depth = 1;
@@ -2538,9 +2255,7 @@ namespace EE::Render::RHI
         VulkanContext*   pVulkanContext = static_cast<VulkanContext*>( pContext );
         VulkanSwapchain* pVulkanSwapchain = pVulkanContext->CreateObject<VulkanSwapchain>();
 
-        // Direct3D 12 takes several present queues in Linked device mode and calls
-        // ResizeBuffers1 with a node mask per queue. Vulkan presents from one queue, and the
-        // engine only ever passes one.
+        // Vulkan presents from one queue, and the engine only ever passes one.
         EE_ASSERT( parameters.m_presentQueues.size() == 1 );
 
         pVulkanSwapchain->m_device = pVulkanContext->m_device;
@@ -2566,11 +2281,10 @@ namespace EE::Render::RHI
 
         // Surface format
         //-------------------------------------------------------------------------
-        // **Direct3D 12 creates the swapchain UNorm and puts an sRGB render target view on it.
-        // Vulkan creates the image sRGB and the view matches.** The two produce the same
-        // conversion on write and the same picture on screen, and the Vulkan spelling needs no
-        // VK_KHR_swapchain_mutable_format. So m_renderTargetFormat, which is the sRGB one, drives
-        // both the image and the views; m_colorFormat is the fallback when the surface refuses it.
+        // D3D12 creates the swapchain UNorm and puts an sRGB view on it; Vulkan creates the image
+        // sRGB and the view matches. Same conversion, same picture, and no need for
+        // VK_KHR_swapchain_mutable_format. So m_renderTargetFormat drives both the image and the
+        // views, and m_colorFormat is the fallback when the surface refuses it.
         uint32_t numSurfaceFormats = 0;
         vkGetPhysicalDeviceSurfaceFormatsKHR( pVulkanContext->m_physicalDevice, pVulkanSwapchain->m_surface, &numSurfaceFormats, nullptr );
         TVector<VkSurfaceFormatKHR> surfaceFormats( numSurfaceFormats );
@@ -2579,16 +2293,10 @@ namespace EE::Render::RHI
         DataFormat         renderTargetFormat = parameters.m_renderTargetFormat;
         VkSurfaceFormatKHR chosenSurfaceFormat = {};
 
-        // **The BGRA spellings are candidates too, and on X11 they are the only ones.** The
-        // engine asks for RGBA8_sRGB then RGBA8_UNorm, which is what DXGI hands out; every
-        // surface measured on this machine - Intel UHD 620, NVIDIA MX250 and llvmpipe - offers
-        // only VK_FORMAT_B8G8R8A8_SRGB and VK_FORMAT_B8G8R8A8_UNORM. Without these two extra
-        // candidates the assert below fires on every Linux machine.
-        //
-        // The swap costs nothing and needs no shader change. A Vulkan format names its
-        // components in memory order, and a shader's red output always lands in the format's red
-        // component wherever that byte sits, so a BGRA swapchain displays exactly as an RGBA one
-        // does. The sRGB preference is preserved: the sRGB spelling of each pair comes first.
+        // Linux surfaces offer only the BGRA spellings, so those are candidates too, or the assert
+        // below fires on every Linux machine. A Vulkan format names its components in memory order,
+        // so a BGRA swapchain displays exactly as an RGBA one does. The sRGB spelling of each pair
+        // comes first, which preserves the caller's preference.
         for ( DataFormat const candidate : { SubstituteSwapchainColorFormat( parameters.m_renderTargetFormat ),
                                              SubstituteSwapchainColorFormat( parameters.m_colorFormat ),
                                              parameters.m_renderTargetFormat, parameters.m_colorFormat } )
@@ -2656,8 +2364,8 @@ namespace EE::Render::RHI
         swapchainCreateInfo.imageColorSpace = chosenSurfaceFormat.colorSpace;
         swapchainCreateInfo.imageExtent = extent;
         swapchainCreateInfo.imageArrayLayers = 1;
-        // The transfer bits only when the surface allows them, because P5.10's copies and clears
-        // can name any texture and a swapchain image is one.
+        // The transfer bits only when the surface allows them, because a copy or a clear can name
+        // any texture and a swapchain image is one.
         swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                                          ( surfaceCapabilities.supportedUsageFlags & ( VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT ) );
         // One queue presents and one queue renders, and they are the same queue. See
@@ -2675,10 +2383,9 @@ namespace EE::Render::RHI
 
         // Images
         //-------------------------------------------------------------------------
-        // **minImageCount is a minimum, so the driver may hand back more images than were
-        // asked for.** Swapchain::m_renderTargets is a fixed TArray of MaxPendingFrames, which
-        // is 2, and several Linux drivers want three or four. If this halts, the fix is
-        // MaxPendingFrames in RHI.h, which is an upstream change and a human decision.
+        // minImageCount is a minimum, so the driver may hand back more images than were asked for,
+        // and several Linux drivers want three or four. If this halts, the fix is MaxPendingFrames
+        // in RHI.h, which is an upstream change.
         uint32_t numImages = 0;
         vkGetSwapchainImagesKHR( pVulkanContext->m_device, pVulkanSwapchain->m_swapchain, &numImages, nullptr );
 
@@ -2726,8 +2433,8 @@ namespace EE::Render::RHI
         VulkanContext*   pVulkanContext = static_cast<VulkanContext*>( pContext );
         VulkanSwapchain* pVulkanSwapchain = static_cast<VulkanSwapchain*>( pSwapchain );
 
-        // Every caller waits the present queue idle first - Engine.cpp:756,
-        // ImguiRenderer.cpp:64 and :93 - which is what Vulkan needs before the images go away.
+        // Every caller waits the present queue idle first, which is what Vulkan needs before the
+        // images go away.
         for ( uint32_t imageIndex = 0; imageIndex < pVulkanSwapchain->m_numImages; ++imageIndex )
         {
             // The texture owns its views and not the image, so this destroys the views only.
@@ -2749,8 +2456,7 @@ namespace EE::Render::RHI
             vkDestroySwapchainKHR( pVulkanContext->m_device, pVulkanSwapchain->m_swapchain, nullptr );
         }
 
-        // The surface belongs to the swapchain, so it goes with it. It has to be destroyed
-        // after the VkSwapchainKHR that was created from it, not before.
+        // Destroyed after the VkSwapchainKHR that was created from it, not before.
         Platform::Linux::DestroyVulkanSurface( pVulkanContext->m_instance, pVulkanSwapchain->m_surface );
         pVulkanSwapchain->m_surface = VK_NULL_HANDLE;
 
@@ -2777,21 +2483,19 @@ namespace EE::Render::RHI
 
         if ( result == VK_ERROR_OUT_OF_DATE_KHR )
         {
-            // **No image was acquired and the semaphore was not signalled**, so recording a wait
-            // on it would hang the queue. The engine compares the window size every frame and
-            // recreates the swapchain, so this is the last frame before that happens; it renders
-            // into the image it already held rather than stopping.
+            // No image was acquired and the semaphore was not signalled, so recording a wait on it
+            // would hang the queue. The engine recreates the swapchain next frame, so this one
+            // renders into the image it already held rather than stopping.
             return pVulkanSwapchain->m_currentImageIndex;
         }
 
         EE_ASSERT( result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR );
 
-        // **Direct3D 12 needs nothing here at all**, because GetCurrentBackBufferIndex answers
-        // without waiting for anything. Vulkan hands back an image the presentation engine may
-        // still be reading, and the wait for it goes on the present queue, where the next submit
-        // drains it. RecordQueueOrderingWait then carries the order to every submit after that,
-        // which is what makes this sound when the submit that writes the image is not the first
-        // one after this call. ForwardShadingRenderer submits several before it.
+        // D3D12 needs nothing here, because GetCurrentBackBufferIndex answers without waiting.
+        // Vulkan hands back an image the presentation engine may still be reading, so the wait goes
+        // on the present queue and the next submit drains it. RecordQueueOrderingWait carries the
+        // order to every later submit, which matters because the one that writes the image is
+        // rarely the first.
         VkSemaphoreSubmitInfo waitInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
         waitInfo.semaphore = acquireSemaphore;
         waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -2807,9 +2511,8 @@ namespace EE::Render::RHI
 
         pVulkanSwapchain->m_vsync = vsync;
 
-        // FIFO is the one mode every implementation has to support, and it is vsync. Without
-        // vsync, MAILBOX if the surface has it and IMMEDIATE otherwise: the first tears nothing
-        // and the second is what Direct3D's DXGI_PRESENT_ALLOW_TEARING asks for.
+        // FIFO is the one mode every implementation has to support, and it is vsync. Without vsync,
+        // MAILBOX if the surface has it, because it tears nothing, and IMMEDIATE otherwise.
         auto HasPresentMode = [pVulkanSwapchain] ( VkPresentModeKHR mode )
         {
             return eastl::find( pVulkanSwapchain->m_supportedPresentModes.begin(), pVulkanSwapchain->m_supportedPresentModes.end(), mode ) != pVulkanSwapchain->m_supportedPresentModes.end();
@@ -2829,10 +2532,8 @@ namespace EE::Render::RHI
             }
         }
 
-        // **A present mode is fixed when the swapchain is created, so a later call takes effect
-        // at the next recreation.** Direct3D 12 changes a sync interval per present and needs no
-        // such thing. Nothing in the engine calls this outside CreateSwapchain, so the two
-        // behave identically today; a caller that starts to has to resize the swapchain as well.
+        // A present mode is fixed at swapchain creation, so a later call only takes effect at the
+        // next recreation. Nothing calls this outside CreateSwapchain today.
     }
 
     //-------------------------------------------------------------------------
@@ -2856,12 +2557,8 @@ namespace EE::Render::RHI
 
         VkCommandPoolCreateInfo commandPoolCreateInfo = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
         commandPoolCreateInfo.queueFamilyIndex = pVulkanQueue->m_queueFamilyIndex;
-        // RESET_COMMAND_BUFFER_BIT, so that vkBeginCommandBuffer implicitly resets the one
-        // buffer. That is what ID3D12GraphicsCommandList::Reset( allocator, nullptr ) does, and
-        // the engine calls BeginCommandBuffer per buffer rather than resetting the pool every
-        // time. Without the bit, a second Begin without an intervening ResetCommandPool is
-        // invalid. It can cost a little, because some drivers give such a pool per-buffer
-        // allocators, and correctness comes first.
+        // The engine begins buffers individually rather than resetting the pool, so each buffer
+        // has to reset itself.
         commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
         VkResult const result = vkCreateCommandPool( pVulkanContext->m_device, &commandPoolCreateInfo, nullptr, &pVulkanCommandPool->m_commandPool );
@@ -2883,9 +2580,8 @@ namespace EE::Render::RHI
 
             if ( pVulkanCommandPool->m_commandPool != VK_NULL_HANDLE )
             {
-                // Every buffer this pool allocated is freed with it, so mark them as already
-                // freed. DestroyCommandBuffer then skips its vkFreeCommandBuffers and never
-                // reads the pool it no longer owns. See the note on m_allocatedCommandBuffers.
+                // Destroying the pool frees these, so clear the handles. DestroyCommandBuffer then
+                // skips its vkFreeCommandBuffers.
                 for ( VulkanCommandBuffer* pAllocatedCommandBuffer : pVulkanCommandPool->m_allocatedCommandBuffers )
                 {
                     pAllocatedCommandBuffer->m_commandBuffer = VK_NULL_HANDLE;
@@ -2906,9 +2602,7 @@ namespace EE::Render::RHI
         VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
         VulkanCommandPool* pVulkanCommandPool = static_cast<VulkanCommandPool*>( pCommandPool );
 
-        // No RELEASE_RESOURCES flag. ID3D12CommandAllocator::Reset keeps the memory for reuse,
-        // and this is called once per frame per pool, so handing the memory back to the driver
-        // every frame would be the opposite of what the caller wants.
+        // No RELEASE_RESOURCES: this runs once per frame per pool, and the memory is meant to be reused.
         VkResult const result = vkResetCommandPool( pVulkanContext->m_device, pVulkanCommandPool->m_commandPool, 0 );
         EE_ASSERT( result == VK_SUCCESS );
     }
@@ -2936,22 +2630,20 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasks = pVulkanContext->m_vkCmdDrawMeshTasks;
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirect = pVulkanContext->m_vkCmdDrawMeshTasksIndirect;
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasksIndirectCount = pVulkanContext->m_vkCmdDrawMeshTasksIndirectCount;
-        // The pool's family decides what this buffer may record. FlushBarriers needs it for
-        // every barrier; the shading rate entry point is gated on it right below.
+        // The pool's family decides what this buffer may record. FlushBarriers clamps every barrier
+        // to it, and the shading rate entry point is gated on it below.
         pVulkanCommandBuffer->m_queueFlags = pVulkanCommandPool->m_queueFlags;
 
-        // Only on a graphics pool. vkCmdSetFragmentShadingRateKHR requires VK_QUEUE_GRAPHICS_BIT,
-        // and BeginCommandBuffer sets the full rate on every buffer it is given a pointer for.
-        // Leaving it null on a transfer or compute pool is what stops that, and it also makes
-        // CmdSetShadingRate's assert name the caller if a pass ever asks for a rate on one.
+        // vkCmdSetFragmentShadingRateKHR requires VK_QUEUE_GRAPHICS_BIT. Leaving it null on a
+        // transfer or compute pool stops BeginCommandBuffer setting a rate there, and makes
+        // CmdSetShadingRate's assert name the caller if a pass ever asks for one.
         pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate = ( pVulkanCommandPool->m_queueFlags & VK_QUEUE_GRAPHICS_BIT )
                                                              ? pVulkanContext->m_vkCmdSetFragmentShadingRate : nullptr;
         pVulkanCommandBuffer->m_vkCmdBuildAccelerationStructures = pVulkanContext->m_vkCmdBuildAccelerationStructures;
         pVulkanCommandBuffer->m_vkCmdTraceRays = pVulkanContext->m_vkCmdTraceRays;
         pVulkanCommandBuffer->m_vkCmdTraceRaysIndirect2 = pVulkanContext->m_vkCmdTraceRaysIndirect2;
         pVulkanCommandBuffer->m_shadingRateCaps = pContext->m_deviceCapabilities.m_shadingRateCaps;
-        // Carried here because CmdSetShadingRate is handed a CommandBuffer and no Context, the
-        // same reason the caps and the entry point come along.
+        // CmdSetShadingRate is handed a CommandBuffer and no Context.
         pVulkanCommandBuffer->m_shadingRateTexelSize =
         {
             pContext->m_deviceCapabilities.m_shadingRateTexelWidth,
@@ -2961,19 +2653,18 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_pCommandPool = parameters.m_pCommandPool;
         pVulkanCommandBuffer->m_nodeIndex = parameters.m_pCommandPool->m_pQueue->m_nodeIndex;
 
-        // Direct3D 12 creates a command list already recording and closes it straight away to
-        // match every other API. Vulkan already starts in the initial state, so there is
-        // nothing to undo here.
+        // D3D12 creates a command list already recording and closes it to match other APIs.
+        // Vulkan already starts in the initial state, so there is nothing to undo.
         pVulkanCommandBuffer->m_stage = VulkanCommandBuffer::Stage::Closed;
 
-        // The root constant ring. Written by the CPU, read by the GPU, never given a descriptor
-        // of its own: CmdSetRootConstants pushes a descriptor at an offset into it.
+        // Written by the CPU, read by the GPU, and never given a descriptor of its own:
+        // CmdSetRootConstants pushes a descriptor at an offset into it.
         BufferParameters ringParameters = {};
         ringParameters.m_bufferSize = g_rootConstantRingSize;
         ringParameters.m_memoryType = ResourceMemoryType::HostToDevice;
         ringParameters.m_flags.SetMultipleFlags( BufferFlags::NoDescriptors, BufferFlags::PersistentMap );
         // RWBuffer as well as ConstantBuffer, for the storage buffer usage bit. The ring also
-        // stands in for a set 0 binding the engine never wrote, and a root SRV or UAV there is a
+        // stands in for set 0 bindings the engine never wrote, where a root SRV or UAV is a
         // storage buffer. Nothing reads those bytes; see BindUnboundRootParameters.
         ringParameters.m_descriptorTypes.SetMultipleFlags( DescriptorTypeFlags::ConstantBuffer, DescriptorTypeFlags::RWBuffer );
         ringParameters.m_debugName.sprintf( "%s RootConstants", parameters.m_debugName.c_str() );
@@ -3014,9 +2705,8 @@ namespace EE::Render::RHI
         EE_ASSERT( pVulkanCommandBuffer->m_stage == VulkanCommandBuffer::Stage::Closed );
 
         VkCommandBufferBeginInfo beginInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-        // No ONE_TIME_SUBMIT. It would be faster and it is not safe to assume: Direct3D 12
-        // allows a closed command list to be submitted more than once without re-recording, and
-        // nothing here proves the engine never does. Set it only once that has been checked.
+        // No ONE_TIME_SUBMIT. D3D12 allows a closed command list to be submitted more than once
+        // without re-recording, and nothing here proves the engine never does.
         beginInfo.flags = 0;
 
         VkResult const result = vkBeginCommandBuffer( pVulkanCommandBuffer->m_commandBuffer, &beginInfo );
@@ -3024,10 +2714,9 @@ namespace EE::Render::RHI
 
         pVulkanCommandBuffer->m_stage = VulkanCommandBuffer::Stage::Recording;
 
-        // Direct3D 12 calls SetDescriptorHeaps here, once per command buffer. The Vulkan
-        // equivalent is binding the heap descriptor set, and the Phase 4 binding model puts
-        // that in CmdSetPipeline instead, because set 1 is disturbed whenever a pipeline with a
-        // different set 0 layout is bound. See the binding model entry in Docs/Linux/Progress.md.
+        // D3D12 calls SetDescriptorHeaps here. The equivalent binds the heap descriptor set, which
+        // happens in CmdSetPipeline instead, because set 1 is disturbed whenever a pipeline with a
+        // different set 0 layout is bound.
         pVulkanCommandBuffer->m_pBoundRootSignature = nullptr;
         pVulkanCommandBuffer->m_pBoundPipeline = nullptr;
         pVulkanCommandBuffer->m_boundPipelineLayout = VK_NULL_HANDLE;
@@ -3036,10 +2725,9 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_rootConstantRingOffset = 0;
         pVulkanCommandBuffer->m_shadingRateImageView = VK_NULL_HANDLE;
 
-        // **A declared dynamic state that is never set leaves every draw undefined.** Every
-        // pipeline declares the fragment shading rate state when the extension is enabled, and
-        // nothing in the engine sets it, so the full rate is set once here. It is what a
-        // pipeline without variable rate shading does anyway.
+        // A declared dynamic state that is never set leaves every draw undefined. Every pipeline
+        // declares the shading rate state when the extension is on and nothing in the engine sets
+        // it, so the full rate is set once here.
         if ( pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate != nullptr )
         {
             VkExtent2D const fullRate = { 1, 1 };
@@ -3047,8 +2735,7 @@ namespace EE::Render::RHI
             pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate( pVulkanCommandBuffer->m_commandBuffer, &fullRate, keepBoth );
         }
 
-        // A barrier that outlived its command buffer would apply to the wrong work. Direct3D 12
-        // asserts the same three lists are empty at RHI_Direct3D12.cpp:2906.
+        // A barrier that outlived its command buffer would apply to the wrong work.
         EE_ASSERT( pVulkanCommandBuffer->m_globalBarriers.empty() );
         EE_ASSERT( pVulkanCommandBuffer->m_bufferBarriers.empty() );
         EE_ASSERT( pVulkanCommandBuffer->m_imageBarriers.empty() );
@@ -3060,17 +2747,15 @@ namespace EE::Render::RHI
 
         EE_ASSERT( pVulkanCommandBuffer->m_stage == VulkanCommandBuffer::Stage::Recording );
 
-        // Every debug marker opened on this command buffer has to be closed on it. The same
-        // check the Direct3D 12 backend makes at RHI_Direct3D12.cpp:2947, and Vulkan is stricter
-        // about it: an unbalanced label is a validation error rather than a cosmetic one.
+        // Vulkan is stricter than D3D12 here: an unbalanced label is a validation error, not a
+        // cosmetic one.
         EE_ASSERT( pVulkanCommandBuffer->m_debugMarkerScopeCounter == 0 );
 
         // Dynamic rendering has to be closed before the command buffer is. A configuration that
         // never reached a draw is begun and ended here, so the clear it carries still happens.
         FlushRendering( pVulkanCommandBuffer );
 
-        // The same flush Direct3D 12 does at RHI_Direct3D12.cpp:2941. A barrier recorded and
-        // never flushed would simply not happen.
+        // A barrier recorded and never flushed would not happen at all.
         FlushBarriers( pVulkanCommandBuffer );
 
         VkResult const result = vkEndCommandBuffer( pVulkanCommandBuffer->m_commandBuffer );
@@ -3101,9 +2786,7 @@ namespace EE::Render::RHI
         renderingInfo.pDepthAttachment = pVulkanCommandBuffer->m_hasDepthAttachment ? &pVulkanCommandBuffer->m_depthAttachment : nullptr;
         renderingInfo.pStencilAttachment = pVulkanCommandBuffer->m_hasStencilAttachment ? &pVulkanCommandBuffer->m_stencilAttachment : nullptr;
 
-        // The shading rate image, which CmdSetShadingRate recorded because Vulkan makes it an
-        // attachment where Direct3D 12 makes it a command. Chained rather than set, so a pass
-        // without one carries no pNext at all.
+        // Chained rather than set, so a pass without a shading rate image carries no pNext at all.
         VkRenderingFragmentShadingRateAttachmentInfoKHR shadingRateAttachment = { VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR };
         if ( pVulkanCommandBuffer->m_shadingRateImageView != VK_NULL_HANDLE )
         {
@@ -3120,13 +2803,10 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_isRendering = true;
     }
 
-    // Leaves the render pass so something that may not run inside one can run: a barrier, a
-    // dispatch, a copy. The next draw begins it again, with every load op forced to LOAD so the
-    // restart keeps what the first half drew.
-    //
-    // The store ops were fixed when the pass began, so a caller that asked for
-    // StoreActionType::None would lose that half of the pass. No engine pass puts a barrier or a
-    // dispatch between two draws, so this is a safety net rather than a path anything takes.
+    // Leaves the render pass so a barrier, dispatch or copy can run, since none may run inside one.
+    // The next draw begins it again with every load op forced to LOAD, so the restart keeps what
+    // the first half drew. The store ops were fixed when the pass began, so a caller that asked for
+    // StoreActionType::None would lose that half. No engine pass does this; it is a safety net.
     static void SuspendRendering( VulkanCommandBuffer* pVulkanCommandBuffer )
     {
         if ( !pVulkanCommandBuffer->m_isRendering )
@@ -3148,8 +2828,8 @@ namespace EE::Render::RHI
     }
 
     // Finishes the current pass for good. A configuration that never reached a draw is begun and
-    // ended, because its load and store ops are the clear the caller asked for: a Direct3D 12
-    // render target that is bound and cleared with no draw still gets cleared.
+    // ended anyway, because its load op carries the clear the caller asked for, and a D3D12 render
+    // target bound and cleared with no draw still gets cleared.
     static void FlushRendering( VulkanCommandBuffer* pVulkanCommandBuffer )
     {
         BeginRenderingIfPending( pVulkanCommandBuffer );
@@ -3163,18 +2843,11 @@ namespace EE::Render::RHI
 
     //-------------------------------------------------------------------------
 
-    // **LoadActionType::DontCare means "the caller said nothing", not "discard".**
-    //
-    // Direct3D 12 has no load actions at all: binding a render target preserves it, and the
-    // backend reads m_loadActionsColor only to decide whether to call ClearRenderTargetView.
-    // LoadAction is zero initialised and DontCare is the zero, so every action the engine leaves
-    // alone arrives here as DontCare. RenderPass_DebugDraw.cpp:1316 builds a LoadAction that
-    // sets only the depth action to Clear and binds the frame's final colour target with it;
-    // mapping DontCare to VK_ATTACHMENT_LOAD_OP_DONT_CARE would discard the whole rendered frame
-    // at that line. So DontCare preserves, which is what the reference backend does.
-    //
-    // Clear and Load still map exactly, and nothing loses the ability to say what it means.
-    // Recorded under "Upstream issues observed" in Docs/Linux/Progress.md.
+    // LoadActionType::DontCare means "the caller said nothing", not "discard". LoadAction is zero
+    // initialised and DontCare is the zero, so every action the engine leaves alone arrives here as
+    // DontCare. Mapping it to DONT_CARE would discard the whole rendered frame at the debug draw
+    // pass, which sets only the depth action and binds the frame's final colour target. D3D12 has
+    // no load actions at all, and preserves.
     static VkAttachmentLoadOp VulkanLoadOp( LoadActionType action )
     {
         switch ( action )
@@ -3188,20 +2861,16 @@ namespace EE::Render::RHI
         return VK_ATTACHMENT_LOAD_OP_LOAD;
     }
 
-    // The same reasoning, and it matters more. **No engine pass sets a store action at all**, so
-    // every attachment arrives here as StoreActionType::DontCare, and discarding on that would
-    // throw away the output of every render pass in the frame.
-    //
-    // StoreActionType::None is untouched and still maps to VK_ATTACHMENT_STORE_OP_NONE, so a
-    // caller that really wants the attachment left alone has a value that says so.
+    // The same reasoning, and it matters more: no engine pass sets a store action, so every
+    // attachment arrives as DontCare and discarding would throw away every render pass in the
+    // frame. StoreActionType::None is untouched, so a caller that means it still has a value for it.
     static VkAttachmentStoreOp VulkanStoreOp( StoreActionType action )
     {
         switch ( action )
         {
             case StoreActionType::Store:    return VK_ATTACHMENT_STORE_OP_STORE;
             case StoreActionType::DontCare: return VK_ATTACHMENT_STORE_OP_STORE;
-            // "None" means the attachment is untouched. VK_ATTACHMENT_STORE_OP_NONE says
-            // exactly that and is core in 1.3.
+            // None means the attachment is untouched, which is exactly what this op says.
             case StoreActionType::None:     return VK_ATTACHMENT_STORE_OP_NONE;
         }
 
@@ -3209,20 +2878,15 @@ namespace EE::Render::RHI
         return VK_ATTACHMENT_STORE_OP_STORE;
     }
 
-    // **The engine binds render targets it has not transitioned.** Direct3D 12 has no image
-    // layouts, so nothing there is wrong: a texture is a texture and the view decides how it is
-    // read. Vulkan needs the layout to match what the attachment is used as, and a texture
-    // arrives here in one of two wrong states - still `UNDEFINED`, because `vkCreateImage` can
-    // only start it there and nothing has moved it, or in whatever layout its last *read* left
-    // it, typically `SHADER_READ_ONLY_OPTIMAL`.
+    // The engine binds render targets it has not transitioned. D3D12 has no image layouts so
+    // nothing there is wrong, but Vulkan needs the layout to match the attachment's use. A texture
+    // arrives either still UNDEFINED, or in whatever layout its last read left it.
     //
-    // Both are corrected here rather than asserted, because the engine has no barrier to add:
-    // the state it tracks is the Direct3D one, and it is already correct in those terms.
-    // `PrepareDraw` flushes this before `vkCmdBeginRendering`.
+    // Corrected here rather than asserted, because the engine has no barrier to add: the state it
+    // tracks is the D3D12 one, and it is already correct in those terms.
     //
-    // The masks are `ALL_COMMANDS` and all-access on both sides. Narrowing them needs to know
-    // what last touched the image and what the pass will do to it, and neither is passed here;
-    // it is recorded with the other `ALL_COMMANDS` sites in Progress.md.
+    // ALL_COMMANDS and all-access on both sides. Narrowing needs to know what last touched the
+    // image and what the pass will do to it, and neither is passed here.
     static void TransitionAttachmentIfNeeded( VulkanCommandBuffer* pVulkanCommandBuffer, VulkanTexture* pVulkanTexture, VkImageLayout attachmentLayout, uint32_t arraySlice, uint32_t mipSlice )
     {
         if ( pVulkanTexture->CurrentLayout( mipSlice, arraySlice ) == attachmentLayout )
@@ -3242,8 +2906,8 @@ namespace EE::Render::RHI
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = pVulkanTexture->m_image;
-        // **Only the subresource being bound.** The rest of the image may legitimately be in
-        // another layout: a cubemap capture samples the faces it has already drawn.
+        // Only the subresource being bound. The rest of the image may legitimately be in another
+        // layout: a cubemap capture samples the faces it has already drawn.
         barrier.subresourceRange.aspectMask = pVulkanTexture->m_aspectMask;
         barrier.subresourceRange.baseMipLevel = mipSlice;
         barrier.subresourceRange.levelCount = 1;
@@ -3258,13 +2922,12 @@ namespace EE::Render::RHI
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
-        // Direct3D 12's OMSetRenderTargets simply replaces what is bound. Dynamic rendering has
-        // a begin and an end, so the previous one is finished here.
+        // OMSetRenderTargets replaces what is bound. Dynamic rendering has a begin and an end, so
+        // the previous one is finished here.
         FlushRendering( pVulkanCommandBuffer );
 
-        // The same flush Direct3D 12 does at this point. The barriers that put these very
-        // textures into their attachment layouts are pending right now, and the layouts below
-        // are read from what they leave behind.
+        // The barriers that put these textures into their attachment layouts are pending now, and
+        // the layouts below read what they leave behind.
         FlushBarriers( pVulkanCommandBuffer );
 
         pVulkanCommandBuffer->m_colorAttachments.clear();
@@ -3276,18 +2939,15 @@ namespace EE::Render::RHI
             return;
         }
 
-        // Load and store actions are what dynamic rendering is for. Direct3D 12 has no such
-        // concept and clears with a separate ClearRenderTargetView call after binding; here the
-        // clear is the load op, which is what the phase document's mapping asks for and what a
-        // tiler needs.
+        // D3D12 clears with a separate ClearRenderTargetView after binding. Here the clear is the
+        // load op, which is what a tiler needs.
         VkExtent2D renderArea = {};
 
         for ( size_t renderTargetIndex = 0; renderTargetIndex < renderTargets.size(); ++renderTargetIndex )
         {
             VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( renderTargets[renderTargetIndex] );
 
-            // Which subresource of the target to draw into. Direct3D 12 picks a different
-            // render target view; here it is a different VkImageView, created by CreateTexture.
+            // Which subresource to draw into. A different VkImageView, created by CreateTexture.
             uint32_t const colorArraySlice = colorArraySlices.empty() ? 0 : colorArraySlices[renderTargetIndex];
             uint32_t const colorMipSlice = colorMipSlices.empty() ? 0 : colorMipSlices[renderTargetIndex];
 
@@ -3326,9 +2986,9 @@ namespace EE::Render::RHI
 
             VkRenderingAttachmentInfo depthAttachment = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
             depthAttachment.imageView = pVulkanTexture->RenderTargetView( depthArraySlice, depthMipSlice );
-            // Read from the texture for the same reason as the colour targets, and it matters
-            // more here: RenderPass_DebugDraw.cpp:1342 binds a depth target it only reads, which
-            // is DEPTH_STENCIL_READ_ONLY_OPTIMAL rather than the attachment layout.
+            // Read from the texture for the same reason as the colour targets, and it matters more
+            // here: the debug draw pass binds a depth target it only reads, which is a read-only
+            // layout rather than the attachment one.
             TransitionAttachmentIfNeeded( pVulkanCommandBuffer, pVulkanTexture, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, depthArraySlice, depthMipSlice );
             depthAttachment.imageLayout = pVulkanTexture->CurrentLayout( depthMipSlice, depthArraySlice );
             depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -3355,8 +3015,8 @@ namespace EE::Render::RHI
         }
 
         pVulkanCommandBuffer->m_renderingInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
-        // Direct3D 12 has no render area; it draws wherever the viewport and scissor allow. The
-        // full extent of the attachments is the same thing, and the viewport still restricts it.
+        // D3D12 has no render area and draws wherever the viewport and scissor allow. The full
+        // extent of the attachments is the same thing, and the viewport still restricts it.
         pVulkanCommandBuffer->m_renderingInfo.renderArea.extent = renderArea;
         pVulkanCommandBuffer->m_renderingInfo.layerCount = 1;
 
@@ -3364,8 +3024,7 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_needsRenderingBegin = true;
     }
 
-    // A Direct3D shading rate is a pair of coarse pixel dimensions and so is the Vulkan one, so
-    // these two line up exactly. Read next to D3D12ShadingRate at RHI_Direct3D12.cpp:579.
+    // A D3D12 shading rate is a pair of coarse pixel dimensions and so is the Vulkan one.
     static VkExtent2D VulkanFragmentSize( ShadingRate shadingRate )
     {
         switch ( shadingRate )
@@ -3384,11 +3043,9 @@ namespace EE::Render::RHI
         return { 1, 1 };
     }
 
-    // **Four of the five combiners map and the fifth does not.** Direct3D's SUM adds the two
-    // rates and Vulkan's nearest operation, MUL, multiplies them. There is no Vulkan combiner
-    // that sums, so SUM is mapped to MUL and the two backends would disagree on it. Nothing in
-    // the engine calls CmdSetShadingRate at all, so nothing disagrees today. Written up in the
-    // P5.15 entry in Docs/Linux/Progress.md.
+    // Four of the five combiners map. D3D12's SUM adds the two rates and the nearest Vulkan
+    // operation multiplies them, so SUM maps to MUL and the two backends would disagree on it.
+    // Nothing in the engine calls CmdSetShadingRate, so nothing disagrees today.
     static VkFragmentShadingRateCombinerOpKHR VulkanShadingRateCombiner( ShadingRateCombiner combiner )
     {
         switch ( combiner )
@@ -3408,15 +3065,10 @@ namespace EE::Render::RHI
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
-        // **Both guards are the reference's, and both are false today.** `FillDeviceCapabilities`
-        // reports `ShadingRateCaps::NotSupported`, matching `RHI_Direct3D12.cpp:2178`, which
-        // reports the same with a TODO. Changing it on one backend and not the other would make
-        // Linux and Windows render the same scene differently, which acceptance criterion 7
-        // exists to catch.
-        //
-        // Turning variable rate shading on needs three things, not one. The capability line here
-        // and in the Direct3D 12 backend is the first. The second and third are below, in the
-        // per-tile branch.
+        // Both guards are false today, because FillDeviceCapabilities reports NotSupported on both
+        // backends. Changing that on one and not the other would make the two render the same scene
+        // differently. Turning variable rate shading on also needs the two things named in the
+        // per-tile branch below.
         if ( pVulkanCommandBuffer->m_shadingRateCaps.IsFlagSet( ShadingRateCaps::PerDraw ) )
         {
             EE_ASSERT( pVulkanCommandBuffer->m_vkCmdSetFragmentShadingRate != nullptr );
@@ -3435,17 +3087,12 @@ namespace EE::Render::RHI
         {
             VulkanTexture const* pVulkanTexture = static_cast<VulkanTexture const*>( pShadingRateTexture );
 
-            // Recorded, not bound. RSSetShadingRateImage is a command on Direct3D 12 and the
-            // Vulkan equivalent is an attachment of the render pass, so BeginRenderingIfPending
-            // is where it reaches the device. Mip 0 of layer 0, which is what a rate image is.
+            // Recorded, not bound. Setting a rate image is a command on D3D12 and an attachment of
+            // the render pass on Vulkan, so BeginRenderingIfPending is where it reaches the device.
             //
-            // **Two things this path still needs, and neither can be written before something
-            // creates a rate image.** CreateTexture does not set
-            // VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR, which such an image
-            // requires, and the view below is the render target view, which P5.6 only builds for
-            // a texture created with DescriptorTypeFlags::RenderTarget. A rate image wants a view
-            // of its own. Both are one small change each, and both are guesswork until there is a
-            // caller to check them against.
+            // Two things this path still needs, both guesswork until something creates a rate
+            // image: CreateTexture does not set the shading rate attachment usage bit, and the
+            // view below is the render target view, which only exists for a RenderTarget texture.
             pVulkanCommandBuffer->m_shadingRateImageView = pVulkanTexture->RenderTargetView( 0, 0 );
         }
     }
@@ -3454,18 +3101,12 @@ namespace EE::Render::RHI
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
-        // **This is where clip-space Y is inverted, and it happens exactly once.**
+        // Clip-space Y is inverted here, and exactly once. D3D12 clip space has +Y up and Vulkan
+        // has +Y down, so without this everything renders upside down. The shader compiler does
+        // not do it, and -fvk-invert-y must never be added.
         //
-        // Phase 4 decided it: the Vulkan viewport flips Y with a negative height, the shader
-        // compiler does not, and -fvk-invert-y must never be added. See the clip-space Y entry
-        // in Docs/Linux/Progress.md. Direct3D's clip space has +Y up and Vulkan's has +Y down,
-        // so without this everything renders upside down.
-        //
-        // The origin moves to the bottom of the rectangle and the height goes negative, which
-        // is the standard formulation and is what VK_KHR_maintenance1 made legal.
-        //
-        // Do not add a second flip anywhere. The other half of this decision is the front face
-        // in CreatePipeline, which accounts for the winding this reverses.
+        // Do not add a second flip anywhere. The other half of this is the front face in
+        // CreatePipeline, which accounts for the winding this reverses.
         VkViewport viewport = {};
         viewport.x = x;
         viewport.y = y + height;
@@ -3503,19 +3144,13 @@ namespace EE::Render::RHI
         VulkanPipeline* pVulkanPipeline = static_cast<VulkanPipeline*>( pPipeline );
         VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanPipeline->m_pRootSignature );
 
-        // **Null when CreatePipeline skipped a mesh pipeline on a device without
-        // VK_EXT_mesh_shader.** Nothing is bound and every draw against it is dropped, so the
-        // rest of the frame still records, submits and presents.
-        //
-        // Dropping draws is a development convenience and it says so once: a frame missing its
-        // geometry is not a rendered frame. It exists so the passes either side of the mesh path
-        // - the environment map, post process, imgui, the swapchain - can be exercised on
-        // hardware that cannot run the geometry path at all. See the P5.14 and P6.8 entries.
-        // On hardware that has mesh shaders this branch never runs.
-        // A pipeline layout change invalidates the push descriptor set, so whatever set 0 held
-        // is gone from here on.
+        // A pipeline layout change invalidates the push descriptor set, so whatever set 0 held is
+        // gone from here on.
         pVulkanCommandBuffer->m_boundRootParameterMask = 0;
 
+        // Null when CreatePipeline skipped a mesh pipeline on a device without VK_EXT_mesh_shader.
+        // Every draw against it is dropped, so the rest of the frame still records and presents.
+        // A development convenience for hardware that cannot run the geometry path at all.
         pVulkanCommandBuffer->m_boundPipelineIsNull = ( pVulkanPipeline->m_pipeline == VK_NULL_HANDLE );
         if ( pVulkanCommandBuffer->m_boundPipelineIsNull )
         {
@@ -3537,40 +3172,21 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_boundPipelineLayout = pVulkanRootSignature->m_pipelineLayout;
         pVulkanCommandBuffer->m_boundBindPoint = pVulkanPipeline->m_bindPoint;
 
-        // **A direct draw must not inherit the previous indirect draw's root argument block.**
+        // A direct draw must not inherit the previous indirect draw's root argument block.
+        // EE_IndirectRoot lives in push constants and CmdExecuteIndirect is the only thing that
+        // writes it, so it keeps whatever the last indirect call left there. An indirect-capable
+        // shader reads its root constants from the argument buffer whenever m_stride is non-zero,
+        // so a direct draw after an indirect one would read them at a stale device address.
         //
-        // `EE_IndirectRoot` lives in push constants and `CmdExecuteIndirect` is the only thing
-        // that writes it, so it keeps whatever the last indirect call left there. A shader built
-        // from an indirect-capable declaration decides which way to read its root constants on
-        // `EE_IndirectRoot.m_stride == 0` (RHI.esh, EE_DECLARE_INDIRECT_ROOT_CONSTANTS): zero
-        // means "use what was pushed", anything else means "load them from the command in the
-        // argument buffer". A direct draw recorded after an indirect one therefore read its root
-        // constants out of the *previous* call's argument buffer, at a stale device address.
-        //
-        // `DebugDraw.esf` is the shader this reaches: the debug draw pass issues an indirect draw
-        // for debug meshes and then a direct `CmdDispatchMesh` for the debug commands, both with
-        // the same shader. The direct dispatch came back with a garbage `m_numDebugDrawCommands`
-        // and garbage command addresses, and the mesh shader that ran on them never terminated -
-        // **Xid 109 CTX SWITCH TIMEOUT, which is the P7.6 editor hang.** It only bit once the
-        // editor had debug geometry to draw, which is why selecting an entity triggered it and
-        // why the engine, which submits none, never saw it.
-        //
-        // Zeroing it on every pipeline bind restores the "direct" meaning. Every draw binds a
-        // pipeline first, and CmdExecuteIndirect pushes the real block immediately before its own
-        // dispatch, so the indirect path is unaffected.
+        // Zeroing on every pipeline bind restores the "direct" meaning. Every draw binds a pipeline
+        // first, and CmdExecuteIndirect pushes the real block immediately before its own dispatch.
         IndirectRootPushConstants const directDrawRootPushConstants = {};
         vkCmdPushConstants( pVulkanCommandBuffer->m_commandBuffer, pVulkanRootSignature->m_pipelineLayout,
                             VK_SHADER_STAGE_ALL, 0, sizeof( directDrawRootPushConstants ), &directDrawRootPushConstants );
 
-        // **Heap set 1 is bound here, not in BeginCommandBuffer.**
-        //
-        // Direct3D 12 calls SetDescriptorHeaps once per command buffer, at :2917. Vulkan cannot
-        // do that: binding a pipeline whose layout differs from set N onwards disturbs every set
-        // from N up, set 0 varies per shader, so set 1 is disturbed on every pipeline-layout
-        // change. The binding model chose this spot deliberately and accepted the redundant
-        // rebind; one vkCmdBindDescriptorSets per pipeline change is a rounding error next to
-        // the alternative, which was a shader-compiler flag list tracking every register
-        // upstream ever writes. See the binding model entry in Docs/Linux/Progress.md.
+        // Heap set 1 is bound here rather than once per command buffer, because binding a pipeline
+        // whose layout differs from set N onwards disturbs every set from N up, and set 0 varies
+        // per shader. The redundant rebind is deliberate and costs almost nothing.
         vkCmdBindDescriptorSets( pVulkanCommandBuffer->m_commandBuffer, pVulkanPipeline->m_bindPoint, pVulkanRootSignature->m_pipelineLayout,
                                  g_heapSet, 1, &pVulkanRootSignature->m_heapDescriptorSet, 0, nullptr );
     }
@@ -3579,8 +3195,7 @@ namespace EE::Render::RHI
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
-        // Nothing is bound when the pipeline was dropped, so there is no layout to push against
-        // and the write would be made against a stale one. See CmdSetPipeline.
+        // A dropped pipeline bound no layout, so the write would go against a stale one.
         if ( pVulkanCommandBuffer->m_boundPipelineIsNull )
         {
             return;
@@ -3597,20 +3212,16 @@ namespace EE::Render::RHI
             return;
         }
 
-        // **Not Vulkan push constants, and this is the reason.**
-        //
-        // RHI.esh declares the block through EE_DECLARE_ROOT_CONSTANTS as
-        // "ConstantBuffer<T> RootConstants : register( b0 )", so DXC emits a uniform buffer.
-        // Turning it into a push constant block needs [[vk::push_constant]] in RHI.esh, which
-        // Phase 4 rule 4 forbids. So the constants are copied into a per-command-buffer ring and
-        // a descriptor is pushed at the copy, which is what the binding model recorded.
+        // Not Vulkan push constants. RHI.esh declares the block as a ConstantBuffer<T> on register
+        // b0, so DXC emits a uniform buffer, and turning it into a push constant block would mean
+        // editing RHI.esh. So the constants are copied into a per-command-buffer ring and a
+        // descriptor is pushed at the copy.
         VulkanBuffer* pRing = static_cast<VulkanBuffer*>( pVulkanCommandBuffer->m_pRootConstantRing );
         EE_ASSERT( pRing != nullptr && pRing->m_pMappedAddress_WriteCombined != nullptr );
 
         uint64_t const offset = pVulkanCommandBuffer->m_rootConstantRingOffset;
-        // Asserted rather than wrapped. Wrapping would overwrite constants the GPU is still
-        // reading and surface as a shader reading the wrong values, which is a miserable thing
-        // to chase.
+        // Asserted rather than wrapped. Wrapping would overwrite constants the GPU is still reading
+        // and surface as a shader reading the wrong values.
         EE_ASSERT( offset + constantSize <= g_rootConstantRingSize );
 
         memcpy( static_cast<uint8_t*>( pRing->m_pMappedAddress_WriteCombined ) + offset, pConstantData, constantSize );
@@ -3638,8 +3249,7 @@ namespace EE::Render::RHI
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
-        // Nothing is bound when the pipeline was dropped, so there is no layout to push against
-        // and the write would be made against a stale one. See CmdSetPipeline.
+        // A dropped pipeline bound no layout, so the write would go against a stale one.
         if ( pVulkanCommandBuffer->m_boundPipelineIsNull )
         {
             return;
@@ -3673,8 +3283,7 @@ namespace EE::Render::RHI
         VkDescriptorBufferInfo bufferInfo = {};
         bufferInfo.buffer = pVulkanBuffer->m_buffer;
         bufferInfo.offset = bufferOffset;
-        // VK_WHOLE_SIZE, because a Direct3D 12 root descriptor is an address with no size and
-        // this has to mean the same thing. The binding model says so explicitly.
+        // VK_WHOLE_SIZE, because a D3D12 root descriptor is an address with no size.
         bufferInfo.range = VK_WHOLE_SIZE;
 
         VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
@@ -3700,13 +3309,12 @@ namespace EE::Render::RHI
         vkCmdBindIndexBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanBuffer->m_buffer, offset, vulkanIndexType );
     }
 
-    // Every draw does the same two things first, in this order, and both matter. The barriers
-    // have to reach the device before the pass opens, because a barrier may not run inside one
-    // and because they are what put the attachments into the layouts the pass names. Then the
-    // pass opens, which CmdSetRenderTargets deliberately did not do.
-    // Returns false when the draw has to be dropped, which is a mesh pipeline on a device without
-    // VK_EXT_mesh_shader and nothing else. The barriers and the render pass are still recorded,
-    // so the rest of the frame is unaffected by the gap.
+    // The order matters: barriers may not run inside a render pass, and they are what put the
+    // attachments into the layouts the pass names. Then the pass opens, which CmdSetRenderTargets
+    // deliberately did not do.
+    //
+    // Returns false when the draw has to be dropped, which only happens for a mesh pipeline on a
+    // device without VK_EXT_mesh_shader. The barriers and the pass are recorded either way.
     static bool PrepareDraw( VulkanCommandBuffer* pVulkanCommandBuffer )
     {
         FlushBarriers( pVulkanCommandBuffer );
@@ -3747,9 +3355,9 @@ namespace EE::Render::RHI
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
-        // A dispatch may not run inside a render pass. Direct3D 12 has no such rule, so the
-        // engine does not close anything before dispatching. The pass is left rather than
-        // finished, so a draw that follows in the same pass resumes it.
+        // A dispatch may not run inside a render pass, and D3D12 has no such rule, so the engine
+        // closes nothing before dispatching. The pass is suspended rather than finished, so a draw
+        // that follows resumes it.
         FlushBarriers( pVulkanCommandBuffer );
         SuspendRendering( pVulkanCommandBuffer );
 
@@ -3763,13 +3371,12 @@ namespace EE::Render::RHI
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
 
-        // **A mesh dispatch is a draw, not a dispatch.** DispatchMesh is Direct3D's name for it;
-        // it rasterises, it runs inside a render pass, and it wants exactly what an ordinary
-        // draw wants. Leaving the pass here, the way CmdDispatchCompute does, would be wrong.
+        // A mesh dispatch is a draw despite the name: it rasterises and runs inside a render pass.
+        // Suspending the pass here, the way CmdDispatchCompute does, would be wrong.
         if ( !PrepareDraw( pVulkanCommandBuffer ) ) { return; }
 
-        // Null when the device has no VK_EXT_mesh_shader. The dropped-pipeline check above
-        // returns first on such a device, so reaching this means the pipeline was real.
+        // The dropped-pipeline check above returns first on a device with no VK_EXT_mesh_shader,
+        // so reaching this means the pipeline was real.
         EE_ASSERT( pVulkanCommandBuffer->m_vkCmdDrawMeshTasks != nullptr );
 
         EE_ASSERT( numGroupsX <= MaxDispatchSize && numGroupsY <= MaxDispatchSize && numGroupsZ <= MaxDispatchSize );
@@ -3777,30 +3384,26 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_vkCmdDrawMeshTasks( pVulkanCommandBuffer->m_commandBuffer, numGroupsX, numGroupsY, numGroupsZ );
     }
 
-    // The acceleration structure parameter has no name because it has no use: the structure the
-    // trace reads is bound through the heap handle the shader already holds, and the reference
-    // ignores its own copy of this argument at RHI_Direct3D12.cpp:3242 in the same way.
+    // The acceleration structure parameter is unnamed because it has no use: the structure the
+    // trace reads is bound through the heap handle the shader already holds. D3D12 ignores it too.
     void CmdDispatchRays( CommandBuffer* pCommandBuffer, RaytracingShaderTable* pShaderTable, AccelerationStructure*, uint32_t width, uint32_t height )
     {
         VulkanCommandBuffer*           pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
         VulkanRaytracingShaderTable*   pVulkanShaderTable = static_cast<VulkanRaytracingShaderTable*>( pShaderTable );
         VulkanBuffer const*            pVulkanShaderTableBuffer = static_cast<VulkanBuffer const*>( pVulkanShaderTable->m_pBuffer );
 
-        // **Nothing can hand this a valid table**, because no factory for one exists on either
-        // backend. See the section note above CreateAccelerationStructure.
+        // Nothing can hand this a valid table, because no factory for one exists on either backend.
         EE_ASSERT( pVulkanShaderTableBuffer != nullptr );
         EE_ASSERT( pVulkanCommandBuffer->m_vkCmdTraceRays != nullptr );
 
         VkDeviceAddress const tableStart = pVulkanShaderTableBuffer->m_deviceAddress;
 
-        // The same three regions Direct3D 12 builds at RHI_Direct3D12.cpp:3250, in the same
-        // order and at the same offsets: the ray generation record first, then the miss records,
-        // then the hit groups, all at one stride.
+        // The same three regions D3D12 builds, in the same order and at the same offsets: the ray
+        // generation record first, then the miss records, then the hit groups, all at one stride.
         VkStridedDeviceAddressRegionKHR rayGenRegion = {};
         rayGenRegion.deviceAddress = tableStart;
         rayGenRegion.stride = pVulkanShaderTable->m_maxEntrySize;
-        // A ray generation region's size has to equal its stride, which Direct3D 12 says by
-        // taking a range rather than a range and a stride.
+        // A ray generation region's size has to equal its stride.
         rayGenRegion.size = pVulkanShaderTable->m_maxEntrySize;
 
         VkStridedDeviceAddressRegionKHR missRegion = {};
@@ -3813,13 +3416,12 @@ namespace EE::Render::RHI
         hitGroupRegion.stride = pVulkanShaderTable->m_maxEntrySize;
         hitGroupRegion.size = pVulkanShaderTable->m_hitGroupRecordSize;
 
-        // Vulkan has a fourth region for callable shaders and the RHI has no concept of one, so
-        // it stays empty.
+        // Vulkan has a fourth region for callable shaders and the RHI has no concept of one.
         VkStridedDeviceAddressRegionKHR callableRegion = {};
 
         CmdSetPipeline( pCommandBuffer, pVulkanShaderTable->m_pPipeline );
 
-        // A trace is not a draw. It may not run inside a render pass, so it leaves one the way a
+        // A trace is not a draw and may not run inside a render pass, so it suspends one the way a
         // compute dispatch does.
         FlushBarriers( pVulkanCommandBuffer );
         SuspendRendering( pVulkanCommandBuffer );
@@ -3830,54 +3432,25 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Indirect draws and command signatures
     //-------------------------------------------------------------------------
-    // **The engine's command signatures cannot be expressed by a Vulkan indirect draw, and no
-    // amount of work in this file changes that.** A Direct3D 12 command signature can set root
-    // constants and bind root descriptors per command. Vulkan's indirect draws read draw
-    // arguments and nothing else, and a compute pre-pass does not help, because a pre-pass
-    // cannot bind a descriptor either.
-    //
-    // Every signature the engine builds carries both. `EngineShader.cpp:108` walks the root
-    // signature's descriptor reflections and emits one argument per root parameter before the
-    // draw argument, so one material command is laid out like this:
+    // A D3D12 command signature can set root constants and bind root descriptors per command.
+    // Vulkan indirect draws read draw arguments and nothing else, and every signature the engine
+    // builds carries both. One material command is laid out like this:
     //
     //     [ root constants   40 bytes ]   set 0 binding b0, a uniform buffer on Vulkan
     //     [ root CBV address  8 bytes ]   set 0 binding b1, a uniform buffer on Vulkan
     //     [ dispatch args    12 bytes ]   VkDispatchIndirectCommand
     //
-    // `vkCmdDrawIndirect` takes a stride, so it can read the last block out of a fat struct. It
-    // cannot rebind the first two per command, and `BucketResolve.esf:36` writes a different
-    // value into them for each command in the buffer.
-    //
-    // **So this group lands its mechanical half and refuses the rest, by decision.**
-    // `CreateCommandSignature` and `DestroyCommandSignature` are complete and record the layout
-    // any later answer needs. `CmdExecuteIndirect` is complete for a signature that carries only
-    // a draw or dispatch argument, and halts with the reason for one that carries root data.
-    // **No engine call site takes the working path today**, so nothing in the frame draws yet.
-    //
-    // Closing it needs a change on the shader side, which is Phase 4's, and there are two
-    // shapes for it. Neither is this file's to choose:
-    //
-    // - The shader reads its own command's root data by indexing the argument buffer with
-    //   `SV_DrawIndex`, which Vulkan has as core `gl_DrawID`. One indirect call then covers the
-    //   whole buffer and no extension is needed. It changes `RHI.esh` and the renderer shaders,
-    //   so all 46 stages recompile and Windows sees it too.
-    // - Root constants become Vulkan push constants and root descriptors become buffer device
-    //   addresses, driven by `VK_EXT_device_generated_commands`. That extension can set push
-    //   constants per command and still cannot bind a descriptor set, so it needs the same
-    //   shader change plus a device requirement the Phase 4 list does not have.
+    // vkCmdDrawIndirect takes a stride, so it reads the last block out of the fat struct. It
+    // cannot rebind the first two, so the push becomes a pull: the shader reads its own command
+    // out of the argument buffer, indexed by DrawIndex, and CmdExecuteIndirect says where.
 
-    // Declared here rather than with CreateCommandSignature below, because CmdExecuteIndirect
-    // reads it and is defined first.
     struct VulkanCommandSignature final : CommandSignature
     {
-        // Where the draw or dispatch argument sits inside one command. Direct3D 12 packs the
-        // root arguments ahead of it and Vulkan reads only this part, at CommandSignature::
-        // m_stride, so this is the offset the indirect call is given.
+        // Where the draw or dispatch argument sits inside one command. D3D12 packs the root
+        // arguments ahead of it, and Vulkan reads only this part.
         uint32_t                                            m_drawArgumentOffset = 0;
 
-        // True when the signature also sets root constants or binds root descriptors per
-        // command. Direct3D 12 has a command for that and Vulkan does not, so P5.17 turns the
-        // push into a pull: the shader reads its own command out of the argument buffer.
+        // True when the signature also sets root constants or binds root descriptors per command.
         bool                                                m_hasRootArguments = false;
 
         // Byte offsets of the two root blocks inside one command, for the shader to index with.
@@ -3886,31 +3459,21 @@ namespace EE::Render::RHI
         int32_t                                             m_rootCbvOffset = -1;
     };
 
-    // **An indirect draw's set 0 bindings are declared but never written, and Vulkan still wants
-    // them bound.**
+    // An indirect draw's set 0 bindings are declared but never written, and Vulkan still wants them
+    // bound. The engine binds neither on the CPU, because a D3D12 command signature would write
+    // them per command. The shader loads them from the argument buffer instead, but RHI.esh keeps
+    // the ConstantBuffer declarations - they are the direct-bind fallback, and they preserve the
+    // reflected layout the signature is built from - so the shader statically uses set 0, and
+    // Vulkan requires a statically used binding to be bound.
     //
-    // A Direct3D 12 command signature writes the root constants and binds the root CBV per
-    // command as the GPU walks the argument buffer, so the engine binds neither on the CPU:
-    // RenderPass_ForwardShading.cpp calls CmdSetRootConstants with a **null** pointer, which the
-    // reference treats as a no-op, and never calls CmdSetRootParameter for the root CBV at all.
+    // So the gaps are filled with the root constant ring every command buffer already owns. The
+    // contents are undefined and unread, because the shader takes the argument buffer branch here.
     //
-    // P5.17 moved those reads into the shader, which loads them out of the argument buffer. But
-    // RHI.esh keeps the ConstantBuffer declarations on purpose - they are the direct-bind
-    // fallback, and they preserve the reflected layout the command signature is built from - so
-    // the shader **statically** uses set 0. Vulkan requires a statically used binding to be
-    // bound, whether or not the shader reaches it at runtime.
+    // Only the bindings the engine did not write, and only on an indirect draw. A direct draw gets
+    // no such help, so a genuinely forgotten binding still fails validation there.
     //
-    // So the gaps are filled here, pointing at the root constant ring, which every command buffer
-    // already owns. The contents are undefined and unread: on this path
-    // EE_IndirectRoot.m_stride is non-zero, so the shader takes the argument buffer branch.
-    // Undefined-and-unread is what Direct3D 12 leaves in those root arguments too.
-    //
-    // **Only the bindings the engine did not write, and only on an indirect draw.** A direct draw
-    // gets no such help, so a genuinely forgotten binding still fails validation there rather
-    // than quietly reading the ring.
-    //
-    // Nothing here consumes ring space. Reserving a block per indirect draw would burn a 64KB
-    // ring that asserts rather than wraps, for bytes nothing reads.
+    // No ring space is consumed. Reserving a block per indirect draw would burn a ring that asserts
+    // rather than wraps, for bytes nothing reads.
     static void BindUnboundRootParameters( VulkanCommandBuffer* pVulkanCommandBuffer )
     {
         VulkanRootSignature const* pVulkanRootSignature = static_cast<VulkanRootSignature const*>( pVulkanCommandBuffer->m_pBoundRootSignature );
@@ -3931,9 +3494,8 @@ namespace EE::Render::RHI
 
             VkDescriptorSetLayoutBinding const& binding = pVulkanRootSignature->m_rootParameterBindings[parameterIndex];
 
-            // A sampler cannot be pointed at a buffer. No shader puts one in set 0 today - the
-            // binding model routes samplers through the heap - and CreateRootSignature's static
-            // sampler path already halts if one appears, so this is a guard and not a gap.
+            // A sampler cannot be pointed at a buffer. Samplers go through the heap, so no shader
+            // puts one in set 0, and this is a guard rather than a gap.
             if ( binding.descriptorType != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER &&
                  binding.descriptorType != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER )
             {
@@ -3978,13 +3540,8 @@ namespace EE::Render::RHI
         EE_ASSERT( ( pVulkanIndirectBuffer->m_stride % IndirectCommandAlignment ) == 0 );
         EE_ASSERT( pVulkanIndirectBuffer->m_stride == pVulkanCommandSignature->m_stride );
 
-        // **The push becomes a pull.** A Direct3D 12 command signature writes root constants and
-        // binds a root CBV as the GPU walks the argument buffer, and no Vulkan indirect draw
-        // rebinds anything per command. So the shader reads its own command instead, and this is
-        // where it is told where to look. See P5.17 and the open question 7 decision entry.
-        //
-        // Pushed for every signature, not only the ones with root arguments, so a shader built
-        // from an indirect-capable declaration reads a defined block either way.
+        // Where the shader looks for its own command. Pushed for every signature, not only the ones
+        // with root arguments, so an indirect-capable shader reads a defined block either way.
         if ( pVulkanCommandSignature->m_hasRootArguments )
         {
             EE_ASSERT( pVulkanIndirectBuffer->m_deviceAddress != 0 );
@@ -4009,9 +3566,8 @@ namespace EE::Render::RHI
             BindUnboundRootParameters( pVulkanCommandBuffer );
         }
 
-        // **A draw stays inside the render pass and a dispatch may not.** This corrects what
-        // P5.10 recorded as owed here, which said to leave the pass in both cases: an indirect
-        // draw wants exactly what PrepareDraw gives an ordinary one.
+        // A draw stays inside the render pass and a dispatch may not, so an indirect draw wants
+        // exactly what PrepareDraw gives an ordinary one.
         bool const isDraw = pVulkanCommandSignature->m_argumentType == IndirectArgumentType::Draw ||
                             pVulkanCommandSignature->m_argumentType == IndirectArgumentType::DrawIndexed ||
                             pVulkanCommandSignature->m_argumentType == IndirectArgumentType::DispatchMesh;
@@ -4062,19 +3618,15 @@ namespace EE::Render::RHI
 
             case IndirectArgumentType::DispatchCompute:
             {
-                // **vkCmdDispatchIndirect runs exactly one dispatch and reads no count buffer**,
-                // where Direct3D 12 runs min( maxNumCommands, count ) of them. There is no
-                // indirect dispatch count in Vulkan at all, so the count is spent on the CPU:
-                // one dispatch is recorded per possible command, each at its own offset, each
-                // with its own command index pushed. A draw gets its index from DrawIndex; a
-                // dispatch has no such builtin, which is why this is the loop and the draws are
-                // not. See P5.17.
+                // vkCmdDispatchIndirect runs exactly one dispatch and reads no count buffer, where
+                // D3D12 runs min( maxNumCommands, count ). Vulkan has no indirect dispatch count at
+                // all, so the count is spent on the CPU: one dispatch per possible command, each at
+                // its own offset with its own command index pushed. A draw gets its index from
+                // DrawIndex; a dispatch has no such builtin, which is why only this case loops.
                 //
-                // **A command past the GPU-written count reads a stale slot**, because nothing
-                // resets the argument buffer between frames - Direct3D 12 never needed it to,
-                // since the count stops it there. The engine clears the buffer for us; see the
-                // clear next to the counter clears in Renderer_ForwardShading.cpp. An unwritten
-                // slot is then a (0,0,0) dispatch, which is a legal no-op.
+                // A command past the GPU-written count reads a stale slot, because nothing resets
+                // the argument buffer between frames. The engine clears it, so an unwritten slot is
+                // a (0,0,0) dispatch, which is a legal no-op.
                 if ( maxNumCommands <= 1 )
                 {
                     vkCmdDispatchIndirect( pVulkanCommandBuffer->m_commandBuffer, pVulkanIndirectBuffer->m_buffer, argumentOffset );
@@ -4125,9 +3677,8 @@ namespace EE::Render::RHI
 
             case IndirectArgumentType::DispatchRays:
             {
-                // **vkCmdTraceRaysIndirect2KHR takes one address and no count**, so it runs
-                // exactly one trace where Direct3D 12 runs min( maxNumCommands, count ). Same
-                // shape as the compute case above, and refused the same way.
+                // vkCmdTraceRaysIndirect2KHR takes one address and no count, so it runs exactly one
+                // trace where D3D12 runs min( maxNumCommands, count ).
                 EE_ASSERT( pVulkanCommandBuffer->m_vkCmdTraceRaysIndirect2 != nullptr );
                 EE_ASSERT( pVulkanCounterBuffer == nullptr );
                 EE_ASSERT( maxNumCommands == 1 );
@@ -4143,35 +3694,25 @@ namespace EE::Render::RHI
         }
     }
 
-    // Copies and clears, and the four things they all have to do first. The commands themselves
-    // are further down, in the order RHI.h declares them; these helpers sit here because the two
-    // clears are the first callers.
-
-    // A copy and a clear are transfer commands, and Vulkan lets neither run inside dynamic
-    // rendering. Direct3D 12 has no such rule, so the engine closes nothing before either. This
-    // is the same pair CmdDispatchCompute makes, in the same order: a barrier the transfer
-    // depends on has to reach the device before the transfer does, and the flush is what leaves
-    // the render pass.
+    // A copy and a clear are transfer commands, and neither may run inside dynamic rendering.
+    // D3D12 has no such rule, so the engine closes nothing before either. The order matters: a
+    // barrier the transfer depends on has to reach the device before the transfer does.
     static void PrepareTransfer( VulkanCommandBuffer* pVulkanCommandBuffer )
     {
         FlushBarriers( pVulkanCommandBuffer );
         SuspendRendering( pVulkanCommandBuffer );
     }
 
-    // **The engine never barriers a texture into a copy layout, because Direct3D 12 has none.**
-    // A texture that is copied to is created in TextureState::Common - RenderSystem.cpp:650
-    // asserts exactly that - and D3D12_BARRIER_LAYOUT_COMMON is already a legal copy source,
-    // copy destination and unordered access view clear target. Vulkan needs GENERAL or one of
-    // the TRANSFER layouts, and the image is still in the VK_IMAGE_LAYOUT_UNDEFINED that
-    // vkCreateImage gave it, because nothing has barriered it yet. See
-    // VulkanTexture's subresource layout table, which P5.6 wrote for this.
+    // The engine never barriers a texture into a copy layout, because D3D12 has none: a texture it
+    // copies to is created in TextureState::Common, which is already a legal copy target there.
+    // Vulkan needs GENERAL or a TRANSFER layout, and the image is still UNDEFINED.
     //
-    // GENERAL, not TRANSFER_DST_OPTIMAL, so that the engine's belief stays true. The next
-    // barrier the engine records on this texture names TextureState::Common as its source,
-    // Common is GENERAL, and CmdBarrier asserts that the two agree.
+    // GENERAL, not TRANSFER_DST_OPTIMAL, so the engine's belief stays true. The next barrier it
+    // records names TextureState::Common as the source, Common is GENERAL, and CmdBarrier asserts
+    // the two agree.
     //
-    // The texture is const because RHI.h passes it that way to every copy. The layout it is in
-    // is not part of what the caller sees, so recording the change is not a change to it.
+    // The texture is const because RHI.h passes it that way to every copy. Its layout is not part
+    // of what the caller sees, so recording the change is not a change to it.
     static void TransitionTextureForTransfer( VulkanCommandBuffer* pVulkanCommandBuffer, VulkanTexture const* pVulkanTexture )
     {
         if ( pVulkanTexture->CurrentLayout() == VK_IMAGE_LAYOUT_GENERAL )
@@ -4179,8 +3720,8 @@ namespace EE::Render::RHI
             return;
         }
 
-        // Any other layout means the engine moved this texture somewhere and then copied it with
-        // no barrier in between, which Direct3D 12 would not accept either.
+        // Any other layout means the engine moved this texture and then copied it with no barrier
+        // in between, which D3D12 would not accept either.
         EE_ASSERT( pVulkanTexture->CurrentLayout() == VK_IMAGE_LAYOUT_UNDEFINED );
 
         VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
@@ -4204,15 +3745,12 @@ namespace EE::Render::RHI
         const_cast<VulkanTexture*>( pVulkanTexture )->SetLayout( VK_IMAGE_LAYOUT_GENERAL, 0, pVulkanTexture->m_mipLevels, 0, pVulkanTexture->m_arrayLayers );
     }
 
-    // **A Direct3D 12 clear is a shader write and a Vulkan clear is a transfer write, and the
-    // engine barriers for the first one.** Renderer_ForwardShading.cpp:753 follows its clears
-    // with ResourceAccess::UnorderedAccess as the source, which is a shader storage write and
-    // does not cover vkCmdFillBuffer at all, so the cleared counters would be read stale. The
-    // clear therefore records the transfer half of its own visibility barrier. It is batched
-    // like every other barrier and reaches the device with them at the next dispatch.
+    // A D3D12 clear is a shader write and a Vulkan clear is a transfer write, and the engine
+    // barriers for the first one. Its barrier names a shader storage write as the source, which
+    // does not cover vkCmdFillBuffer, so the cleared counters would be read stale. The clear
+    // records the transfer half of its own visibility barrier instead.
     //
-    // ALL_COMMANDS on the destination, listed in Docs/Linux/Progress.md as a site to narrow:
-    // nothing here knows what reads the cleared resource next.
+    // ALL_COMMANDS on the destination, because nothing here knows what reads the resource next.
     static void RecordClearVisibilityBarrier( VulkanCommandBuffer* pVulkanCommandBuffer )
     {
         VkMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
@@ -4224,9 +3762,8 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_globalBarriers.emplace_back( barrier );
     }
 
-    // One aspect per copy. TextureCopyRegion has no plane index, and Direct3D 12 builds its
-    // subresource index with plane 0 at RHI_Direct3D12.cpp:3547, which is the depth plane of a
-    // depth-stencil texture.
+    // One aspect per copy. TextureCopyRegion has no plane index, and D3D12 builds its subresource
+    // index with plane 0, which is the depth plane of a depth-stencil texture.
     static VkImageAspectFlags TransferAspectMask( VulkanTexture const* pVulkanTexture )
     {
         if ( ( pVulkanTexture->m_aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT ) != 0 )
@@ -4237,18 +3774,16 @@ namespace EE::Render::RHI
         return pVulkanTexture->m_aspectMask;
     }
 
-    // A buffer image copy takes its row length in texels and the engine lays its rows out at the
-    // byte stride GetTextureCopyRowStride reports, so this converts the one into the other.
-    // That function's own comment names this conversion as P5.10's obligation.
+    // A buffer image copy takes its row length in texels, and the engine lays its rows out at the
+    // byte stride GetTextureCopyRowStride reports.
     static uint32_t CopyRowLengthInTexels( VulkanTexture const* pVulkanTexture, uint32_t mipLevel, uint32_t arrayLayer )
     {
         uint32_t const rowStride = GetTextureCopyRowStride( pVulkanTexture, mipLevel, arrayLayer );
         uint32_t const blockByteSize = FormatBlockBitSize( pVulkanTexture->m_format ) / 8;
 
-        // A row length is a whole number of blocks or it cannot be expressed at all. The stride
-        // is one for every format the engine uploads: ComputeFormatRowStride multiplies by the
-        // block size, and the alignment GetTextureCopyRowStride then rounds up to is a power of
-        // two, as is every block size. A 96-bit format would break it, and nothing uses one.
+        // A row length is a whole number of blocks or it cannot be expressed at all. It is one for
+        // every format the engine uploads, because both the block size and the row alignment are
+        // powers of two. A 96-bit format would break it, and nothing uses one.
         EE_ASSERT( ( rowStride % blockByteSize ) == 0 );
 
         return ( rowStride / blockByteSize ) * FormatBlockWidth( pVulkanTexture->m_format );
@@ -4265,18 +3800,16 @@ namespace EE::Render::RHI
         TransitionTextureForTransfer( pVulkanCommandBuffer, pVulkanTexture );
         PrepareTransfer( pVulkanCommandBuffer );
 
-        // **The two backends read the clear value differently, and nothing calls this today.**
-        // ClearUnorderedAccessViewUint writes the raw bits through a typed view, and
-        // vkCmdClearColorImage converts the value to the image format, so the two agree on an
-        // integer format and disagree on a normalised one. Recorded in Docs/Linux/Progress.md.
+        // The two backends read the clear value differently: D3D12 writes the raw bits through a
+        // typed view, and vkCmdClearColorImage converts to the image format. They agree on an
+        // integer format and disagree on a normalised one. Nothing calls this today.
         VkClearColorValue vulkanClearValue = {};
         vulkanClearValue.uint32[0] = clearValue;
         vulkanClearValue.uint32[1] = clearValue;
         vulkanClearValue.uint32[2] = clearValue;
         vulkanClearValue.uint32[3] = clearValue;
 
-        // Direct3D 12 clears one view per mip level. One Vulkan subresource range covers them
-        // all, and the array layers with them.
+        // D3D12 clears one view per mip level. One subresource range covers every mip and layer.
         VkImageSubresourceRange range = {};
         range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         range.baseMipLevel = 0;
@@ -4299,11 +3832,9 @@ namespace EE::Render::RHI
 
         PrepareTransfer( pVulkanCommandBuffer );
 
-        // vkCmdFillBuffer repeats one 32-bit value over the whole buffer, and
-        // ClearUnorderedAccessViewUint with four identical components does the same thing to
-        // every 32-bit component of the view. The two agree for every buffer the engine clears,
-        // which are counters and 32-bit typed buffers. They would disagree on a 16-bit format.
-        // VK_WHOLE_SIZE rounds the size down to a multiple of 4, which is what a fill needs.
+        // vkCmdFillBuffer repeats one 32-bit value over the whole buffer, which agrees with D3D12
+        // for every buffer the engine clears: counters and 32-bit typed buffers. A 16-bit format
+        // would disagree. VK_WHOLE_SIZE rounds down to a multiple of 4, which is what a fill needs.
         vkCmdFillBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanBuffer->m_buffer, 0, VK_WHOLE_SIZE, clearValue );
 
         RecordClearVisibilityBarrier( pVulkanCommandBuffer );
@@ -4319,9 +3850,7 @@ namespace EE::Render::RHI
         // every copy and clear takes.
         PrepareTransfer( pVulkanCommandBuffer );
 
-        // The bottom levels the caller named, then every top level, which is the order the
-        // reference builds them in at RHI_Direct3D12.cpp:3355 and :3378. A top level reads the
-        // bottom levels it references, so the order matters.
+        // Bottom levels first, then top levels: a top level reads the bottom levels it references.
         for ( uint32_t const bottomLevelIndex : bottomLevelAccelerationStructureIndices )
         {
             EE_ASSERT( bottomLevelIndex < accelerationStructures.size() );
@@ -4348,9 +3877,8 @@ namespace EE::Render::RHI
             VulkanBuffer const* pVulkanScratchBuffer = static_cast<VulkanBuffer const*>( pVulkanAccelerationStructure->m_pScratchBuffer );
             VulkanBuffer const* pVulkanInstanceBuffer = static_cast<VulkanBuffer const*>( pVulkanAccelerationStructure->m_pInstanceBuffer );
 
-            // **The reference crashes here and this does not.** RHI_Direct3D12.cpp:3981 has the
-            // line that fills in m_instanceBuffer commented out, and :3390 then dereferences it.
-            // CreateAccelerationStructure records the buffer, so there is one to read.
+            // The D3D12 backend crashes here and this does not: it never fills in its instance
+            // buffer and then dereferences it. CreateAccelerationStructure records ours.
             EE_ASSERT( pVulkanInstanceBuffer != nullptr );
 
             VkAccelerationStructureGeometryKHR topLevelGeometry = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
@@ -4379,41 +3907,32 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Barriers
     //-------------------------------------------------------------------------
-    // synchronization2, which is core in 1.3. The three CmdBarrier overloads mirror Direct3D
-    // 12's enhanced barriers one for one, including the batching: a barrier is recorded on the
-    // command buffer and the whole set goes to the device in one vkCmdPipelineBarrier2 at the
-    // next draw, dispatch or EndCommandBuffer, exactly as RHI_Direct3D12.cpp:1586 does it.
+    // The three CmdBarrier overloads mirror D3D12's enhanced barriers one for one, including the
+    // batching: barriers are recorded on the command buffer and the whole set reaches the device in
+    // one vkCmdPipelineBarrier2 at the next draw, dispatch or EndCommandBuffer.
     //
-    // The phase document says to avoid reaching for ALL_COMMANDS and MEMORY_READ|WRITE
-    // everywhere. Two entries below are that broad and both are recorded in Progress.md:
-    // PipelineStage::All, which means exactly ALL_COMMANDS, and ResourceAccess::Common, which is
-    // Direct3D's "any access" and has no narrower Vulkan spelling.
+    // Two mappings below are deliberately broad, because nothing narrower says the same thing:
+    // PipelineStage::All means exactly ALL_COMMANDS, and ResourceAccess::Common is D3D12's
+    // "any access".
 
     static VkPipelineStageFlags2 VulkanPipelineStage( TBitFlags<PipelineStage> pipelineStages )
     {
-        // The early return mirrors RHI_Direct3D12.cpp:617. "All" is not one bit among many; it
-        // is the answer.
+        // All is not one bit among many, it is the answer.
         if ( pipelineStages.IsFlagSet( PipelineStage::All ) ) { return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; }
 
         VkPipelineStageFlags2 stageMask = VK_PIPELINE_STAGE_2_NONE;
 
-        // D3D12_BARRIER_SYNC_DRAW is every stage a draw runs through, which is what
-        // ALL_GRAPHICS means here. It covers the depth test stages, and the engine relies on
-        // that: a depth target is transitioned with PipelineStage::Draw, never with a depth
-        // stage of its own.
+        // ALL_GRAPHICS covers the depth test stages, and the engine relies on that: a depth target
+        // is transitioned with PipelineStage::Draw, never with a depth stage of its own.
         if ( pipelineStages.IsFlagSet( PipelineStage::Draw ) ) { stageMask |= VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT; }
         if ( pipelineStages.IsFlagSet( PipelineStage::PixelShader ) ) { stageMask |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT; }
-        // D3D12_BARRIER_SYNC_NON_PIXEL_SHADING includes compute, so this does too. The task and
-        // mesh stage bits go in with it, but only when VK_EXT_mesh_shader is enabled: naming a
-        // stage from a disabled extension is a validation error. Without them, a barrier before
-        // a mesh draw would not cover the stage that reads the result.
+        // D3D12's non-pixel shading includes compute, so this does too. The task and mesh bits go
+        // in only when the extension is enabled, because naming a stage from a disabled extension
+        // is a validation error, and without them a barrier before a mesh draw would not cover the
+        // stage that reads the result.
         //
-        // **No tessellation or geometry stage**, for the same reason and permanently. Both are
-        // optional Vulkan features, CreateContext enables neither, and naming a stage from a
-        // disabled feature is the same validation error. The engine has no tessellation or
-        // geometry shader for a barrier to wait on either - no .esf declares one - so there is
-        // nothing to synchronise. If one ever appears, the feature and these bits go in
-        // together. Direct3D 12 has nothing to switch on, so the reference lists them freely.
+        // No tessellation or geometry stage, for the same reason and permanently: both are optional
+        // features that CreateContext does not enable, and no shader in the engine declares either.
         if ( pipelineStages.IsFlagSet( PipelineStage::NonPixelShader ) )
         {
             stageMask |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -4434,23 +3953,19 @@ namespace EE::Render::RHI
                 stageMask |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
             }
         }
-        // ALL_TRANSFER rather than COPY, because Direct3D's SYNC_COPY sits next to SYNC_CLEAR
-        // and SYNC_RESOLVE and the RHI has no separate flag for either, so a clear arrives here
-        // as Copy. P5.10 records its clears against this.
+        // ALL_TRANSFER rather than COPY, because the RHI has no separate flag for a clear or a
+        // resolve, so both arrive here as Copy.
         if ( pipelineStages.IsFlagSet( PipelineStage::Copy ) ) { stageMask |= VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT; }
         if ( pipelineStages.IsFlagSet( PipelineStage::ExecuteIndirect ) ) { stageMask |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT; }
 
-        // The four below name stages that only exist once their extension is enabled, and none
-        // of the three extensions is. Nothing can reach them: P5.16 owns raytracing, and no
-        // video queue exists. They are mapped rather than left out so that the group that
-        // enables the extension finds the mapping already correct.
+        // These name stages that only exist once their extension is enabled, and nothing can reach
+        // them today. Mapped rather than left out, so whoever enables an extension finds it correct.
         if ( pipelineStages.IsFlagSet( PipelineStage::Raytracing ) ) { stageMask |= VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR; }
         if ( pipelineStages.IsFlagSet( PipelineStage::BuildAccelerationStructure ) ) { stageMask |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR; }
         if ( pipelineStages.IsFlagSet( PipelineStage::CopyAccelerationStructure ) ) { stageMask |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR; }
         if ( pipelineStages.IsFlagSet( PipelineStage::VideoDecode ) ) { stageMask |= VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR; }
         if ( pipelineStages.IsFlagSet( PipelineStage::VideoEncode ) ) { stageMask |= VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR; }
-        // Vulkan has no video processing stage at all. Direct3D 12 has a whole video process
-        // queue type; there is nothing to map it to, and nothing asks for it.
+        // Vulkan has no video processing stage at all, so there is nothing to map D3D12's onto.
 
         return stageMask;
     }
@@ -4459,13 +3974,10 @@ namespace EE::Render::RHI
     {
         VkAccessFlags2 accessMask = VK_ACCESS_2_NONE;
 
-        // D3D12_BARRIER_ACCESS_COMMON is "any access", and Vulkan spells that MEMORY_READ plus
-        // MEMORY_WRITE. It is the broad mapping the phase document warns about, and it is also
-        // the honest one: DeviceTextureState starts every texture at ResourceAccess::Common, so
-        // this is what the first barrier on any texture uses as its source.
+        // D3D12's "any access", which Vulkan spells MEMORY_READ plus MEMORY_WRITE. Broad, but every
+        // texture starts at Common, so this is what the first barrier on one uses as its source.
         if ( resourceAccess.IsFlagSet( ResourceAccess::Common ) ) { accessMask |= VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT; }
-        // Direct3D 12 maps Present onto COMMON. A Vulkan presentation engine read needs no
-        // access bits at all, only the PRESENT_SRC layout, so NONE is both correct and narrower.
+        // A presentation engine read needs no access bits at all, only the PRESENT_SRC layout.
         if ( resourceAccess.IsFlagSet( ResourceAccess::Present ) ) { accessMask |= VK_ACCESS_2_NONE; }
         if ( resourceAccess.IsFlagSet( ResourceAccess::ConstantBuffer ) ) { accessMask |= VK_ACCESS_2_UNIFORM_READ_BIT; }
         if ( resourceAccess.IsFlagSet( ResourceAccess::IndexBuffer ) ) { accessMask |= VK_ACCESS_2_INDEX_READ_BIT; }
@@ -4473,8 +3985,8 @@ namespace EE::Render::RHI
         if ( resourceAccess.IsFlagSet( ResourceAccess::UnorderedAccess ) ) { accessMask |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT; }
         if ( resourceAccess.IsFlagSet( ResourceAccess::DepthWrite ) ) { accessMask |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; }
         if ( resourceAccess.IsFlagSet( ResourceAccess::DepthRead ) ) { accessMask |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT; }
-        // A Direct3D shader resource view covers both a sampled texture and a read-only
-        // structured buffer, and Vulkan splits those into two access bits.
+        // A D3D12 shader resource view covers a sampled texture and a read-only structured buffer,
+        // and Vulkan splits those into two access bits.
         if ( resourceAccess.IsFlagSet( ResourceAccess::ShaderResource ) ) { accessMask |= VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT; }
         if ( resourceAccess.IsFlagSet( ResourceAccess::IndirectArgument ) ) { accessMask |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT; }
         if ( resourceAccess.IsFlagSet( ResourceAccess::CopyDestination ) ) { accessMask |= VK_ACCESS_2_TRANSFER_WRITE_BIT; }
@@ -4486,25 +3998,21 @@ namespace EE::Render::RHI
         if ( resourceAccess.IsFlagSet( ResourceAccess::VideoDecodeWrite ) ) { accessMask |= VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR; }
         if ( resourceAccess.IsFlagSet( ResourceAccess::VideoEncodeRead ) ) { accessMask |= VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR; }
         if ( resourceAccess.IsFlagSet( ResourceAccess::VideoEncodeWrite ) ) { accessMask |= VK_ACCESS_2_VIDEO_ENCODE_WRITE_BIT_KHR; }
-        // VideoProcessRead and VideoProcessWrite have no Vulkan equivalent, for the same reason
-        // PipelineStage::VideoProcess has none.
+        // VideoProcessRead and VideoProcessWrite have no Vulkan equivalent.
 
         return accessMask;
     }
 
-    // A TextureState is a Direct3D barrier layout, and this is its Vulkan one. The texture is
-    // needed because one state does not answer on its own: see the ShaderResource case.
+    // The texture is needed because one state does not answer on its own; see ShaderResource.
     static VkImageLayout VulkanImageLayout( TextureState textureState, VulkanTexture const* pVulkanTexture )
     {
         switch ( textureState )
         {
             case TextureState::Undefined: return VK_IMAGE_LAYOUT_UNDEFINED;
-            // D3D12_BARRIER_LAYOUT_COMMON allows any access, and GENERAL is the Vulkan layout
-            // that does.
+            // D3D12's Common allows any access, and GENERAL is the Vulkan layout that does.
             case TextureState::Common: return VK_IMAGE_LAYOUT_GENERAL;
-            // **Not always SHADER_READ_ONLY_OPTIMAL.** P5.6 wrote the sampled descriptor with
-            // the texture's m_shaderReadLayout, which is GENERAL when the texture is also an
-            // RWTexture, and a descriptor's layout has to match the layout the image is in.
+            // Not always SHADER_READ_ONLY_OPTIMAL: the sampled descriptor was written with
+            // m_shaderReadLayout, and a descriptor's layout has to match the image's.
             case TextureState::ShaderResource: return pVulkanTexture->m_shaderReadLayout;
             case TextureState::UnorderedAccess: return VK_IMAGE_LAYOUT_GENERAL;
             case TextureState::Present: return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
@@ -4525,9 +4033,8 @@ namespace EE::Render::RHI
         return VK_IMAGE_LAYOUT_UNDEFINED;
     }
 
-    // A stage mask of NONE may carry no access bits. The two are built from independent
-    // arguments, so a caller can produce an empty sync with a non-empty access, and the queue
-    // filtering below can produce one too.
+    // A stage mask of NONE may carry no access bits, and the two are built from independent
+    // arguments, so a caller can produce an empty sync with a non-empty access.
     static void NormalizeBarrierMasks( VkPipelineStageFlags2 stageMask, VkAccessFlags2& accessMask )
     {
         if ( stageMask == VK_PIPELINE_STAGE_2_NONE )
@@ -4536,10 +4043,8 @@ namespace EE::Render::RHI
         }
     }
 
-    // Copied from RHI_Direct3D12.cpp:3408, TODO comment and all: the graphics-only stages are
-    // dropped from the source on a queue that has no such stages, and asserted absent from the
-    // destination. Vulkan is stricter than Direct3D here, so this is not optional; naming a
-    // graphics stage in a barrier on a compute queue is a validation error.
+    // Copied from the D3D12 backend, TODO comment and all. Vulkan is stricter, so this is not
+    // optional here: naming a graphics stage in a barrier on a compute queue is a validation error.
     static void ClearGraphicsOnlyStages( VulkanCommandBuffer const* pVulkanCommandBuffer, TBitFlags<PipelineStage>& sourceSync, TBitFlags<PipelineStage> destinationSync )
     {
         if ( pVulkanCommandBuffer->m_pQueue->m_queueType != QueueType::Graphics )
@@ -4549,29 +4054,17 @@ namespace EE::Render::RHI
         }
     }
 
-    // Everything recorded since the last flush, in one call. Called by every draw, every
-    // dispatch and EndCommandBuffer, which are the points Direct3D 12 flushes at too.
-    // **A Vulkan barrier may only name stages its queue family can run, and a Direct3D 12 one
-    // has no such rule.** The engine transitions a resource on whichever queue happens to own
-    // the work, describing the stage that will read it next, and that reader is often on another
-    // queue: Renderer_ForwardShading barriers a buffer for a vertex shader from the compute
-    // queue. D3D12_BARRIER_SYNC_* carries no queue restriction, so upstream is not wrong.
+    // A Vulkan barrier may only name stages its queue family can run, and a D3D12 one has no such
+    // rule. The engine transitions a resource on whichever queue owns the work, naming the stage
+    // that reads it next, and that reader is often on another queue. Only a device with dedicated
+    // families notices, which is why an iGPU with one universal family never sees this.
     //
-    // Only a device with dedicated families notices. The RTX 3090 has a transfer-only family and
-    // a compute-only one, and vkCmdPipelineBarrier2 rejects a graphics stage on either
-    // (VUID-vkCmdPipelineBarrier2-dstStageMask-03850). An Intel iGPU exposing one universal
-    // family accepts everything, which is why this went unseen until Phase 6 ran on an NVIDIA
-    // part.
-    //
-    // **Dropping the stages the queue cannot run is correct, not a workaround.** A barrier
-    // orders work within one queue. Making a compute write visible to a vertex shader on the
-    // graphics queue is a queue-to-queue dependency, and that is already carried by the timeline
-    // semaphore every submit waits on - see RecordQueueOrderingWait and the P5.3 entry. The
-    // barrier's job here is only the part that happens on this queue.
+    // Dropping the stages the queue cannot run is correct, not a workaround. A barrier orders work
+    // within one queue; the cross-queue half of the dependency is already carried by the timeline
+    // semaphore every submit waits on. See RecordQueueOrderingWait.
     static VkPipelineStageFlags2 ClampStagesToQueue( VkPipelineStageFlags2 stageMask, VkQueueFlags queueFlags )
     {
-        // ALL_COMMANDS is defined as every stage the queue supports, so it is legal everywhere
-        // and needs no clamping. VulkanPipelineStage returns it alone for PipelineStage::All.
+        // ALL_COMMANDS is every stage the queue supports, so it is legal everywhere already.
         if ( stageMask == VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT ) { return stageMask; }
 
         if ( !( queueFlags & VK_QUEUE_GRAPHICS_BIT ) )
@@ -4598,11 +4091,9 @@ namespace EE::Render::RHI
             stageMask &= ~VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
         }
 
-        // **Every named stage was dropped, and the access mask is still set.** An access bit
-        // requires a compatible stage, so NONE here would be a fresh validation error rather
-        // than a fix. ALL_COMMANDS satisfies any access mask and is legal on this queue, and
-        // over-synchronising one barrier is the safe direction. It joins the ALL_COMMANDS sites
-        // in Docs/Linux/Progress.md.
+        // Every named stage was dropped and the access mask is still set. An access bit requires a
+        // compatible stage, so NONE would be a fresh validation error rather than a fix.
+        // ALL_COMMANDS satisfies any access mask, and over-synchronising is the safe direction.
         if ( stageMask == VK_PIPELINE_STAGE_2_NONE ) { return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; }
 
         return stageMask;
@@ -4617,9 +4108,8 @@ namespace EE::Render::RHI
             return;
         }
 
-        // Clamped here rather than in VulkanPipelineStage, because that function is handed no
-        // command buffer and so cannot know the queue. This is the one place every barrier
-        // passes through on its way to the device.
+        // Clamped here because VulkanPipelineStage is handed no command buffer and cannot know the
+        // queue. This is the one place every barrier passes through on its way to the device.
         VkQueueFlags const queueFlags = pVulkanCommandBuffer->m_queueFlags;
 
         for ( VkMemoryBarrier2& barrier : pVulkanCommandBuffer->m_globalBarriers )
@@ -4640,9 +4130,8 @@ namespace EE::Render::RHI
             barrier.dstStageMask = ClampStagesToQueue( barrier.dstStageMask, queueFlags );
         }
 
-        // **A barrier may not run inside dynamic rendering.** This is the one place that has to
-        // know it, which is why every other caller goes through the flush rather than reaching
-        // for the render pass itself. The pass resumes at the next draw.
+        // A barrier may not run inside dynamic rendering. This is the one place that has to know
+        // it, which is why every other caller goes through the flush. The pass resumes at the next draw.
         SuspendRendering( pVulkanCommandBuffer );
 
         VkDependencyInfo dependencyInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
@@ -4690,9 +4179,8 @@ namespace EE::Render::RHI
         barrier.dstStageMask = VulkanPipelineStage( destinationSync );
         barrier.srcAccessMask = VulkanAccess( sourceAccess );
         barrier.dstAccessMask = VulkanAccess( destinationAccess );
-        // No queue ownership transfer. CreateBuffer and CreateTexture give a resource
-        // CONCURRENT sharing across every family the context uses, which is what a Direct3D 12
-        // resource has: none. See the sharing mode helper in CreateContext.
+        // No queue ownership transfer: every resource is created CONCURRENT across the families the
+        // context uses, which is what a D3D12 resource effectively has. See SetSharingMode.
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.buffer = pVulkanBuffer->m_buffer;
@@ -4718,27 +4206,17 @@ namespace EE::Render::RHI
         barrier.srcAccessMask = VulkanAccess( sourceAccess );
         barrier.dstAccessMask = VulkanAccess( destinationAccess );
 
-        // **The old layout comes from the texture, not from sourceState.** This is P5.6's first
-        // obligation: vkCreateImage only accepts VK_IMAGE_LAYOUT_UNDEFINED, so a texture the
-        // engine believes is already in its m_initialState is in fact in UNDEFINED until the
-        // first barrier moves it. The caller's belief is asserted against the truth below rather
-        // than used, so the two cannot drift silently.
+        // The old layout comes from the texture, not from sourceState. A texture the engine believes
+        // is already in its m_initialState is in fact in UNDEFINED until the first barrier moves it.
+        //
+        // sourceState is allowed to disagree, and is not checked. CmdSetRenderTargets transitions
+        // attachments the engine never barriered, so the engine's tracked state lags the image
+        // routinely. The barrier is correct either way, because oldLayout is read from the texture.
         barrier.oldLayout = pVulkanTexture->CurrentLayout();
         barrier.newLayout = VulkanImageLayout( destinationState, pVulkanTexture );
 
-        // **The caller's belief is allowed to differ now.** It used to be asserted against the
-        // truth, and CmdSetRenderTargets breaking that was how this was found: it transitions an
-        // attachment the engine never barriered, so the engine's DeviceResourceStates still
-        // believes the old state while the image has moved. The barrier is correct either way,
-        // because oldLayout is read from the texture rather than from sourceState. Direct3D 12
-        // has no layouts for the two to disagree about.
-        //
-        // Left as a note rather than a check: with the RHI transitioning images on its own, a
-        // mismatch is expected traffic and not a bug worth halting on.
-
-        // Direct3D's discard flag says the old contents are not needed. UNDEFINED as the old
-        // layout says exactly that, and it lets the driver skip decompressing what it is about
-        // to overwrite.
+        // The discard flag says the old contents are not needed, which is what UNDEFINED as an old
+        // layout means. It lets the driver skip decompressing what it is about to overwrite.
         if ( flags.IsFlagSet( TextureBarrierFlags::Discard ) )
         {
             barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -4747,10 +4225,7 @@ namespace EE::Render::RHI
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = pVulkanTexture->m_image;
-        // Every aspect the image has. A barrier that moved the depth and left the stencil behind
-        // would put one image in two layouts, which the per-subresource table does express, but
-        // the aspect mask is still all of them: a depth barrier that left the stencil behind is
-        // not something the engine ever asks for.
+        // Every aspect the image has. The engine never asks to move depth without stencil.
         barrier.subresourceRange.aspectMask = pVulkanTexture->m_aspectMask;
         barrier.subresourceRange.baseMipLevel = region.m_mipLevel;
         barrier.subresourceRange.levelCount = region.m_numMipLevels ? region.m_numMipLevels : pVulkanTexture->m_mipLevels;
@@ -4760,12 +4235,10 @@ namespace EE::Render::RHI
         NormalizeBarrierMasks( barrier.srcStageMask, barrier.srcAccessMask );
         NormalizeBarrierMasks( barrier.dstStageMask, barrier.dstAccessMask );
 
-        // **One barrier per old layout, not one per barrier call.** The engine barriers a whole
-        // texture - DeviceResourceStates::FlushBarriers passes an empty TextureBarrierRegion -
-        // and its subresources can legitimately be in different layouts by then, because
-        // CmdSetRenderTargets transitions the one face it is about to draw into. A single
-        // barrier naming one old layout would then be wrong for every other face, which Vulkan
-        // rejects outright. Direct3D 12 has no layouts, so the engine has no reason to split it.
+        // One barrier per old layout, not one per call. The engine barriers a whole texture, and its
+        // subresources can legitimately be in different layouts by then, because CmdSetRenderTargets
+        // transitions the one face it is about to draw into. A single barrier naming one old layout
+        // would be wrong for every other face, which Vulkan rejects outright.
         uint32_t const baseMip = barrier.subresourceRange.baseMipLevel;
         uint32_t const numMips = barrier.subresourceRange.levelCount;
         uint32_t const baseLayer = barrier.subresourceRange.baseArrayLayer;
@@ -4815,14 +4288,11 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Queries
     //-------------------------------------------------------------------------
-    // **Nothing in the engine calls any of this.** `EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE` at
-    // RHI.h:1705 is a debug marker and a CPU profile scope, not a timestamp query, so the whole
-    // group is API surface that the renderer has not started using. It is written for parity.
+    // Nothing in the engine calls any of this; it is API surface written for parity.
     //
-    // A timestamp needs a begin and an end on Direct3D 12 and only an end on Vulkan, so
-    // CmdBeginQuery does nothing for one. That matches what the reference actually achieves:
-    // ID3D12GraphicsCommandList::BeginQuery rejects D3D12_QUERY_TYPE_TIMESTAMP, so the reference's
-    // own begin is a no-op with a debug-layer complaint attached. See "Upstream issues observed".
+    // A timestamp needs a begin and an end on D3D12 and only an end on Vulkan, so CmdBeginQuery
+    // does nothing for one. That matches what D3D12 achieves anyway: BeginQuery rejects a timestamp
+    // query, so its own begin is a no-op with a debug layer complaint attached.
 
     void CmdResetQueryPool( CommandBuffer* pCommandBuffer, QueryPool* pQueryPool, uint32_t startQuery, uint32_t numQueries )
     {
@@ -4831,9 +4301,8 @@ namespace EE::Render::RHI
 
         EE_ASSERT( startQuery + numQueries <= pVulkanQueryPool->m_numQueries );
 
-        // **Direct3D 12 does nothing here and Vulkan requires it**, which is the one place in
-        // this backend where the asymmetry runs that way: a query is undefined until it has been
-        // reset, and a reset may not run inside a render pass.
+        // A query is undefined until it has been reset, and a reset may not run inside a render
+        // pass. D3D12 does nothing here at all.
         PrepareTransfer( pVulkanCommandBuffer );
 
         vkCmdResetQueryPool( pVulkanCommandBuffer->m_commandBuffer, pVulkanQueryPool->m_queryPool, startQuery, numQueries );
@@ -4865,14 +4334,13 @@ namespace EE::Render::RHI
 
         if ( pVulkanQueryPool->m_queryType == VK_QUERY_TYPE_TIMESTAMP )
         {
-            // A queue family may report zero valid timestamp bits, which means it cannot write
-            // one at all. Direct3D 12 has no equivalent, so a caller would never think to check.
+            // A queue family may report zero valid timestamp bits, meaning it cannot write one at
+            // all. D3D12 has no equivalent, so a caller would never think to check.
             EE_ASSERT( pVulkanCommandBuffer->m_pQueue != nullptr );
             EE_ASSERT( static_cast<VulkanQueue const*>( pVulkanCommandBuffer->m_pQueue )->m_timestampValidBits > 0 );
 
-            // BOTTOM_OF_PIPE, because Direct3D 12's EndQuery timestamp is taken after the work
-            // the scope covers. This is legal inside a render pass, which matters: a profile
-            // scope around a pass must not tear it the way a reset would.
+            // BOTTOM_OF_PIPE, because D3D12's EndQuery timestamp is taken after the work the scope
+            // covers. Legal inside a render pass, so a profile scope does not tear one.
             vkCmdWriteTimestamp2( pVulkanCommandBuffer->m_commandBuffer, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
                                   pVulkanQueryPool->m_queryPool, queryIndex );
             return;
@@ -4889,18 +4357,15 @@ namespace EE::Render::RHI
 
         EE_ASSERT( startQuery + numQueries <= pVulkanQueryPool->m_numQueries );
 
-        // **Eight bytes per query, which is only right for a timestamp.** The destination offset
-        // is the reference's, `startQuery * 8` at RHI_Direct3D12.cpp:3528, and a pipeline
-        // statistics query resolves to eleven counters rather than one. Both backends have to
-        // write the same layout, so this asserts rather than inventing a second one. Nothing
-        // creates a statistics pool.
+        // Eight bytes per query is only right for a timestamp, and it is the offset D3D12 writes.
+        // A pipeline statistics query resolves to eleven counters, so this asserts rather than
+        // inventing a second layout. Nothing creates a statistics pool.
         EE_ASSERT( pVulkanQueryPool->m_queryType == VK_QUERY_TYPE_TIMESTAMP );
 
         PrepareTransfer( pVulkanCommandBuffer );
 
-        // WAIT_BIT, because Direct3D 12's ResolveQueryData reads finished results and the engine
-        // reads the buffer after the submit completes. Without it the copy could write nothing
-        // and report availability separately.
+        // WAIT_BIT, because ResolveQueryData reads finished results. Without it the copy could write
+        // nothing and report availability separately.
         vkCmdCopyQueryPoolResults( pVulkanCommandBuffer->m_commandBuffer, pVulkanQueryPool->m_queryPool,
                                    startQuery, numQueries,
                                    pVulkanReadbackBuffer->m_buffer, uint64_t( startQuery ) * 8, 8,
@@ -4938,14 +4403,12 @@ namespace EE::Render::RHI
         VkBufferImageCopy region = {};
         region.bufferOffset = srcOffset;
         region.bufferRowLength = CopyRowLengthInTexels( pVulkanDstTexture, dstRegion.m_mipLevel, dstRegion.m_arrayLayer );
-        // Zero means the rows are packed to imageExtent.height, which is how the engine writes
-        // them: RenderSystem.h:545 advances the staging offset by exactly the rows of this one
-        // region. Direct3D 12 reads the same thing out of the subresource footprint.
+        // Zero means the rows are packed to imageExtent.height, which is how the engine writes them.
         region.bufferImageHeight = 0;
         region.imageSubresource.aspectMask = TransferAspectMask( pVulkanDstTexture );
         region.imageSubresource.mipLevel = dstRegion.m_mipLevel;
-        // One layer per copy, the way the subresource index Direct3D 12 builds names one. A 3D
-        // texture has one layer and puts its slices in m_z and m_depth instead.
+        // One layer per copy, as the D3D12 subresource index names one. A 3D texture has one layer
+        // and puts its slices in m_z and m_depth instead.
         region.imageSubresource.baseArrayLayer = dstRegion.m_arrayLayer;
         region.imageSubresource.layerCount = 1;
         region.imageOffset = { int32_t( dstRegion.m_x ), int32_t( dstRegion.m_y ), int32_t( dstRegion.m_z ) };
@@ -4969,11 +4432,9 @@ namespace EE::Render::RHI
 
         VkBufferImageCopy region = {};
         region.bufferOffset = dstOffset;
-        // **The readback stride is GetTextureCopyRowStride too, and nothing calls this yet.**
-        // Direct3D 12 uses the destination buffer's own footprint here, which for a buffer
-        // resource is the whole buffer as a single row and says nothing about texture rows. One
-        // rule for both directions is the useful answer, so a caller sizes its readback buffer
-        // with the same function the upload path already uses.
+        // The same stride the upload path uses, so a caller sizes its readback buffer with one
+        // function for both directions. D3D12 uses the destination buffer's own footprint, which
+        // for a buffer resource says nothing about texture rows. Nothing calls this yet.
         region.bufferRowLength = CopyRowLengthInTexels( pVulkanSrcTexture, srcRegion.m_mipLevel, srcRegion.m_arrayLayer );
         region.bufferImageHeight = 0;
         region.imageSubresource.aspectMask = TransferAspectMask( pVulkanSrcTexture );
@@ -4990,8 +4451,7 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Debug markers
     //-------------------------------------------------------------------------
-    // VK_EXT_debug_utils labels, which RenderDoc and every Vulkan profiler read the same way PIX
-    // reads a Direct3D event. The extension is enabled whenever the loader has it, with or
+    // VK_EXT_debug_utils labels. The extension is enabled whenever the loader has it, with or
     // without the validation layer, so markers are present in a Release build too.
 
     void CmdBeginDebugMarker( CommandBuffer* pCommandBuffer, char const* pName )
@@ -5007,9 +4467,8 @@ namespace EE::Render::RHI
             return;
         }
 
-        // Lifted from RHI_Direct3D12.cpp:3628, which lifted it from ImGui::ColorConvertHSVtoRGB.
-        // Copied rather than shared because RHI.h holds no such helper and this file may not add
-        // one to it.
+        // Stolen from ImGui::ColorConvertHSVtoRGB, as the D3D12 backend does. Copied rather than
+        // shared because RHI.h holds no such helper.
         auto HSVtoRGB = [] ( float h, float s, float v, float& out_r, float& out_g, float& out_b )
         {
             if ( s == 0.0f )
@@ -5053,7 +4512,7 @@ namespace EE::Render::RHI
 
         VkDebugUtilsLabelEXT label = { VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT };
         label.pLabelName = pName;
-        // Floats where PIX_COLOR takes bytes. Same colour, no rounding through 0-255.
+        // Floats where PIX takes bytes. Same colour, no rounding through 0-255.
         label.color[0] = r;
         label.color[1] = g;
         label.color[2] = b;
@@ -5077,17 +4536,13 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_vkCmdEndDebugUtilsLabel( pVulkanCommandBuffer->m_commandBuffer );
     }
 
-    // **This is the breadcrumb write, and nothing in the engine calls it.** Direct3D 12 uses
-    // ID3D12GraphicsCommandList2::WriteBufferImmediate, whose MARKER_IN and MARKER_OUT modes say
-    // "write this before everything already submitted" and "after". Vulkan spells that
-    // VK_AMD_buffer_marker, which is not enabled here and would be a device requirement the
-    // Phase 4 list does not have.
+    // The breadcrumb write, which nothing in the engine calls. D3D12's WriteBufferImmediate has
+    // MARKER_IN and MARKER_OUT modes that order the write against everything already submitted;
+    // the Vulkan equivalent is VK_AMD_buffer_marker, which is not enabled here.
     //
-    // vkCmdFillBuffer writes the same 32-bit value at the same point in the command stream and
-    // is ordered like any other command, so it matches WRITEBUFFERIMMEDIATE_MODE_DEFAULT exactly
-    // and approximates the other two. `DeviceCapabilities::m_breadcrumbs` is false on this
-    // backend, so nothing asks for the tighter ordering; narrowing it means enabling the
-    // extension, and that is worth doing only when breadcrumbs are turned on.
+    // vkCmdFillBuffer writes the same value at the same point in the command stream, so it matches
+    // the default mode exactly and approximates the other two. m_breadcrumbs is false on this
+    // backend, so nothing asks for the tighter ordering.
     uint32_t CmdWriteDebugMarker( CommandBuffer* pCommandBuffer, TBitFlags<MarkerTypeFlags> const& markerType, uint32_t markerValue, Buffer* pBuffer, size_t offset, bool useAutoFlags )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
@@ -5096,21 +4551,17 @@ namespace EE::Render::RHI
         VkDeviceSize const bufferOffset = offset * sizeof( uint32_t );
         EE_ASSERT( bufferOffset + sizeof( uint32_t ) <= pVulkanBuffer->m_size );
 
-        // A fill is a transfer command, so it leaves the render pass the way every copy and
-        // clear does. Direct3D 12 needs nothing here, which is why no caller expects it.
+        // A fill is a transfer command, so it leaves the render pass the way every copy and clear does.
         PrepareTransfer( pVulkanCommandBuffer );
 
         if ( markerType == TBitFlags( MarkerTypeFlags::InOut ) )
         {
-            // Two writes to one address, the way Direct3D 12 issues MARKER_IN and MARKER_OUT.
-            // **The In value does not survive here and it does there**: Direct3D writes it at the
-            // top of the pipe and the Out value at the bottom, so a crash between the two leaves
-            // the In value in the buffer, which is the whole point of a breadcrumb. Two fills run
-            // in order and the second simply overwrites the first. VK_AMD_buffer_marker is what
-            // closes that, and it is a device requirement nothing asks for yet.
+            // Two writes to one address. The In value does not survive here and it does on D3D12,
+            // which writes it at the top of the pipe and the Out value at the bottom, so a crash
+            // between the two leaves the In value behind. Two fills run in order and the second
+            // overwrites the first. Closing that needs VK_AMD_buffer_marker.
             //
-            // The flag values below are the enum's, not the bit field's, which is what the
-            // reference does at RHI_Direct3D12.cpp:3714. See "Upstream issues observed".
+            // The enum values below, not the bit field's, matching what the D3D12 backend does.
             uint32_t const inValue = markerValue | ( useAutoFlags ? ( uint32_t( MarkerTypeFlags::In ) << 30 ) : 0 );
             uint32_t const outValue = markerValue | ( useAutoFlags ? ( uint32_t( MarkerTypeFlags::Out ) << 30 ) : 0 );
 
@@ -5119,14 +4570,14 @@ namespace EE::Render::RHI
         }
         else
         {
-            // The bit field here, again matching the reference at RHI_Direct3D12.cpp:3722.
+            // The bit field here, again matching the D3D12 backend.
             uint32_t const value = markerValue | ( useAutoFlags ? ( markerType.Get() << 30 ) : 0 );
 
             vkCmdFillBuffer( pVulkanCommandBuffer->m_commandBuffer, pVulkanBuffer->m_buffer, bufferOffset, sizeof( uint32_t ), value );
         }
 
-        // No visibility barrier, unlike the clears. A breadcrumb is read by the host after the
-        // fact, and submission plus a host wait is what makes a transfer write visible there.
+        // No visibility barrier, unlike the clears. A breadcrumb is read by the host after the fact,
+        // and submission plus a host wait is what makes a transfer write visible there.
 
         return markerValue;
     }
@@ -5136,11 +4587,9 @@ namespace EE::Render::RHI
         VulkanContext*          pVulkanContext = static_cast<VulkanContext*>( pContext );
         VulkanCommandSignature* pVulkanCommandSignature = pVulkanContext->CreateObject<VulkanCommandSignature>();
 
-        // **There is no Vulkan object to create.** A command signature is a Direct3D 12 concept;
-        // the Vulkan side of it is the byte layout of one command, which is what this records.
-        // The arithmetic walks the arguments in order and accumulates the same byte sizes
-        // RHI_Direct3D12.cpp:3746 does, because both backends read one buffer that a shader
-        // wrote and they have to agree on where every field is.
+        // There is no Vulkan object to create. A command signature is a D3D12 concept, and the
+        // Vulkan side of it is the byte layout of one command. The sizes accumulated below must
+        // match D3D12's exactly, because both backends read one buffer that a shader wrote.
         uint32_t commandStride = 0;
 
         for ( IndirectArgumentDescriptor const& argument : parameters.m_indirectArgumentParameters )
@@ -5187,13 +4636,12 @@ namespace EE::Render::RHI
                 }
                 break;
 
-                // Everything below is a root argument, which is the half Vulkan cannot execute.
-                // The sizes are still counted, because the stride has to match what the shader
-                // wrote and what the Direct3D 12 backend reads.
+                // Everything below is a root argument, which is the half Vulkan cannot execute. The
+                // sizes are still counted, because the stride has to match what the shader wrote.
                 case IndirectArgumentType::VertexBuffer:
                 case IndirectArgumentType::IndexBuffer:
                 {
-                    // A Direct3D 12 buffer view is an address, a size and a stride or format.
+                    // A D3D12 buffer view is an address, a size and a stride or format.
                     commandStride += 16;
                     pVulkanCommandSignature->m_hasRootArguments = true;
                 }
@@ -5203,8 +4651,7 @@ namespace EE::Render::RHI
                 {
                     EE_ASSERT( argument.m_byteSize == sizeof( uint32_t ) * pDescriptorReflection->m_numConstants );
 
-                    // P5.17: the shader reads this block itself, so where it sits is no longer
-                    // just bookkeeping for the stride.
+                    // The shader reads this block itself, so where it sits is not just bookkeeping.
                     EE_ASSERT( pVulkanCommandSignature->m_rootConstantOffset == -1 );
                     pVulkanCommandSignature->m_rootConstantOffset = int32_t( commandStride );
 
@@ -5215,11 +4662,9 @@ namespace EE::Render::RHI
 
                 case IndirectArgumentType::ConstantBufferView:
                 {
-                    // A GPU virtual address. RendererTypes.esh:268 calls it "device address of
-                    // this CBV, workaround for lack of HLSL buffer address support". A Vulkan
-                    // descriptor takes a buffer and an offset rather than an address, so there is
-                    // nothing to turn one back into - but a shader can dereference the address
-                    // directly, which is what P5.17's EE_DECLARE_INDIRECT_ROOT_CBV does.
+                    // A GPU virtual address. A Vulkan descriptor takes a buffer and an offset, so
+                    // there is nothing to turn one back into, but a shader can dereference the
+                    // address directly, which is what EE_DECLARE_INDIRECT_ROOT_CBV does.
                     EE_ASSERT( pVulkanCommandSignature->m_rootCbvOffset == -1 );
                     pVulkanCommandSignature->m_rootCbvOffset = int32_t( commandStride );
 
@@ -5231,12 +4676,9 @@ namespace EE::Render::RHI
                 case IndirectArgumentType::ShaderResourceView:
                 case IndirectArgumentType::UnorderedAccessView:
                 {
-                    // Also an address, and **P5.17 does not read these**. Only RootConstants and
-                    // RootCBV have indirect declarations, because only those two appear in the
-                    // shaders an indirect draw reaches. DebugDrawMesh.esf declares a RootSRV as
-                    // well, so a signature can carry one; its stride still has to be counted,
-                    // and a shader that actually indexed it would need a third declaration
-                    // macro. Nothing does yet.
+                    // Also an address, and no shader reads these indirectly. Only root constants and
+                    // the root CBV have indirect declarations. A signature can still carry one, so
+                    // its stride is counted; indexing it would need a third declaration macro.
                     commandStride += 8;
                     pVulkanCommandSignature->m_hasRootArguments = true;
                 }
@@ -5272,19 +4714,13 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Raytracing
     //-------------------------------------------------------------------------
-    // **Nothing in the engine reaches any of this, on either backend.** No engine code creates an
-    // acceleration structure, `RHI.esh` defines `GetRaytracingAccelerationStructure` and no shader
-    // calls it, and `RHI.h` declares no way to build a `RaytracingShaderTable` at all, so
-    // `CmdDispatchRays` is unreachable by construction on Vulkan and on Direct3D 12 alike. It is
-    // written because the phase document asks for parity, and it is unverifiable here twice over:
-    // no caller, and no GPU in this machine has `VK_KHR_ray_tracing_pipeline`.
+    // Nothing in the engine reaches any of this, on either backend: no code creates an acceleration
+    // structure, no shader calls GetRaytracingAccelerationStructure, and RHI.h declares no way to
+    // build a RaytracingShaderTable. Written for parity, and unverified.
     //
-    // **The heap question the binding model left open is answered without changing anything.**
-    // `GetAccelerationStructureHandle` returns a buffer handle on the structure buffer, exactly
-    // as `RHI_Direct3D12.cpp:4002` does, so `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` never
-    // has to join the heap's mutable type list. The day a shader actually writes
-    // `GetRaytracingAccelerationStructure`, that changes, and it is a Phase 4 binding model
-    // decision rather than this file's.
+    // GetAccelerationStructureHandle returns a buffer handle on the structure buffer, as D3D12
+    // does, so the acceleration structure descriptor type never has to join the heap's mutable
+    // list. That changes the day a shader actually reads one.
 
     static VkBuildAccelerationStructureFlagsKHR VulkanAccelerationStructureBuildFlags( TBitFlags<AccelerationStructureBuildFlags> flags )
     {
@@ -5311,9 +4747,7 @@ namespace EE::Render::RHI
         return result;
     }
 
-    // The structure buffer and the scratch buffer, both device local and both sized by the
-    // driver's own answer. Direct3D 12 asks GetRaytracingAccelerationStructurePrebuildInfo for
-    // the same two numbers.
+    // The structure buffer and the scratch buffer, both device local and both sized by the driver.
     static Buffer* CreateAccelerationStructureBuffer( Context* pContext, uint64_t size, bool needsDescriptor, char const* pDebugName )
     {
         BufferParameters bufferParameters = {};
@@ -5324,12 +4758,9 @@ namespace EE::Render::RHI
 
         if ( needsDescriptor )
         {
-            // **A divergence from the reference, and a deliberate one.**
-            // RHI_Direct3D12.cpp:3978 gives the top level structure buffer BufferFlags::
-            // NoDescriptors and descriptor types RWBuffer|Raw, and then
-            // GetAccelerationStructureHandle asks it for a DescriptorTypeFlags::Buffer handle,
-            // which it cannot have. Two asserts would fire there if anything called it. This
-            // buffer gets the descriptor it is about to be asked for.
+            // A deliberate divergence: the D3D12 backend creates this buffer without the descriptor
+            // GetAccelerationStructureHandle then asks it for, and would assert if anything called
+            // it. This buffer gets the descriptor it is about to be asked for.
             bufferParameters.m_descriptorTypes.SetMultipleFlags( DescriptorTypeFlags::Buffer, DescriptorTypeFlags::RWBuffer, DescriptorTypeFlags::Raw );
         }
         else
@@ -5372,17 +4803,16 @@ namespace EE::Render::RHI
             triangles.vertexFormat = VulkanFormat( geometry.m_vertexFormat );
             triangles.vertexData.deviceAddress = pVulkanVertexBuffer->m_deviceAddress + geometry.m_vertexOffset;
             triangles.vertexStride = pVulkanVertexBuffer->m_stride;
-            // The highest index a vertex index may take, so one less than the count. Direct3D 12
-            // takes the count itself.
+            // The highest index a vertex index may take, so one less than the count. D3D12 takes
+            // the count itself.
             triangles.maxVertex = geometry.m_numVertices > 0 ? geometry.m_numVertices - 1 : 0;
             triangles.indexType = ( geometry.m_indexType == IndexType::Uint16 ) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
             triangles.indexData.deviceAddress = pVulkanIndexBuffer->m_deviceAddress + geometry.m_indexOffset;
 
             pVulkanAccelerationStructure->m_geometries.push_back( vulkanGeometry );
 
-            // **Direct3D 12 counts indices and Vulkan counts triangles.** The offsets are folded
-            // into the device addresses above, the way the reference folds them in, so the range
-            // itself starts at zero.
+            // D3D12 counts indices and Vulkan counts triangles. The offsets are folded into the
+            // device addresses above, so the range itself starts at zero.
             uint32_t const numPrimitives = geometry.m_numIndices / 3;
 
             VkAccelerationStructureBuildRangeInfoKHR buildRange = {};
@@ -5426,9 +4856,8 @@ namespace EE::Render::RHI
         pVulkanAccelerationStructure->m_instanceBufferOffset = topLevelParameters.m_instanceBufferOffset;
         pVulkanAccelerationStructure->m_numInstances = topLevelParameters.m_numInstances;
 
-        // **AccelerationStructureInstance is VkAccelerationStructureInstanceKHR field for
-        // field** - twelve floats, a 24 and an 8 bit field, another pair, and a 64 bit
-        // reference - so the engine's instance buffer is readable as it stands.
+        // AccelerationStructureInstance matches VkAccelerationStructureInstanceKHR field for field,
+        // so the engine's instance buffer is readable as it stands.
         VkAccelerationStructureGeometryKHR topLevelGeometry = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
         topLevelGeometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
         topLevelGeometry.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
@@ -5460,11 +4889,9 @@ namespace EE::Render::RHI
 
         // Scratch
         //-------------------------------------------------------------------------
-        // **Sized for the larger of the two builds, where the reference sizes it for the bottom
-        // level alone.** RHI_Direct3D12.cpp:3969 reads ScratchDataSizeInBytes out of the bottom
-        // level prebuild and then uses the same buffer for the top level build at :3392, which
-        // overruns whenever the top level needs more. Both builds share one buffer here too,
-        // because the RHI has one field for it, so the size is the maximum.
+        // Sized for the larger of the two builds, which share one buffer because the RHI has one
+        // field for it. The D3D12 backend sizes it from the bottom level alone and overruns
+        // whenever the top level needs more.
         uint64_t const scratchSize = Math::Max( bottomLevelSizes.buildScratchSize, topLevelSizes.buildScratchSize );
         pVulkanAccelerationStructure->m_pScratchBuffer = CreateAccelerationStructureBuffer( pContext, scratchSize, false, "AccelerationStructure Scratch" );
 
@@ -5475,9 +4902,8 @@ namespace EE::Render::RHI
     {
         VulkanAccelerationStructure const* pVulkanAccelerationStructure = static_cast<VulkanAccelerationStructure const*>( pAccelerationStructure );
 
-        // The top level structure buffer, read as a buffer, which is what
-        // RHI_Direct3D12.cpp:4002 returns. See the section note above for why this does not need
-        // an acceleration structure descriptor in the heap.
+        // The top level structure buffer read as a buffer, which is what D3D12 returns. See the
+        // section note above for why this needs no acceleration structure descriptor in the heap.
         return GetBufferHandle( pVulkanAccelerationStructure->m_topLevel.m_pStructureBuffer, DescriptorTypeFlags::Buffer );
     }
 
@@ -5488,22 +4914,16 @@ namespace EE::Render::RHI
 
     //-------------------------------------------------------------------------
 
-    // **The one DataFormat to VkFormat mapping. There must never be a second one.** The phase
-    // document warns that two mappings which disagree corrupt textures in a way that looks like
-    // a bug somewhere else. Everything that needs a VkFormat comes here: buffer views, image
-    // creation, pipeline attachment formats and the device capability query.
+    // The only DataFormat to VkFormat mapping. There must never be a second one: two mappings that
+    // disagree corrupt textures in a way that looks like a bug somewhere else.
     //
-    // Read next to DXGIFormat in RHI_Direct3D12.cpp:276, which is the specification. Two notes
-    // on where the two backends do not line up one for one:
-    //
-    // - **Vulkan names packed formats most significant component first, and DXGI names them
-    //   least significant first.** So DXGI_FORMAT_B5G6R5_UNORM is VK_FORMAT_R5G6B5_UNORM_PACK16,
-    //   not VK_FORMAT_B5G6R5_UNORM_PACK16, and the same reversal applies to every other packed
-    //   entry below. Getting one of these backwards swaps red and blue on that format alone.
-    // - **RGB565_UNorm and BGR565_UNorm both map to the same VkFormat**, because the Direct3D 12
-    //   backend maps both to DXGI_FORMAT_B5G6R5_UNORM. Vulkan can tell them apart and Direct3D
-    //   cannot, so mapping them faithfully here would make the two backends draw the same asset
-    //   differently. Nothing in the engine uses either format. Recorded in Docs/Linux/Progress.md.
+    // Two places where the backends do not line up one for one:
+    //  - Vulkan names packed formats most significant component first and DXGI names them least
+    //    significant first, so the component order reverses on every packed entry below. Getting
+    //    one backwards swaps red and blue on that format alone.
+    //  - RGB565_UNorm and BGR565_UNorm map to the same VkFormat, because D3D12 maps both to one
+    //    DXGI format. Vulkan can tell them apart and D3D12 cannot, so distinguishing them here
+    //    would make the two backends draw the same asset differently. Nothing uses either.
     static VkFormat VulkanFormat( DataFormat format )
     {
         switch ( format )
@@ -5512,9 +4932,8 @@ namespace EE::Render::RHI
 
                 // Uncompressed formats
                 //
-                // R1_UNorm has no Vulkan equivalent at all. Returning UNDEFINED without
-                // asserting mirrors what the Direct3D 12 backend does with the ASTC formats it
-                // cannot express.
+                // R1_UNorm has no Vulkan equivalent. Returning UNDEFINED without asserting mirrors
+                // what D3D12 does with the ASTC formats it cannot express.
             case DataFormat::R1_UNorm: return VK_FORMAT_UNDEFINED;
             case DataFormat::RGB565_UNorm: return VK_FORMAT_R5G6B5_UNORM_PACK16;
             case DataFormat::BGR565_UNorm: return VK_FORMAT_R5G6B5_UNORM_PACK16;
@@ -5568,18 +4987,15 @@ namespace EE::Render::RHI
             case DataFormat::RGB9_E5_UFloat: return VK_FORMAT_E5B9G9R9_UFLOAT_PACK32;
             case DataFormat::D32_SFloat: return VK_FORMAT_D32_SFLOAT;
             case DataFormat::D32_SFloat_S8_UInt: return VK_FORMAT_D32_SFLOAT_S8_UINT;
-                // Direct3D 12 has no stencil-only format and maps this to
-                // DXGI_FORMAT_D24_UNORM_S8_UINT. Vulkan has the exact format, and support for it
-                // is optional, so a device without it now reports the format unusable in
-                // DeviceCapabilities rather than silently getting a depth buffer it never asked
-                // for.
+                // D3D12 has no stencil-only format and widens this to depth-stencil. Vulkan has the
+                // exact format, and support for it is optional, so a device without it reports the
+                // format unusable rather than silently getting a depth buffer it never asked for.
             case DataFormat::S8_Uint: return VK_FORMAT_S8_UINT;
 
                 // Compressed DXBC formats
                 //
-                // Vulkan separates BC1 with and without alpha; DXGI_FORMAT_BC1_UNORM covers both.
-                // The DataFormat enum makes the same distinction Vulkan does, so this is one
-                // place where the mapping is more exact than the Direct3D 12 one.
+                // Vulkan separates BC1 with and without alpha and DXGI does not, so this mapping is
+                // more exact than the D3D12 one.
             case DataFormat::DXBC1_RGB_UNorm: return VK_FORMAT_BC1_RGB_UNORM_BLOCK;
             case DataFormat::DXBC1_RGB_sRGB: return VK_FORMAT_BC1_RGB_SRGB_BLOCK;
             case DataFormat::DXBC1_RGBA_UNorm: return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
@@ -5597,7 +5013,7 @@ namespace EE::Render::RHI
             case DataFormat::DXBC7_UNorm: return VK_FORMAT_BC7_UNORM_BLOCK;
             case DataFormat::DXBC7_sRGB: return VK_FORMAT_BC7_SRGB_BLOCK;
 
-                // Compressed ASTC formats. Direct3D has none of these and returns
+                // Compressed ASTC formats. D3D12 has none of these and returns
                 // DXGI_FORMAT_UNKNOWN; Vulkan has all of them, gated on textureCompressionASTC_LDR,
                 // which nothing enables. FillDeviceCapabilities reports each one honestly.
             case DataFormat::ASTC_4x4_UNorm: return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
@@ -5662,9 +5078,8 @@ namespace EE::Render::RHI
         }
     }
 
-    // The view type a shader reads the whole texture through. Mirrors
-    // D3D12ShaderResourceViewDimension at RHI_Direct3D12.cpp:400, and reuses the same
-    // TextureViewDimension decision so both backends classify a texture identically.
+    // The view type a shader reads the whole texture through. Uses the same ViewDimension decision
+    // as the D3D12 backend, so both classify a texture identically.
     static VkImageViewType VulkanImageViewType( ViewDimension viewDimension )
     {
         switch ( viewDimension )
@@ -5690,9 +5105,9 @@ namespace EE::Render::RHI
         }
     }
 
-    // Which ViewDimension a texture is, by the same rules the Direct3D 12 backend uses at
-    // RHI_Direct3D12.cpp:854. Kept as one function for the same reason the format mapping is:
-    // two backends that classify a texture differently disagree about what its views mean.
+    // Which ViewDimension a texture is, by the same rules the D3D12 backend uses. One function for
+    // the same reason the format mapping is: two backends that classify a texture differently
+    // disagree about what its views mean.
     static ViewDimension VulkanTextureViewDimension( uint32_t width, uint32_t height, uint32_t depth, uint32_t arrayLayers, uint32_t numSamples, TBitFlags<DescriptorTypeFlags> const& descriptorTypes )
     {
         bool const isCubemap = descriptorTypes.AreAnyFlagsSet( DescriptorTypeFlags::TextureCube );
@@ -5723,15 +5138,12 @@ namespace EE::Render::RHI
         return height > 1 ? ViewDimension::Texture2D : ViewDimension::Texture1D;
     }
 
-    // **Direct3D 12 resources have no queue ownership at all.** A resource written on the
-    // compute queue is read on the graphics queue with only a barrier between them, and the
-    // engine's async compute path relies on that. Vulkan's EXCLUSIVE sharing needs an ownership
-    // transfer for the same thing, and nothing in RHI.h says which queue last touched a
-    // resource, so there is nothing to build a transfer out of.
+    // D3D12 resources have no queue ownership at all, and the engine's async compute path relies
+    // on that. Vulkan's EXCLUSIVE sharing would need an ownership transfer, and nothing in RHI.h
+    // says which queue last touched a resource, so there is nothing to build one out of.
     //
-    // CONCURRENT reproduces the Direct3D semantics exactly. It costs some compression on some
-    // hardware, and it costs nothing when the device exposes one queue family, which is the case
-    // this leaves EXCLUSIVE. P5.5 recorded the decision as P5.9's; this is it.
+    // CONCURRENT reproduces the D3D12 semantics. It costs some compression on some hardware, and
+    // costs nothing on a device with one queue family, which stays EXCLUSIVE below.
     static void SetSharingMode( VulkanContext const* pVulkanContext, VkSharingMode& sharingMode, uint32_t& queueFamilyIndexCount, uint32_t const*& pQueueFamilyIndices )
     {
         if ( pVulkanContext->m_sharingQueueFamilies.size() < 2 )
@@ -5776,9 +5188,8 @@ namespace EE::Render::RHI
         }
     }
 
-    // Writes one slot of the resource heap. Writing a mutable descriptor uses the *actual*
-    // type in VkWriteDescriptorSet, never VK_DESCRIPTOR_TYPE_MUTABLE_EXT, which only ever
-    // appears in the layout.
+    // Writing a mutable descriptor names the actual type, never VK_DESCRIPTOR_TYPE_MUTABLE_EXT,
+    // which only ever appears in the layout.
     static void WriteResourceHeapSlot( VulkanContext* pVulkanContext, uint32_t heapIndex, VkDescriptorType descriptorType, VkDescriptorBufferInfo const* pBufferInfo, VkBufferView const* pTexelBufferView )
     {
         VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
@@ -5865,26 +5276,15 @@ namespace EE::Render::RHI
 
         // Usage flags
         //-------------------------------------------------------------------------
-        // Direct3D 12 needs almost none of this: a buffer is a buffer and the view decides what
-        // it is. Vulkan wants the usage up front, so it is derived from the descriptor types
-        // the caller asked for, plus the transfer bits, which every buffer here can need.
+        // D3D12 needs almost none of this: a buffer is a buffer and the view decides what it is.
+        // Vulkan wants the usage up front, so it comes from the descriptor types the caller asked
+        // for, plus the transfer bits, which any buffer here can need.
         //
-        // **Read from `parameters`, not from `descriptorTypes`.** `BufferFlags::NoDescriptors`
-        // means "give this buffer no descriptor heap slot", which is all it can mean on
-        // Direct3D 12, where usage is not a property of a buffer at all. On Vulkan it is, and a
-        // push descriptor write still needs the matching usage bit on the buffer it names. The
-        // two are separate questions, and reading the cleared copy here answered the second with
-        // the first.
-        //
-        // P5.4's root constant ring is the case that proved it. It is created with
-        // ConstantBuffer and NoDescriptors together, correctly - CmdSetRootConstants pushes a
-        // descriptor at an offset into it rather than giving it a slot - and it came out without
-        // VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, which made every one of those writes invalid.
-        // Found by running with validation once the engine reached its frame loop.
-        //
-        // The descriptor heap work below reads `descriptorTypes` and tests NoDescriptors on its
-        // own, so it is unaffected, and so is the copy stored on the buffer: a NoDescriptors
-        // buffer still has no handle to hand out.
+        // Read from parameters, not from descriptorTypes. NoDescriptors means "give this buffer no
+        // heap slot", which is all it can mean on D3D12, where usage is not a property of a buffer.
+        // On Vulkan it is, and a push descriptor write still needs the matching usage bit. The root
+        // constant ring is the case that proves it: NoDescriptors and ConstantBuffer together,
+        // correctly, and reading the cleared copy here left it without the uniform buffer bit.
         TBitFlags<DescriptorTypeFlags> const usageTypes = parameters.m_descriptorTypes;
 
         VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -5893,8 +5293,6 @@ namespace EE::Render::RHI
         if ( usageTypes.IsFlagSet( DescriptorTypeFlags::IndexBuffer ) )            { usage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT; }
         if ( usageTypes.IsFlagSet( DescriptorTypeFlags::IndirectArgumentBuffer ) ) { usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT; }
 
-        // Only ever read where a view is made, which NoDescriptors already excludes, so the two
-        // sources agree everywhere this is used.
         bool const isTypedBuffer = parameters.m_format != DataFormat::Undefined && !usageTypes.IsFlagSet( DescriptorTypeFlags::Raw );
 
         if ( usageTypes.IsFlagSet( DescriptorTypeFlags::Buffer ) )
@@ -5911,14 +5309,10 @@ namespace EE::Render::RHI
         // m_deviceAddress the engine reads, so every buffer carries the bit.
         usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
-        // **Direct3D 12 needs none of this and Vulkan needs all of it.** A raytracing build reads
-        // its geometry and instances out of ordinary buffers, writes the structure into one and
-        // scratches in another, and the shader binding table is one more; each is a usage bit,
-        // and CreateAccelerationStructure is handed buffers the caller already made. So every
-        // buffer carries them, rather than the RHI growing a flag it does not have.
-        //
-        // Only when the extension is enabled: naming a usage bit from a disabled extension is a
-        // validation error. CreateBuffer has no Context, hence the file static.
+        // A raytracing build reads its geometry and instances out of ordinary buffers the caller
+        // already made, so every buffer carries these rather than the RHI growing a flag for them.
+        // Only when the extension is enabled, because naming a usage bit from a disabled extension
+        // is a validation error.
         if ( g_raytracingEnabled )
         {
             usage |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -5983,7 +5377,7 @@ namespace EE::Render::RHI
         SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_BUFFER, uint64_t( pVulkanBuffer->m_buffer ), parameters.m_debugName );
 
         // VMA_ALLOCATION_CREATE_MAPPED_BIT already mapped it, so there is no second Map call
-        // the way Direct3D 12 needs one.
+        // the way D3D12 needs one.
         if ( parameters.m_flags.IsFlagSet( BufferFlags::PersistentMap ) && parameters.m_memoryType != ResourceMemoryType::DeviceLocal )
         {
             pVulkanBuffer->m_pMappedAddress_WriteCombined = allocationInfo.pMappedData;
@@ -5992,7 +5386,7 @@ namespace EE::Render::RHI
 
         // Descriptors
         //-------------------------------------------------------------------------
-        // One contiguous run in the resource heap, in the same order Direct3D 12 uses, because
+        // One contiguous run in the resource heap, in the same order D3D12 uses, because
         // the handle arithmetic in GetBufferHandle has to match on both backends.
 
         if ( !parameters.m_flags.IsFlagSet( BufferFlags::NoDescriptors ) && descriptorTypes.AreAnyFlagsSet( DescriptorTypeFlags::ConstantBuffer, DescriptorTypeFlags::Buffer, DescriptorTypeFlags::RWBuffer ) )
@@ -6047,7 +5441,7 @@ namespace EE::Render::RHI
                 else
                 {
                     // StructuredBuffer<T> and ByteAddressBuffer are both storage buffers. The
-                    // element offset that Direct3D 12 puts in the SRV becomes the descriptor's
+                    // element offset that D3D12 puts in the SRV becomes the descriptor's
                     // own offset here.
                     VkDescriptorBufferInfo readInfo = descriptorBufferInfo;
                     readInfo.offset = parameters.m_firstElement * bufferStride;
@@ -6088,15 +5482,10 @@ namespace EE::Render::RHI
                     WriteResourceHeapSlot( pVulkanContext, heapIndex, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &writeInfo, nullptr );
                 }
 
-                // BufferParameters::m_pCounterBuffer has nowhere to go. Direct3D 12 hands the
-                // counter resource to CreateUnorderedAccessView and Vulkan has no such thing.
-                // The engine does not need it: AppendBuffer.esh carries its own explicit
-                // RWBuffer<uint> counter and does its own InterlockedAdd, and no .esh or .esf
-                // in the repository uses IncrementCounter, DecrementCounter,
-                // AppendStructuredBuffer or ConsumeStructuredBuffer. See the binding model
-                // entry in Docs/Linux/Progress.md, which reaches the same conclusion from the
-                // shader side and reserves set 1 binding 2 for a counter heap that is never
-                // created.
+                // m_pCounterBuffer has nowhere to go: D3D12 hands the counter resource to
+                // CreateUnorderedAccessView and Vulkan has no such thing. The engine does not need
+                // it, because AppendBuffer.esh carries its own counter and does its own
+                // InterlockedAdd, and no shader uses an append or consume buffer.
                 EE_ASSERT( parameters.m_pCounterBuffer == nullptr );
             }
         }
@@ -6147,7 +5536,7 @@ namespace EE::Render::RHI
             {
                 // The slots are not cleared. PARTIALLY_BOUND means a stale descriptor is only a
                 // problem if a shader reads it, and a shader that reads a freed handle is a bug
-                // either way. Direct3D 12 frees its descriptors the same way, without writing
+                // either way. D3D12 frees its descriptors the same way, without writing
                 // over them.
                 pVulkanContext->m_resourceHeapAllocator.Deallocate( eastl::move( pVulkanBuffer->m_descriptorHandles ) );
             }
@@ -6179,7 +5568,7 @@ namespace EE::Render::RHI
         EE_ASSERT( pVulkanBuffer->m_mappedRange.m_offset < pVulkanBuffer->m_size );
         EE_ASSERT( pVulkanBuffer->m_mappedRange.m_offset + pVulkanBuffer->m_mappedRange.m_size <= pVulkanBuffer->m_size );
 
-        // vmaMapMemory maps the whole allocation; Direct3D 12's Map takes a read range as a
+        // vmaMapMemory maps the whole allocation; D3D12's Map takes a read range as a
         // hint about what the CPU will touch. The offset is applied to the pointer so the
         // caller sees the same address either way.
         void* pMappedAddress = nullptr;
@@ -6320,11 +5709,9 @@ namespace EE::Render::RHI
         bool const isStorage = descriptorTypes.IsFlagSet( DescriptorTypeFlags::RWTexture );
         bool const isRenderTarget = descriptorTypes.IsFlagSet( DescriptorTypeFlags::RenderTarget );
 
-        // The flags below need external memory or a console, and no device extension here
-        // provides any of them. Nothing in the engine sets one; halting names the caller that
-        // starts to. TextureFlags::DisableCompression and AllowDisplayTarget have no Vulkan
-        // control at all and are ignored rather than refused, which is what Direct3D 12's own
-        // heap flags amount to.
+        // The flags below need external memory or a console, and no enabled extension provides any
+        // of them. Nothing sets one, so halting names the caller that starts to. DisableCompression
+        // and AllowDisplayTarget have no Vulkan control at all and are ignored rather than refused.
         EE_ASSERT( !parameters.m_textureFlags.AreAnyFlagsSet( TextureFlags::ExportHandle, TextureFlags::ExportAdapter, TextureFlags::ImportHandle, TextureFlags::ESRAM, TextureFlags::OnTile ) );
 
         ViewDimension const viewDimension = VulkanTextureViewDimension( parameters.m_width, parameters.m_height, parameters.m_depth, parameters.m_arrayLayers, parameters.m_numSamples, descriptorTypes );
@@ -6348,9 +5735,8 @@ namespace EE::Render::RHI
             imageCreateInfo.arrayLayers = parameters.m_arrayLayers;
         }
 
-        // Vulkan wants the usage up front where Direct3D 12 derives it from the views that get
-        // created, exactly as with buffers. Both transfer bits, because the engine uploads every
-        // texture it loads and P5.10's copies and clears can name any of them.
+        // Vulkan wants the usage up front where D3D12 derives it from the views, as with buffers.
+        // Both transfer bits, because a copy or a clear can name any texture.
         imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         if ( isShaderResource ) { imageCreateInfo.usage |= VK_IMAGE_USAGE_SAMPLED_BIT; }
         if ( isStorage )        { imageCreateInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT; }
@@ -6366,21 +5752,21 @@ namespace EE::Render::RHI
         imageCreateInfo.samples = VkSampleCountFlagBits( parameters.m_numSamples );
         imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         SetSharingMode( pVulkanContext, imageCreateInfo.sharingMode, imageCreateInfo.queueFamilyIndexCount, imageCreateInfo.pQueueFamilyIndices );
-        // vkCreateImage accepts UNDEFINED or PREINITIALIZED and nothing else, and the second is
-        // for linear tiling. See VulkanTexture::m_subresourceLayouts for what that costs P5.9.
+        // vkCreateImage accepts UNDEFINED or PREINITIALIZED and nothing else, and the second is for
+        // linear tiling. See VulkanTexture::m_subresourceLayouts for what that costs the barriers.
         imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if ( parameters.m_pNativeHandle != nullptr )
         {
-            // A VkImage somebody else owns and allocated. P5.3's swapchain images arrive this
-            // way, which is why the views below are still built for it.
+            // A VkImage somebody else owns and allocated. Swapchain images arrive this way, which
+            // is why the views below are still built for it.
             pVulkanTexture->m_image = static_cast<VkImage>( parameters.m_pNativeHandle );
             pVulkanTexture->m_ownsImage = false;
         }
         else if ( parameters.m_pTextureToAlias != nullptr )
         {
-            // Direct3D 12 aliases by sharing the ID3D12Resource pointer. Sharing the VkImage is
-            // the same thing, and the aliased texture keeps ownership of the memory.
+            // D3D12 aliases by sharing the resource pointer. Sharing the VkImage is the same thing,
+            // and the aliased texture keeps ownership of the memory.
             pVulkanTexture->m_image = static_cast<VulkanTexture*>( parameters.m_pTextureToAlias )->m_image;
             pVulkanTexture->m_ownsImage = false;
         }
@@ -6391,8 +5777,8 @@ namespace EE::Render::RHI
 
             if ( parameters.m_memoryType != ResourceMemoryType::DeviceLocal )
             {
-                // Direct3D 12 puts every texture on D3D12_HEAP_TYPE_DEFAULT and uploads through
-                // a staging buffer; the RHI still lets a caller ask for host memory.
+                // D3D12 puts every texture in device memory and uploads through a staging buffer.
+                // The RHI still lets a caller ask for host memory.
                 allocationCreateInfo.flags |= parameters.m_memoryType == ResourceMemoryType::HostToDevice
                                             ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
                                             : VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
@@ -6434,21 +5820,20 @@ namespace EE::Render::RHI
         pVulkanTexture->m_aspectMask = aspectMask;
         pVulkanTexture->m_copyRowAlignment = pVulkanContext->m_deviceCapabilities.m_uploadBufferTextureRowAlignment;
 
-        // A texture that is also an RWTexture has to sit in VK_IMAGE_LAYOUT_GENERAL, because a
-        // storage image descriptor may name no other layout and one image cannot be in two
-        // layouts at once. Recorded on the texture so P5.9 transitions to the layout the
-        // descriptor was actually written with rather than guessing from TextureState.
+        // A texture that is also an RWTexture has to sit in GENERAL, because a storage image
+        // descriptor may name no other layout and one image cannot be in two at once. Recorded so
+        // barriers reach the layout the descriptor was written with, rather than guessing.
         pVulkanTexture->m_shaderReadLayout = isStorage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         // Views
         //-------------------------------------------------------------------------
-        // Direct3D 12 puts the subresource selection in the descriptor. Vulkan puts it in the
-        // view, so every subresource the engine can name needs one built up front.
+        // D3D12 puts the subresource selection in the descriptor and Vulkan puts it in the view, so
+        // every subresource the engine can name needs one built up front.
 
         if ( isShaderResource )
         {
-            // A sampled view of a depth-stencil image must name exactly one aspect. Depth is the
-            // one the engine reads, which is the same choice RHI_Direct3D12.cpp:4597 makes.
+            // A sampled view of a depth-stencil image must name exactly one aspect, and depth is
+            // the one the engine reads. The D3D12 backend makes the same choice.
             VkImageAspectFlags const sampledAspect = ( aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT ) != 0 ? VK_IMAGE_ASPECT_DEPTH_BIT : aspectMask;
 
             pVulkanTexture->m_shaderResourceView = CreateTextureView( pVulkanContext->m_device, pVulkanTexture->m_image, vulkanFormat,
@@ -6477,7 +5862,7 @@ namespace EE::Render::RHI
 
         if ( isRenderTarget )
         {
-            // One view per subresource, in the order Direct3D 12 allocates its render target
+            // One view per subresource, in the order D3D12 allocates its render target
             // descriptors: array layer outer, mip level inner. VulkanTexture::RenderTargetView
             // indexes them the same way.
             VkImageViewType const attachmentViewType = imageCreateInfo.imageType == VK_IMAGE_TYPE_3D ? VK_IMAGE_VIEW_TYPE_3D
@@ -6500,9 +5885,8 @@ namespace EE::Render::RHI
 
         // Descriptors
         //-------------------------------------------------------------------------
-        // One contiguous run in the resource heap, laid out exactly as Direct3D 12 lays it out
-        // at RHI_Direct3D12.cpp:4562: the read view first if present, then one read-write view
-        // per mip level. GetTextureHandle does the same arithmetic on both backends.
+        // One contiguous run in the resource heap, in D3D12's order: the read view first if present,
+        // then one read-write view per mip level. GetTextureHandle does the same arithmetic on both.
 
         if ( isShaderResource || isStorage )
         {
@@ -6593,13 +5977,9 @@ namespace EE::Render::RHI
         EE_ASSERT( mipLevel < pVulkanTexture->m_mipLevels );
         EE_ASSERT( arrayLayer < pVulkanTexture->m_arrayLayers );
 
-        // Direct3D 12 reads this out of GetCopyableFootprints, which aligns the row pitch to
-        // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT. Vulkan has no such call, because the layout of the
-        // staging buffer is the caller's to choose; the equivalent alignment is the device's
-        // optimalBufferCopyRowPitchAlignment.
-        //
-        // **P5.10 must derive vkCmdCopyBufferToImage's bufferRowLength from this same number.**
-        // The engine writes its rows at this stride and the copy has to read them at it.
+        // Vulkan has no equivalent of GetCopyableFootprints, because the staging buffer's layout is
+        // the caller's to choose. The device's optimalBufferCopyRowPitchAlignment is the equivalent
+        // alignment. CopyRowLengthInTexels has to derive its row length from this same number.
         uint32_t const mipWidth = Math::Max( pVulkanTexture->m_width >> mipLevel, 1U );
         uint32_t const rowStride = ComputeFormatRowStride( pVulkanTexture->m_format, mipWidth );
 
@@ -6658,7 +6038,7 @@ namespace EE::Render::RHI
         return VK_SAMPLER_ADDRESS_MODE_REPEAT;
     }
 
-    // Direct3D 12 takes any border colour; Vulkan takes one of six fixed ones unless
+    // D3D12 takes any border colour; Vulkan takes one of six fixed ones unless
     // VK_EXT_custom_border_color is enabled, which it is not. Every sampler the engine creates
     // leaves the default of transparent black, and only a ClampToBorder address mode reads it.
     static VkBorderColor VulkanBorderColor( float const borderColor[4] )
@@ -6683,8 +6063,8 @@ namespace EE::Render::RHI
         VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
         VulkanSampler* pVulkanSampler = pVulkanContext->CreateObject<VulkanSampler>();
 
-        // The same pairing RHI_Direct3D12.cpp:497 asserts on, where a comparison filter and a
-        // comparison function are two halves of one D3D12_FILTER value.
+        // The D3D12 backend asserts on the same pairing, where a comparison filter and a comparison
+        // function are two halves of one filter value.
         if ( parameters.m_compareMode != CompareMode::Never )
         {
             EE_ASSERT( parameters.m_filterMode == FilterMode::Compare );
@@ -6716,7 +6096,7 @@ namespace EE::Render::RHI
             samplerCreateInfo.pNext = &reductionModeCreateInfo;
         }
 
-        // SamplerParameters::m_setLODRange has no Direct3D 12 use either; CreateSampler there
+        // SamplerParameters::m_setLODRange has no D3D12 use either; CreateSampler there
         // ignores it too.
 
         VkResult const result = vkCreateSampler( pVulkanContext->m_device, &samplerCreateInfo, nullptr, &pVulkanSampler->m_sampler );
@@ -6881,14 +6261,13 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Reflection
     //-------------------------------------------------------------------------
-    // SPIRV-Reflect replaces ID3D12ShaderReflection, which RHI_Direct3D12.cpp uses in
-    // ExtractReflection at :1003. The output has to be the same ShaderReflection the engine
-    // already reads, so this mirrors that function rather than exposing anything new.
+    // SPIRV-Reflect replaces ID3D12ShaderReflection. The output has to be the same ShaderReflection
+    // the engine already reads, so this mirrors the D3D12 version rather than exposing anything new.
 
     static bool IsRootConstant( char const* pName )
     {
-        // Matches RHI_Direct3D12.cpp:990. RHI.esh declares the block as
-        // "ConstantBuffer<T> RootConstants : register( ... )", so the name is the marker.
+        // RHI.esh declares the block as a named ConstantBuffer, so the name is the marker. The
+        // D3D12 backend matches on the same name.
         if ( pName == nullptr )
         {
             return false;
@@ -6915,7 +6294,7 @@ namespace EE::Render::RHI
 
     static TBitFlags<DescriptorTypeFlags> DescriptorTypeFromReflection( SpvReflectDescriptorBinding const& binding )
     {
-        // resource_type carries the read against read-write distinction that Direct3D 12 gets
+        // resource_type carries the read against read-write distinction that D3D12 gets
         // from D3D_SIT_STRUCTURED versus D3D_SIT_UAV_RWSTRUCTURED, so it is the discriminator
         // rather than the SPIR-V type alone.
         bool const isReadWrite = ( binding.resource_type & SPV_REFLECT_RESOURCE_FLAG_UAV ) != 0;
@@ -6989,8 +6368,8 @@ namespace EE::Render::RHI
 
         for ( SpvReflectDescriptorBinding const* pBinding : bindings )
         {
-            // Set 1 is the bindless heap. Its layout is fixed by the Phase 4 binding model and
-            // shared by every pipeline, so it is not a root parameter and must not become one.
+            // Set 1 is the bindless heap, shared by every pipeline, so it is not a root parameter
+            // and must not become one.
             if ( pBinding->set == g_heapSet )
             {
                 continue;
@@ -6998,12 +6377,9 @@ namespace EE::Render::RHI
 
             ShaderResource shaderResource = {};
             shaderResource.m_setIndex = pBinding->set;
-            // The **Vulkan** binding, not the HLSL register it came from. The binding model
-            // shifts b/t/u/s registers to 0/8/16/24, and un-shifting here only to re-shift in
-            // CreateRootSignature would be two chances to get it wrong. Nothing outside this
-            // file reads m_registerIndex: EngineShader.cpp only reads m_descriptorTypeFlags and
-            // m_numConstants, and uses position in m_descriptorReflections as the parameter
-            // index.
+            // The Vulkan binding, not the HLSL register it came from. The b/t/u/s registers are
+            // shifted to 0/8/16/24, and un-shifting here only to re-shift in CreateRootSignature
+            // would be two chances to get it wrong. Nothing outside this file reads it.
             shaderResource.m_registerIndex = pBinding->binding;
             shaderResource.m_numConstants = pBinding->count;
             shaderResource.m_usedStages = shaderStage;
@@ -7022,8 +6398,7 @@ namespace EE::Render::RHI
             size_t const resourceIndex = reflection.m_shaderResources.size();
             reflection.m_shaderResources.push_back( shaderResource );
 
-            // Constant buffer members, which CreateRootSignature adds up to size the root
-            // constants. Direct3D 12 reads these through ID3D12ShaderReflectionConstantBuffer.
+            // Constant buffer members, which CreateRootSignature adds up to size the root constants.
             if ( pBinding->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER )
             {
                 for ( uint32_t memberIndex = 0; memberIndex < pBinding->block.member_count; ++memberIndex )
@@ -7064,22 +6439,16 @@ namespace EE::Render::RHI
             ShaderStage const stage = shaderParameters[shaderIndex].m_stage;
             pVulkanShader->m_stages.SetFlag( stage );
 
-            // ShaderByteCode carries base85-encoded, compressed SPIR-V, exactly as it carried
-            // DXIL on Windows. Embed does the decode; the Reflector wrote it.
+            // ShaderByteCode carries base85-encoded, compressed SPIR-V, as it carries DXIL on Windows.
             Blob byteCode = Embed::DecompressEmbeddedFile( shaderParameters[shaderIndex].m_pCompressedData, shaderParameters[shaderIndex].m_decodedSize, shaderParameters[shaderIndex].m_decompressedSize );
 
             EE_ASSERT( !byteCode.empty() );
             EE_ASSERT( ( byteCode.size() % sizeof( uint32_t ) ) == 0 ); // SPIR-V is a stream of 32 bit words
 
-            // **A module the device cannot accept is not created at all.** Shaders::Initialize
-            // creates every shader in the engine at startup, whatever the device supports, and a
-            // task or mesh stage carries the MeshShadingEXT capability. vkCreateShaderModule
-            // rejects a capability the device did not enable, so on a device without
-            // VK_EXT_mesh_shader the module is skipped and the handle stays VK_NULL_HANDLE.
-            // Direct3D 12 has no equivalent step: a shader blob is data until it reaches a
-            // pipeline. Reflection still runs, because it reads the SPIR-V and not the module,
-            // so the root signature is built either way, and CmdSetPipeline is where the pass
-            // that needed the module is named.
+            // A module the device cannot accept is not created at all. The engine creates every
+            // shader at startup whatever the device supports, and vkCreateShaderModule rejects a
+            // capability the device did not enable. Reflection still runs, because it reads the
+            // SPIR-V rather than the module, so the root signature is built either way.
             bool const isMeshStage = ( stage == ShaderStage::Task ) || ( stage == ShaderStage::Mesh );
             if ( !isMeshStage || pVulkanContext->m_meshShader )
             {
@@ -7093,9 +6462,8 @@ namespace EE::Render::RHI
 
             pVulkanShader->m_stageReflections[shaderIndex] = ExtractReflection( TArrayView<uint8_t const>( byteCode.data(), byteCode.size() ), stage );
 
-            // DXC names every entry point "main" in SPIR-V unless told otherwise, and the
-            // Reflector does not tell it otherwise. Read it back rather than assume, because a
-            // wrong entry point name fails at pipeline creation with an unhelpful message.
+            // Read back rather than assumed, because a wrong entry point name fails at pipeline
+            // creation with an unhelpful message.
             SpvReflectShaderModule module = {};
             if ( spvReflectCreateShaderModule( byteCode.size(), byteCode.data(), &module ) == SPV_REFLECT_RESULT_SUCCESS )
             {
@@ -7111,7 +6479,7 @@ namespace EE::Render::RHI
                 case ShaderStage::Task:     EE_ASSERT( pVulkanShader->m_taskStageIndex == -1 );    pVulkanShader->m_taskStageIndex = int32_t( shaderIndex ); break;
                 case ShaderStage::Mesh:     EE_ASSERT( pVulkanShader->m_meshStageIndex == -1 );    pVulkanShader->m_meshStageIndex = int32_t( shaderIndex ); break;
                 case ShaderStage::Compute:  EE_ASSERT( pVulkanShader->m_computeStageIndex == -1 ); pVulkanShader->m_computeStageIndex = int32_t( shaderIndex ); break;
-                case ShaderStage::RayTracing: break; // P5.16
+                case ShaderStage::RayTracing: break;
             }
 
             SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_SHADER_MODULE, uint64_t( pVulkanShader->m_shaderModules[shaderIndex] ), shaderParameters[shaderIndex].m_ID.c_str() );
@@ -7150,9 +6518,9 @@ namespace EE::Render::RHI
         pVulkanRootSignature->m_device = pVulkanContext->m_device;
         pVulkanRootSignature->m_heapDescriptorSet = pVulkanContext->m_heapDescriptorSet;
 
-        // Merge the per-stage reflections into one resource list, first seen wins, exactly as
-        // RHI_Direct3D12.cpp:4946 does. The order decides m_parameterIndex, which
-        // CmdSetRootParameter and EngineShader.cpp both index by position.
+        // Merge the per-stage reflections into one resource list, first seen wins, as the D3D12
+        // backend does. The order decides m_parameterIndex, which CmdSetRootParameter and
+        // EngineShader.cpp both index by position.
         THashMap<StringView, size_t> descriptorNameToIndex{ Memory::Allocators::g_RHI };
         TVector<uint32_t> constantSizes{ Memory::Allocators::g_RHI };
 
@@ -7217,15 +6585,10 @@ namespace EE::Render::RHI
 
             if ( descriptorReflection.m_descriptorTypeFlags.IsFlagSet( DescriptorTypeFlags::RootConstant ) )
             {
-                // Not Vulkan push constants. RHI.esh declares the block through
-                // EE_DECLARE_ROOT_CONSTANTS as a ConstantBuffer, so DXC emits a uniform buffer.
-                // CmdSetRootConstants copies into a per-frame upload ring and pushes a descriptor
-                // at it. See the binding model entry.
-                //
-                // P5.17 does now add a [[vk::push_constant]] block to RHI.esh, which Phase 4's
-                // criterion 4 ruled out at the time and which was escalated and approved for
-                // P5.17. It carries the indirect argument address, not this block: a directly
-                // bound root constant still arrives as a descriptor write.
+                // Not Vulkan push constants. RHI.esh declares the block as a ConstantBuffer, so DXC
+                // emits a uniform buffer and CmdSetRootConstants pushes a descriptor at a ring.
+                // The one push constant block RHI.esh does declare carries the indirect argument
+                // address, not this.
                 descriptorReflection.m_numConstants = constantSizes[shaderResourceIndex] / sizeof( uint32_t );
                 binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             }
@@ -7254,14 +6617,12 @@ namespace EE::Render::RHI
             pVulkanRootSignature->m_descriptorReflections.push_back( descriptorReflection );
         }
 
-        // Kept for CmdExecuteIndirect, which has to know the descriptor type of a binding the
-        // engine never wrote. Recomputing the type there would be a second copy of the mapping
-        // above, and the two would drift.
+        // Kept for CmdExecuteIndirect, which has to know the descriptor type of a binding the engine
+        // never wrote. Recomputing it there would be a second copy of the mapping above.
         pVulkanRootSignature->m_rootParameterBindings = rootParameterBindings;
 
-        // Static samplers find no matching shader resource in any current shader, which is what
-        // the binding model recorded, so there are no Vulkan immutable samplers here either.
-        // The warning matches the Direct3D 12 one, so a shader that starts using one is noticed.
+        // No shader currently declares a static sampler, so there are no immutable samplers here.
+        // The warning matches the D3D12 one, so a shader that starts using one is noticed.
         for ( size_t staticSamplerIndex = 0; staticSamplerIndex < parameters.m_staticSamplerNames.size(); ++staticSamplerIndex )
         {
             auto pSamplerShaderResource = eastl::find_if( pVulkanRootSignature->m_shaderResources.begin(), pVulkanRootSignature->m_shaderResources.end(),
@@ -7277,7 +6638,7 @@ namespace EE::Render::RHI
                 continue;
             }
 
-            EE_UNIMPLEMENTED_FUNCTION(); // A shader started using a static sampler. See the binding model entry.
+            EE_UNIMPLEMENTED_FUNCTION(); // A shader started using a static sampler.
         }
 
         // Set 0, the root parameters. PUSH_DESCRIPTOR_BIT, so CmdSetRootParameter is a
@@ -7293,12 +6654,10 @@ namespace EE::Render::RHI
         // Both sets, in order. Set 1 is the same layout for every pipeline in the engine.
         VkDescriptorSetLayout const setLayouts[2] = { pVulkanRootSignature->m_rootParameterSetLayout, pVulkanContext->m_heapSetLayout };
 
-        // **The one push constant range, on every pipeline layout.** P5.17's indirect draws read
-        // their own command through it. It is given to every layout rather than only to the
-        // signatures that need it, because a root signature does not know whether a command
-        // signature will later be built from it, and 24 bytes of a guaranteed 128 costs nothing.
-        // Nothing else in the backend uses push constants: CmdSetRootConstants and
-        // CmdSetRootParameter are push descriptor writes into set 0.
+        // The one push constant range, which indirect draws read their own command through. Given
+        // to every layout rather than only the signatures that need it, because a root signature
+        // does not know whether a command signature will later be built from it, and 24 bytes of a
+        // guaranteed 128 costs nothing.
         VkPushConstantRange indirectPushConstantRange = {};
         indirectPushConstantRange.stageFlags = VK_SHADER_STAGE_ALL;
         indirectPushConstantRange.offset = 0;
@@ -7429,11 +6788,9 @@ namespace EE::Render::RHI
         }
     }
 
-    // **One body for both the graphics and the mesh pipeline.** MeshPipelineParameters derives
-    // from GraphicsPipelineParameters and adds nothing, and Vulkan builds both with
-    // vkCreateGraphicsPipelines. The whole delta is which shader stages are wanted and whether
-    // there is an input assembler, so a second copy of two hundred lines of blend, depth,
-    // raster and dynamic rendering state would only be a place for the two to drift apart.
+    // One body for both the graphics and the mesh pipeline, because Vulkan builds both with
+    // vkCreateGraphicsPipelines and the whole difference is which stages are wanted and whether
+    // there is an input assembler. A second copy would only be somewhere for the two to drift.
     static Pipeline* CreateGraphicsOrMeshPipeline( Context* pContext, GraphicsPipelineParameters const& parameters, bool isMeshPipeline )
     {
         VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
@@ -7466,9 +6823,8 @@ namespace EE::Render::RHI
             BuildGraphicsPipelineStages( pVulkanShader, stages, TArrayView<ShaderStage const>( wantedGraphicsStages, 2 ) );
         }
 
-        // No vertex input state. GraphicsPipelineParameters carries no input layout, because the
-        // engine pulls vertices out of buffers in the shader rather than binding them. An empty
-        // VkPipelineVertexInputStateCreateInfo says exactly that.
+        // No vertex input state: the engine pulls vertices out of buffers in the shader rather than
+        // binding them, so GraphicsPipelineParameters carries no input layout.
         VkPipelineVertexInputStateCreateInfo vertexInputState = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 
         VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
@@ -7491,26 +6847,15 @@ namespace EE::Render::RHI
             case CullMode::Front:   rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT; break;
         }
 
-        // **Winding, and the Y flip. This was the classic porting bug, and it was wrong.**
-        //
-        // The old reasoning ran: the Direct3D 12 backend sets FrontCounterClockwise =
-        // ( m_frontFace == ClockWise ), which is already an inversion of the name; the Vulkan
-        // viewport inverts Y with a negative height, which reverses winding in framebuffer
-        // space; so inverting the inversion lands back on the name. That double negative was
-        // counted once too often, and **every triangle in the engine was back-face culled**.
-        //
-        // Measured, not reasoned, this time. With the mapping below inverted a fullscreen
-        // triangle rasterises with culling left on; with the old mapping the same draw produced
-        // nothing, while vkCmdClearAttachments inside the same render pass still wrote. That
-        // pair is what separates "culled" from every other cause.
-        //
-        // The Y flip in CmdSetViewport is the other half of the pair and is unchanged.
+        // Paired with the Y flip in CmdSetViewport, whose negative height already reverses winding
+        // in framebuffer space. The mapping below looks like one inversion too many and is not:
+        // reasoning it out rather than measuring it back-face culls every triangle in the engine.
+        // Do not simplify it.
         rasterizationState.frontFace = ( parameters.m_rasterizerState.m_frontFace == FrontFace::ClockWise ) ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
 
-        // Direct3D 12's DepthClipEnable is the inverse of Vulkan's depthClampEnable, and the two
-        // are not identical: clipping discards the primitive, clamping keeps it at the near or
-        // far plane. VK_EXT_depth_clip_enable gives the exact control and is not enabled.
-        // Nothing in the engine sets m_depthClip today.
+        // D3D12's DepthClipEnable is the inverse of depthClampEnable, and the two are not identical:
+        // clipping discards the primitive, clamping keeps it at the near or far plane.
+        // VK_EXT_depth_clip_enable gives exact control and is not enabled. Nothing sets m_depthClip.
         rasterizationState.depthClampEnable = parameters.m_rasterizerState.m_depthClip ? VK_FALSE : VK_TRUE;
 
         rasterizationState.depthBiasEnable = ( parameters.m_rasterizerState.m_depthBias != 0 ) || ( parameters.m_rasterizerState.m_slopeScaledDepthBias != 0.0f );
@@ -7521,8 +6866,7 @@ namespace EE::Render::RHI
         VkPipelineMultisampleStateCreateInfo multisampleState = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
         multisampleState.rasterizationSamples = VkSampleCountFlagBits( parameters.m_numSamples );
         multisampleState.alphaToCoverageEnable = parameters.m_blendState.m_alphaToCoverage;
-        // m_sampleQuality has no Vulkan equivalent. It is a Direct3D quality level for a given
-        // sample count, and Vulkan exposes only the count.
+        // m_sampleQuality has no Vulkan equivalent. Vulkan exposes only the sample count.
 
         VkPipelineDepthStencilStateCreateInfo depthStencilState = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
         depthStencilState.depthTestEnable = parameters.m_depthStencilState.m_depthTest;
@@ -7550,9 +6894,8 @@ namespace EE::Render::RHI
         {
             VkPipelineColorBlendAttachmentState attachment = {};
 
-            // Direct3D 12 leaves a target outside the mask entirely default, which is blending
-            // off and no colour written. The same shape is reproduced here rather than
-            // defaulting to a full write mask.
+            // D3D12 leaves a target outside the mask entirely default, which is blending off and no
+            // colour written. Reproduced here rather than defaulting to a full write mask.
             if ( parameters.m_blendState.m_renderTargetMask.IsFlagSet( BlendStateTargetFlags( renderTargetIndex ) ) )
             {
                 attachment.blendEnable = parameters.m_blendState.m_blendEnabled;
@@ -7562,8 +6905,7 @@ namespace EE::Render::RHI
                 attachment.srcAlphaBlendFactor = VulkanBlendFactor( parameters.m_blendState.m_srcAlphaFactors[renderTargetIndex] );
                 attachment.dstAlphaBlendFactor = VulkanBlendFactor( parameters.m_blendState.m_dstAlphaFactors[renderTargetIndex] );
                 attachment.alphaBlendOp = VulkanBlendOp( parameters.m_blendState.m_blendModesAlpha[renderTargetIndex] );
-                // The write mask bits are the same order and values as Direct3D 12's, so the
-                // engine's 0x0F default is RGBA on both.
+                // The same bit order and values as D3D12, so the engine's 0x0F default is RGBA on both.
                 attachment.colorWriteMask = VkColorComponentFlags( parameters.m_blendState.m_writeMasks[renderTargetIndex] );
             }
 
@@ -7573,18 +6915,15 @@ namespace EE::Render::RHI
         VkPipelineColorBlendStateCreateInfo colorBlendState = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
         colorBlendState.attachmentCount = uint32_t( colorBlendAttachments.size() );
         colorBlendState.pAttachments = colorBlendAttachments.data();
-        // m_independentBlend has no Vulkan switch. Vulkan is always independent per attachment
-        // when independentBlend is supported, and writes the same state to every attachment
-        // otherwise. The engine fills every attachment either way, so the flag has no effect.
+        // m_independentBlend has no Vulkan switch, and the engine fills every attachment either way.
 
         TInlineVector<VkDynamicState, 4> dynamicStates;
         dynamicStates.emplace_back( VK_DYNAMIC_STATE_VIEWPORT );
         dynamicStates.emplace_back( VK_DYNAMIC_STATE_SCISSOR );
         dynamicStates.emplace_back( VK_DYNAMIC_STATE_STENCIL_REFERENCE );
 
-        // Only when the extension is enabled: declaring a dynamic state from a disabled
-        // extension is a validation error. BeginCommandBuffer sets the full rate once so the
-        // state is never left undefined.
+        // Declaring a dynamic state from a disabled extension is a validation error.
+        // BeginCommandBuffer sets the full rate once, so the state is never left undefined.
         if ( g_fragmentShadingRateEnabled )
         {
             dynamicStates.emplace_back( VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR );
@@ -7608,7 +6947,7 @@ namespace EE::Render::RHI
         renderingCreateInfo.colorAttachmentCount = uint32_t( colorFormats.size() );
         renderingCreateInfo.pColorAttachmentFormats = colorFormats.data();
 
-        // Direct3D 12 has one DSVFormat covering both aspects; Vulkan splits them, so a
+        // D3D12 has one DSVFormat covering both aspects; Vulkan splits them, so a
         // depth-stencil format has to be named twice and a stencil-only format only once.
         VkFormat const depthStencilFormat = VulkanFormat( parameters.m_depthStencilFormat );
         if ( depthStencilFormat != VK_FORMAT_UNDEFINED )
@@ -7627,9 +6966,8 @@ namespace EE::Render::RHI
         pipelineCreateInfo.pNext = &renderingCreateInfo;
         pipelineCreateInfo.stageCount = uint32_t( stages.size() );
         pipelineCreateInfo.pStages = stages.data();
-        // **Null on a mesh pipeline.** There is no input assembler in front of a mesh shader, so
-        // Vulkan ignores both structures there and the spec says to leave them out. Direct3D 12
-        // says the same by using a stream description with no input layout element.
+        // Null on a mesh pipeline: there is no input assembler in front of a mesh shader, and the
+        // specification says to leave both structures out.
         pipelineCreateInfo.pVertexInputState = isMeshPipeline ? nullptr : &vertexInputState;
         pipelineCreateInfo.pInputAssemblyState = isMeshPipeline ? nullptr : &inputAssemblyState;
         pipelineCreateInfo.pViewportState = &viewportState;
@@ -7657,13 +6995,10 @@ namespace EE::Render::RHI
 
     Pipeline* CreatePipeline( Context* pContext, MeshPipelineParameters const& parameters )
     {
-        // The device has to have been created with VK_EXT_mesh_shader, which is optional.
-        //
-        // **A device without it gets an empty pipeline rather than a halt**, for the reason
-        // CreateShader skips a mesh module: SurfaceShader's constructor builds this pipeline at
-        // startup for every shader in the engine, so halting here stops the engine before it has
-        // a frame loop, over a pass it may never run. CmdSetPipeline halts instead, which names
-        // the pass. CreateContext warns at startup as well.
+        // A device without VK_EXT_mesh_shader gets an empty pipeline rather than a halt, for the
+        // reason CreateShader skips a mesh module: this runs at startup for every shader in the
+        // engine, so halting here would stop the engine over a pass it may never run.
+        // CmdSetPipeline halts instead, which names the pass.
         VulkanContext* pVulkanContext = static_cast<VulkanContext*>( pContext );
         if ( !pVulkanContext->m_meshShader )
         {
@@ -7720,7 +7055,7 @@ namespace EE::Render::RHI
         VulkanPipeline*      pVulkanPipeline = pVulkanContext->CreateObject<VulkanPipeline>();
 
         EE_ASSERT( pVulkanContext->m_raytracing );
-        EE_ASSERT( pVulkanPipelineCache == nullptr ); // Not implemented yet, as on the reference
+        EE_ASSERT( pVulkanPipelineCache == nullptr ); // Not implemented, as on the D3D12 backend
         EE_ASSERT( pVulkanGlobalRootSignature != nullptr );
 
         pVulkanPipeline->m_device = pVulkanContext->m_device;
@@ -7728,19 +7063,16 @@ namespace EE::Render::RHI
         pVulkanPipeline->m_pipelineType = PipelineType::RayTracing;
         pVulkanPipeline->m_bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
 
-        // **The stage a raytracing shader plays comes from where it sits in the parameters, not
-        // from the shader itself.** RHI.h has one ShaderStage::RayTracing for all five roles, so
-        // VulkanShaderStage cannot tell a miss shader from a closest hit one. The role is decided
-        // here, by which field the Shader arrived in.
+        // RHI.h has one ShaderStage::RayTracing for all five roles, so the role comes from which
+        // field the Shader arrived in rather than from the shader itself.
         TInlineVector<VkPipelineShaderStageCreateInfo, 8> stages;
         TInlineVector<VkRayTracingShaderGroupCreateInfoKHR, 8> groups;
 
-        // Vulkan wants null terminated entry point names and RHI.h hands over StringViews, which
-        // are not. The copies have to outlive vkCreateRayTracingPipelinesKHR, so they live here.
+        // Vulkan wants null terminated entry point names and RHI.h hands over StringViews. The
+        // copies have to outlive vkCreateRayTracingPipelinesKHR, so they live here.
         //
-        // **Reserved to the exact maximum before the first one is added**, because every
-        // VkPipelineShaderStageCreateInfo::pName points into this vector. One reallocation part
-        // way through would leave every pointer taken so far dangling.
+        // Reserved to the exact maximum up front, because every pName points into this vector and
+        // one reallocation part way through would dangle every pointer taken so far.
         size_t const maxEntryPointNames = 1 + parameters.m_rayMissShaders.size() + parameters.m_hitGroups.size() * 3;
 
         TVector<TInlineString<MaxEntryPointNameLength>> entryPointNames{ Memory::Allocators::g_RHI };
@@ -7804,9 +7136,8 @@ namespace EE::Render::RHI
             group.anyHitShader = VK_SHADER_UNUSED_KHR;
             group.intersectionShader = VK_SHADER_UNUSED_KHR;
 
-            // An intersection shader is what makes a group procedural; without one the geometry
-            // is triangles. Direct3D 12 decides the same way, from whether D3D12_HIT_GROUP_DESC
-            // names one.
+            // An intersection shader is what makes a group procedural; without one the geometry is
+            // triangles. D3D12 decides the same way.
             group.type = ( hitGroup.m_pIntersectionShader != nullptr )
                        ? VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR
                        : VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
@@ -7837,18 +7168,13 @@ namespace EE::Render::RHI
         pipelineCreateInfo.maxPipelineRayRecursionDepth = parameters.m_maxTraceRecursionDepth;
         pipelineCreateInfo.layout = pVulkanGlobalRootSignature->m_pipelineLayout;
 
-        // **Four parameters have no Vulkan equivalent and are dropped on purpose.**
-        //
-        // m_pEmptyRootSignature, m_pRayGenRootSignature, m_rayMissRootSignatures and the per hit
-        // group m_pRootSignature are Direct3D 12 *local* root signatures, which let each shader
-        // record in the table carry its own bindings. Vulkan has one pipeline layout for the
-        // whole raytracing pipeline and nothing else; the per record data would have to move
-        // into the shader binding table and be read by the shader, which is a shader change.
-        //
-        // m_payloadSize and m_attributeSize are Direct3D's shader config. Vulkan reads both out
-        // of the SPIR-V, so there is nothing to pass.
-        //
-        // m_maxNumRays has no Vulkan counterpart at all.
+        // Several parameters have no Vulkan equivalent and are dropped on purpose:
+        //  - The local root signatures let each D3D12 shader record carry its own bindings. Vulkan
+        //    has one pipeline layout for the whole pipeline, so that data would have to move into
+        //    the shader binding table and be read by the shader.
+        //  - m_payloadSize and m_attributeSize are D3D12's shader config. Vulkan reads both out of
+        //    the SPIR-V.
+        //  - m_maxNumRays has no counterpart at all.
         EE_ASSERT( parameters.m_rayMissRootSignatures.empty() );
 
         VkPipelineCache const cache = ( pVulkanPipelineCache != nullptr ) ? pVulkanPipelineCache->m_pipelineCache : VK_NULL_HANDLE;
@@ -7957,9 +7283,8 @@ namespace EE::Render::RHI
     {
         VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
 
-        // **Vulkan reports nanoseconds per tick and Direct3D 12 reports ticks per second**, so
-        // this is the inversion the phase document asks for. A period of 1.0 is one tick per
-        // nanosecond, which is a frequency of 1e9.
+        // Vulkan reports nanoseconds per tick and D3D12 reports ticks per second, hence the
+        // inversion. A period of 1.0 is one tick per nanosecond, which is a frequency of 1e9.
         EE_ASSERT( pVulkanQueue->m_timestampPeriod > 0.0F );
 
         return 1.0e9 / double( pVulkanQueue->m_timestampPeriod );
@@ -7968,14 +7293,10 @@ namespace EE::Render::RHI
     //-------------------------------------------------------------------------
     // Debug names
     //-------------------------------------------------------------------------
-    // All nine reach SetVulkanObjectName, which P5.2 wrote and which every Create* call has been
-    // using since. It already does nothing when the name is empty or the extension is missing,
-    // so these are the handle and the object type and nothing else.
-    //
-    // The Direct3D 12 backend asserts on an empty name and these do not. It converts to wide
-    // characters first and asserts on the conversion, which is where its assert lives; there is
-    // no conversion here, and Create* passes an empty debug name whenever the caller left one
-    // out, which is legal on both backends.
+    // All nine reach SetVulkanObjectName, which already does nothing when the name is empty or the
+    // extension is missing. The D3D12 backend asserts on an empty name because it converts to wide
+    // characters first; there is no conversion here, and Create* passes an empty name whenever the
+    // caller left one out.
 
     void SetDebugName( Context* pContext, Queue* pQueue, StringView debugName )
     {
@@ -8003,14 +7324,13 @@ namespace EE::Render::RHI
 
     void SetDebugName( Context* pContext, RootSignature* pRootSignature, StringView debugName )
     {
-        // A root signature is a VkPipelineLayout here, which is what P5.7 built it as.
+        // A root signature is a VkPipelineLayout here.
         VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pRootSignature );
         SetVulkanObjectName( static_cast<VulkanContext*>( pContext ), VK_OBJECT_TYPE_PIPELINE_LAYOUT, uint64_t( pVulkanRootSignature->m_pipelineLayout ), debugName );
     }
 
-    // **Nothing to name**, so the parameters have no names either. P5.13's command signature is
-    // a record of one command's byte layout and creates no Vulkan object, so there is no handle
-    // for a name to reach.
+    // A command signature records one command's byte layout and creates no Vulkan object, so there
+    // is no handle for a name to reach.
     void SetDebugName( Context*, CommandSignature*, StringView )
     {
     }
@@ -8035,10 +7355,9 @@ namespace EE::Render::RHI
 
     void ReportDeviceMemoryLeaks()
     {
-        // Runs after DestroyContext; see BaseModule::ShutdownModule. Vulkan exposes no global
-        // live-object report, so this reads what DestroyContext recorded from VMA while the
-        // allocator still existed. The validation layers report leaked Vulkan handles
-        // separately, through the debug messenger.
+        // Runs after DestroyContext, and Vulkan exposes no global live-object report, so this reads
+        // what DestroyContext recorded from VMA while the allocator still existed. The validation
+        // layers report leaked handles separately, through the debug messenger.
         if ( g_leakedDeviceAllocations > 0 )
         {
             EE_LOG_ERROR( LogCategory::Render, "RHI/ReportDeviceMemoryLeaks", "%llu device allocations leaked, totalling %llu bytes", g_leakedDeviceAllocations, g_leakedDeviceAllocationBytes );

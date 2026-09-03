@@ -9,7 +9,7 @@
 #if _WIN32
 // d3d12shader.h declares ID3D12ShaderReflection, which nothing in this directory uses: the
 // parameter reflection all comes from parsing the .esh source in ShaderReflection_ShaderParser.
-// Kept, and guarded, rather than deleted (Conventions rule 3).
+// Kept and guarded rather than deleted, because it is upstream's include to remove.
 #include "d3d12shader.h"
 #include <wrl/client.h>
 using Microsoft::WRL::ComPtr;

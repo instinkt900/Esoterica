@@ -4,7 +4,6 @@ Everything here comes from Code/PropertySheets/. Where a setting has no Linux eq
 names a dropped dependency, this file says so rather than dropping it silently.
 
 Docs/Linux/03-Dependencies.md holds the property sheet to link flag table this implements.
-Docs/Linux/Phases/Phase0-BuildSystem.md, P0.5 to P0.7, holds the flag mapping.
 """
 
 import shutil
@@ -65,14 +64,10 @@ ESOTERICA_INCLUDE_DIRECTORIES = (
     # though no .vcxproj names the sheet. Base/Profiling.h includes <optick.h> unconditionally.
     'External/Optick/include',
 
-    # The Linux stand-in for the Windows SDK.
-    #
-    # The Reflector includes <dxcapi.h> but imports neither DXC.props nor anything else that
-    # would supply it: on Windows it ships with the Windows SDK and is on the compiler's default
-    # search path. There is no such default here, so the path is global rather than attached to
-    # a property sheet, which is what makes it reachable the way the SDK is.
-    #
-    # The DXC *library* stays on DXC.props, where the .vcxproj files actually declare it.
+    # The Linux stand-in for the Windows SDK. The Reflector includes <dxcapi.h> but imports no
+    # property sheet that supplies it, because on Windows it arrives with the SDK on the default
+    # search path. Global here for the same reach. The DXC library stays on DXC.props, where the
+    # .vcxproj files declare it.
     'External/DirectXShaderCompiler/inc/dxc',
 )
 
@@ -131,10 +126,9 @@ COMMON_COMPILER_FLAGS = (
     # warning is off; nothing first-party uses __declspec.
     '-fdeclspec',
     '-Wno-ignored-attributes',
-    # Esoterica.props sets TreatWarningAsError with EnableAllWarnings and a long list of
-    # disabled MSVC warning numbers that have no clang equivalent. Phase 0 deliberately does not
-    # translate that list, and does not pass -Werror. Conventions rule 3 forbids fixing upstream
-    # warnings anyway.
+    # Esoterica.props sets TreatWarningAsError with EnableAllWarnings and a long list of disabled
+    # MSVC warning numbers that have no clang equivalent. That list is deliberately not translated
+    # and -Werror is not passed, because upstream warnings are not this fork's to fix.
 )
 
 C_FLAGS   = ( '-std=c17', )     # LanguageStandard_C: stdc17
@@ -192,15 +186,10 @@ def build_configurations( configuration_names, repo_root = None ):
 
         defines, compiler_flags, linker_flags = BASE_CONFIGURATIONS[name]
 
-        # Shipping compiles with -flto, so the linker has to read LLVM bitcode. GNU ld can only
-        # do that through LLVMgold.so, which the official LLVM release archives do not ship - the
-        # link then fails with "LLVMgold.so: cannot open shared object file" after all 607 compile
-        # steps pass. Whether it works at all comes down to whether a distro LLVM happens to be
-        # installed, and that plugin would be a different major version to the pinned clang.
-        #
-        # ld.lld reads bitcode natively and ships in the same archive as the compiler, so use it.
-        # This is the same reasoning as find_linker_flags, applied to a whole configuration rather
-        # than to one project.
+        # Shipping compiles with -flto, so the linker has to read LLVM bitcode. GNU ld can only do
+        # that through LLVMgold.so, which the official LLVM archives do not ship, so the link fails
+        # after every compile step passes. ld.lld reads bitcode natively and ships beside the
+        # compiler. Same reasoning as find_linker_flags, applied to a whole configuration.
         if '-flto' in linker_flags and repo_root is not None:
             linker_flags = tuple( linker_flags ) + tuple( find_linker_flags( repo_root ) )
         configurations.append(
@@ -317,10 +306,9 @@ SHEETS = {
     # LINUX_ONLY_SHEETS rather than through a .vcxproj import.
     #---------------------------------------------------------------------
 
-    # The loader and headers come from the distribution, not External/. pkg-config supplies both
-    # the include path and -lvulkan. Open question 3 is answered here: the plain loader, not
-    # volk. Phase 5 can revisit it if dispatch overhead ever shows up in a profile, and that is
-    # a one-line change in this table plus an include.
+    # The loader and headers come from the distribution, not External/. pkg-config supplies both the
+    # include path and -lvulkan. The plain loader rather than volk; swapping to volk is a one-line
+    # change here plus an include, if dispatch overhead ever shows up in a profile.
     'Vulkan':                Sheet( pkg_config = 'vulkan' ),
     # Header only. One translation unit in the Vulkan backend defines VMA_IMPLEMENTATION.
     'VMA':                   Sheet( include_directories = ( 'External/VMA/include', ),
@@ -337,10 +325,8 @@ SHEETS = {
     # Windowing, input and the Vulkan surface. Replaces Application_Win32.cpp's raw Win32 calls,
     # InputDevice_KeyboardMouse_Win32.cpp's raw input, and XInput.
     #
-    # From External/ rather than from pkg-config, which is where Phase 6's plan expected it.
-    # Open question 4 answers no: Ubuntu 24.04 LTS packages no SDL3 at all, so
-    # DownloadDependencies.sh builds it and the sheet points at the install prefix. A distro
-    # package would need PKG_CONFIG_PATH set anyway once External/ holds a second copy.
+    # From External/ rather than pkg-config, because Ubuntu 24.04 LTS packages no SDL3 at all, so
+    # DownloadDependencies.sh builds it and this points at the install prefix.
     'SDL3':                  Sheet( include_directories = ( 'External/SDL3/include', ),
                                     library_directories = ( 'External/SDL3/lib', ),
                                     libraries = ( 'SDL3', ),
@@ -533,18 +519,14 @@ def resolve_sheets( sheet_names, repo_root = None ):
         # -L before -l, and an rpath so an executable finds the .so at run time without
         # LD_LIBRARY_PATH. These live under External/, not in a system directory.
         #
-        # **The rpath is $ORIGIN relative, not repository relative.** -L is resolved by the
-        # linker, which ninja runs from the repository root, so a plain relative path works
-        # there. An rpath is resolved by the dynamic loader against the *current working
-        # directory* of whoever runs the binary, so a repository-relative one only works when the
-        # process happens to start in the repository root. It does not, for example, when the
-        # engine is started from its own output directory, and the failure is
-        # "error while loading shared libraries: ... cannot open shared object file".
+        # The rpath is $ORIGIN relative, not repository relative. -L is resolved by the linker,
+        # which ninja runs from the repository root, so a relative path works there. An rpath is
+        # resolved by the dynamic loader against the caller's working directory, so a
+        # repository-relative one breaks the moment a binary is started from its own output
+        # directory.
         #
         # Every output directory is Build/Linux_<configuration>/, two levels below the root, so
         # $ORIGIN/../.. is the root. The $ is doubled because ninja reads this file's output.
-        # Found by running the engine for the first time in P6.7; it affected libSDL3,
-        # libdxcompiler and libGameNetworkingSockets alike.
         for directory in sheet.library_directories:
             link_flags.append( f'-L{directory}' )
             link_flags.append( f"-Wl,-rpath,'$$ORIGIN/../../{directory}'" )

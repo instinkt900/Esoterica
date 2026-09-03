@@ -467,12 +467,11 @@ EE_END_SHADER_TYPES_NAMESPACE
     {
         // NOTE: Do not use floats in this structure, pack into uint4 instead.
         //
-        // **Not decorated EE_PER_PRIMITIVE, and it should be.** Any vk::ext_decorate in this
-        // struct makes DXC flatten it per AST field in the pixel shader, and MaterialShaderInput
-        // copies the whole thing into a local - so DXC then rebuilds PrimitiveOutputFlags with
-        // one constituent per bitfield into the single-member struct they lower to, and emits
-        // SPIR-V that spirv-val rejects outright. DebugDraw.esf reads its members directly and
-        // is decorated. See "Still open" in Docs/Linux/Progress.md.
+        // Not decorated EE_PER_PRIMITIVE, and it should be. Any vk::ext_decorate in this struct
+        // makes DXC flatten it per AST field in the pixel shader, and MaterialShaderInput copies the
+        // whole thing into a local, so DXC rebuilds PrimitiveOutputFlags with one constituent per
+        // bitfield into the single-member struct they lower to and emits SPIR-V that spirv-val
+        // rejects. DebugDraw.esf reads its members directly and is decorated.
         uint4   m_data0                                     : TEXCOORD4;
         uint4   m_data1                                     : TEXCOORD5;
 

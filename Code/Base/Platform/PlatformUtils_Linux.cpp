@@ -61,13 +61,12 @@ namespace EE::Platform::Linux
                 continue;
             }
 
-            // The executable name, not /proc/<pid>/comm. comm is truncated to 15 characters, and
-            // this fork's binaries are named "Esoterica.Applications.ResourceServer" and
-            // "...ResourceCompiler", which both truncate to "Esoterica.Appli" and so compare
-            // equal to each other. /proc/<pid>/exe is the full path and needs no truncation.
+            // The executable name, not /proc/<pid>/comm. comm truncates to 15 characters, and this
+            // fork's ResourceServer and ResourceCompiler binaries both truncate to "Esoterica.Appli"
+            // and so compare equal. /proc/<pid>/exe is the full path.
             //
-            // readlink fails with EACCES for a process owned by another user, which is the
-            // correct answer here: every caller is looking for a process it started itself.
+            // readlink fails with EACCES for a process owned by another user, which is the right
+            // answer here: every caller is looking for a process it started itself.
             char linkPath[64];
             snprintf( linkPath, sizeof( linkPath ), "/proc/%ld/exe", processID );
 
@@ -298,8 +297,8 @@ namespace EE::Platform::Linux
     {
         EE_ASSERT( pVulkanInstance != nullptr );
 
-        // Headless. Phase 5 built the swapchain to run with no surface at all, and that path is
-        // still how anything without a window renders.
+        // Headless. The swapchain runs with no surface at all, which is how anything without a
+        // window renders.
         if ( pNativeWindowHandle == nullptr )
         {
             return nullptr;

@@ -83,9 +83,8 @@ namespace EE
         // Get window icon
         //-------------------------------------------------------------------------
 
-        // A BMP on disk, not a resource ID. SDL_LoadBMP is the only image loader SDL3 has
-        // without SDL_image, which is why the file has to be a BMP and not the .ico the Windows
-        // build uses. Either path may be empty, and both are today: see P6.7.
+        // A BMP on disk, not a resource ID. SDL_LoadBMP is the only image loader SDL3 has without
+        // SDL_image, so the file cannot be the .ico the Windows build uses. Either path may be empty.
         if ( m_pWindowIcon == nullptr && !m_iconFilePath.empty() )
         {
             m_pWindowIcon = SDL_LoadBMP( m_iconFilePath.c_str() );
@@ -237,16 +236,13 @@ namespace EE
 
     bool LinuxApplication::ProcessEvent( SDL_Event const& event )
     {
-        // imgui sees the event first, the way Win32Application calls
-        // ImGuiX::Platform::WindowMessageProcessor first.
+        // imgui sees the event first, as Win32Application calls its message processor first.
         //
-        // **The return value is deliberately ignored**, unlike the Win32 sibling, which returns
-        // early when the message is handled. The two backends do not mean the same thing by it.
-        // A wnd proc returns non-zero only for a message it truly consumed, and
-        // imgui_impl_win32.cpp returns 0 for nearly everything. imgui_impl_sdl3.cpp returns true
-        // for every event it recognises, including SDL_EVENT_WINDOW_CLOSE_REQUESTED and the
-        // focus events, so returning early here would swallow the application's own close and
-        // stop input reaching the engine. Upstream's own SDL3 examples ignore it too.
+        // The return value is deliberately ignored, where the Win32 sibling returns early on a
+        // handled message. The two backends do not mean the same thing by it: a wnd proc returns
+        // non-zero only for a message it truly consumed, while imgui_impl_sdl3.cpp returns true for
+        // every event it recognises, including the close and focus events. Returning early here
+        // would swallow the application's own close and stop input reaching the engine.
         #if EE_DEVELOPMENT_TOOLS
         if ( WasInitialized() )
         {

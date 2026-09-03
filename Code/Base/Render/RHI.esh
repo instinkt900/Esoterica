@@ -136,22 +136,21 @@ typedef uint Color;
 
 // Indirect root arguments
 //-------------------------------------------------------------------------
-// **A Direct3D 12 command signature sets root constants and binds a root CBV per command, and
-// no Vulkan indirect draw can rebind anything per command.** So on SPIR-V the shader reads its
-// own command out of the argument buffer instead. `CmdExecuteIndirect` pushes the address, the
-// stride and the two block offsets; the shader adds its own command index.
+// A D3D12 command signature sets root constants and binds a root CBV per command, and no Vulkan
+// indirect draw can rebind anything per command. So on SPIR-V the shader reads its own command out
+// of the argument buffer instead. CmdExecuteIndirect pushes the address, the stride and the two
+// block offsets, and the shader adds its own command index.
 //
-// The command index is `DrawIndex` for a draw or a mesh dispatch, which Vulkan supplies as a
-// builtin, and `m_commandIndexBase` for an indirect compute dispatch, which has no such builtin
-// and is recorded one dispatch at a time.
+// The command index is DrawIndex for a draw or a mesh dispatch, which Vulkan supplies as a builtin,
+// and m_commandIndexBase for an indirect compute dispatch, which has no such builtin.
 //
-// `RootConstants` and `RootCBV` keep their names and stay plain variables, so **no shader body
-// changes**. They become statics loaded once at the top of the entry point rather than uniform
-// buffers bound by a descriptor. The entry point pays for that with two macros in its signature
-// and one in its first line.
+// RootConstants and RootCBV keep their names and stay plain variables, so no shader body changes.
+// They become statics loaded once at the top of the entry point rather than uniform buffers bound by
+// a descriptor. The entry point pays for that with two macros in its signature and one in its first
+// line.
 //
-// Everything here is inside `__spirv__`, which DXC defines only when it targets SPIR-V. The
-// Direct3D 12 path keeps its command signature and compiles to identical DXIL.
+// All of this is inside __spirv__, so the D3D12 path keeps its command signature and compiles to
+// identical DXIL.
 
 #ifdef __spirv__
 
@@ -173,14 +172,14 @@ static uint EE_g_commandIndex = 0;
 
 #define EE_INDIRECT_COMMAND_ADDRESS ( EE_IndirectRoot.m_argumentBufferAddress + uint64_t( EE_g_commandIndex ) * uint64_t( EE_IndirectRoot.m_stride ) )
 
-// **The `ConstantBuffer` declaration stays.** It is not read on this path, but the engine builds
-// its command signature from the shader's reflected bindings - `EngineShader.cpp` walks
-// `m_descriptorReflections` - so deleting the binding deletes the argument buffer layout that
-// both backends agree on. DXC strips a resource nothing references, so the direct read below is
-// what keeps it: `m_stride` is a push constant, so nothing can prove the branch dead.
+// The ConstantBuffer declaration stays. It is not read on this path, but the engine builds its
+// command signature from the shader's reflected bindings, so deleting the binding deletes the
+// argument buffer layout both backends agree on. DXC strips a resource nothing references, and the
+// direct read below is what keeps it: m_stride is a push constant, so the branch cannot be proved
+// dead.
 //
-// It is also a real fallback. A shader declared this way and then bound directly rather than
-// through an indirect draw still reads the descriptor the engine wrote.
+// It is also a real fallback. A shader declared this way and then bound directly still reads the
+// descriptor the engine wrote.
 
 #define EE_DECLARE_INDIRECT_ROOT_CONSTANTS( Type, Register, Space )                                                     \
     EE_DECLARE_ROOT_CONSTANTS( Type, Register, Space );                                                                 \
@@ -215,9 +214,9 @@ static uint EE_g_commandIndex = 0;
         }                                                                                                               \
     }
 
-// **Each indirect shader writes these two lines itself, after its declarations.** A macro cannot
-// emit a `#define`, and putting them here would rename `RootConstants` in every shader in the
-// engine rather than in the four an indirect draw reaches:
+// Each indirect shader writes these two lines itself, after its declarations. A macro cannot emit a
+// #define, and putting them here would rename RootConstants in every shader in the engine rather
+// than in the few an indirect draw reaches:
 //
 //     #ifdef __spirv__
 //     #define RootConstants EE_g_RootConstants
@@ -229,22 +228,17 @@ static uint EE_g_commandIndex = 0;
 #define EE_INDIRECT_DISPATCH_ENTRY_ARGS
 #define EE_INDIRECT_DISPATCH_ENTRY_INIT     EE_g_commandIndex = EE_IndirectRoot.m_commandIndexBase; EE_InitIndirectRootConstants(); EE_InitIndirectRootCBV();
 
-// **The pixel shader of an indirect draw needs the same block, and it is easy to miss.**
-// `RootConstants` and `RootCBV` are renamed to the two statics for the whole translation unit, so
-// a pixel shader in the same file reads them too - and a static nothing assigns is zero. Every
-// `RootCBV` field a material pixel shader reads came back as 0: the environment map handles, so
-// the image-based lighting term was black, and `m_numDirectionalLightPages`, so the light loop
-// never ran. Geometry, normals and albedo were all correct and every lit surface was still
-// black. The Direct3D path is unaffected - it binds a real root CBV for every stage.
+// The pixel shader of an indirect draw needs this too, and it is easy to miss. RootConstants and
+// RootCBV are renamed to the two statics for the whole translation unit, so a pixel shader in the
+// same file reads them as well, and a static nothing assigns is zero. Omitting it reads every
+// RootCBV field as 0, which leaves lit surfaces black while geometry and albedo look correct.
+// D3D12 is unaffected, because it binds a real root CBV for every stage.
 //
-// **There is no `DrawIndex` in a fragment shader**, so this reads command `m_commandIndexBase`,
-// which is 0 for a draw. That is exact for the root CBV: `BucketResolve.esf` writes the same
-// `RootCBV.m_deviceAddress` into every command it emits, so the CBV does not vary across the
-// argument buffer. It is not exact for root constants that do vary per command -
-// `m_clusterOffset`, `m_renderViewIndex`, `m_clusterVisibleBuffer` - and no pixel shader reads
-// one of those today. If one ever does, the command index has to travel from the mesh shader as
-// a per-primitive attribute instead. Registered in Docs/Linux/Progress.md under "Deferred on
-// purpose".
+// There is no DrawIndex in a fragment shader, so this reads command m_commandIndexBase, which is 0
+// for a draw. That is exact for the root CBV, because the same device address is written into every
+// command. It is not exact for root constants that vary per command, and no pixel shader reads one
+// today. If one ever does, the command index has to travel from the mesh shader as a per-primitive
+// attribute instead.
 #define EE_INDIRECT_PIXEL_ENTRY_INIT        EE_g_commandIndex = EE_IndirectRoot.m_commandIndexBase; EE_InitIndirectRootConstants(); EE_InitIndirectRootCBV();
 
 #else
@@ -273,23 +267,19 @@ static uint EE_g_commandIndex = 0;
 // mesh shader. See microsoft/DirectXShaderCompiler#6862. So it is written out by hand with the
 // SPIR-V inline intrinsics, which needs no compiler patch.
 //
-// **Only in the pixel shader.** DXC already decorates the mesh shader's outputs, and applying it
-// twice to the same variable is not what is wanted; `__SHADER_TARGET_STAGE` is how the shared
-// struct tells the two stages apart. Both macros are empty everywhere else, so Direct3D 12 and
-// every other stage compile exactly as before.
+// Only in the pixel shader. DXC already decorates the mesh shader's outputs, and __SHADER_TARGET_STAGE
+// is how the shared struct tells the two stages apart. Both macros are empty everywhere else, so
+// D3D12 and every other stage compile exactly as before.
 //
-// **Two limits, both found by reading `-Fc` rather than by any diagnostic.**
+// Two limits, neither of which any diagnostic reports. The decoration does not reach the flattened
+// stage variable from a member whose type is a struct; it has to go on that struct's own members.
+// And putting it in a struct the pixel shader copies wholesale into a local produces invalid SPIR-V,
+// because the decoration switches DXC to flattening per AST field and the copy then rebuilds it with
+// one constituent per bitfield. spirv-val rejects that, so it does fail loudly. PrimitiveOutput is
+// that case and is left undecorated; DebugDrawPrimitiveOutput reads its members directly and is
+// decorated.
 //
-// The decoration does not reach the flattened stage variable from a member whose type is a
-// struct - it has to go on that struct's own members. And putting it anywhere in a struct the
-// pixel shader copies wholesale into a local produces invalid SPIR-V: the decoration switches
-// DXC to flattening the struct per AST field, and the copy then rebuilds it with one constituent
-// per bitfield into the single member those bitfields lower to. spirv-val rejects it, so it
-// fails loudly at least. `PrimitiveOutput` in RendererTypes.esh is that case, via
-// `MaterialShaderInput::New`, and is left undecorated; `DebugDrawPrimitiveOutput` reads its
-// members directly and is decorated. See "Still open" in Docs/Linux/Progress.md.
-//
-// NVIDIA renders correctly without any of this, so the frame is not the test. `-Fc` is.
+// NVIDIA renders correctly without any of this, so the frame is not the test. Read -Fc output.
 #if defined( __spirv__ ) && ( __SHADER_TARGET_STAGE == __SHADER_STAGE_PIXEL )
 
 // SPV_EXT_mesh_shader: PerPrimitiveEXT is decoration 5271, MeshShadingEXT is capability 5283.
@@ -303,15 +293,14 @@ static uint EE_g_commandIndex = 0;
 
 #endif
 
-// **A 16-bit value crossing a stage boundary needs `storageInputOutput16`, and NVIDIA does not
-// have it.** Not a driver gap that will close: no NVIDIA part reports the feature, so a
-// `uint16_t` interpolant makes the module fail to create outright with
-// VUID-VkShaderModuleCreateInfo-pCode-08740. Every resource handle in this engine is a
-// `uint16_t`, so any handle passed from a mesh shader to a pixel shader hits it.
+// A 16-bit value crossing a stage boundary needs storageInputOutput16, and no NVIDIA part reports
+// that feature, so a uint16_t interpolant makes the module fail to create outright. Every resource
+// handle in this engine is a uint16_t, so any handle passed from a mesh shader to a pixel shader
+// hits it.
 //
-// A stage variable occupies one location either way, so widening costs nothing, and a handle
-// never exceeds 16 bits so no value changes. The `~0` "no texture" sentinel stays correct because
-// it widens with the type it is assigned to. Direct3D 12 keeps the 16-bit type.
+// A stage variable occupies one location either way, so widening costs nothing, and a handle never
+// exceeds 16 bits so no value changes. The ~0 "no texture" sentinel stays correct because it widens
+// with the type it is assigned to. D3D12 keeps the 16-bit type.
 #ifdef __spirv__
 #define EE_INTERSTAGE_HANDLE uint
 #else

@@ -19,11 +19,11 @@
 //-------------------------------------------------------------------------
 // Microsoft CRT compatibility
 //-------------------------------------------------------------------------
-// A handful of platform-neutral files call the MSVC "secure" CRT functions directly. Providing
-// them here keeps those files unedited, which is the whole point of Conventions rule 1.
+// A handful of platform-neutral files call the MSVC "secure" CRT functions directly. Providing them
+// here keeps those files unedited.
 //
 // The vendored libraries under Code/**/ThirdParty also use these, but each already selects the
-// portable variant behind its own _MSC_VER guard, so nothing here is for their benefit.
+// portable variant behind its own _MSC_VER guard, so none of this is for their benefit.
 
 #include <string.h>
 #include <stdio.h>
