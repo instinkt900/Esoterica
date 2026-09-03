@@ -677,6 +677,62 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-03 - Comments in the 27 `_Linux` files. Unplanned. Comment-only, no code change
+
+The same treatment as `RHI_Vulkan.cpp`, applied to every `*_Linux.{cpp,h}` file. Same keep test, same
+style. These were in far better shape to begin with: 929 comment lines to 876, and 14% density before
+the pass rather than 23%.
+
+**Two constraints shaped this more than the keep test did, and they are the useful part of this entry.**
+
+**A comment inherited from a `_Win32` sibling is upstream text. Do not touch it.** Conventions rule 1
+wants a Linux file and its Win32 sibling to diff cleanly against each other, and rule 3 forbids
+improving upstream prose. Nineteen of the 27 files have a sibling, and roughly 130 of their comment
+lines are verbatim from it. Checked with:
+
+```bash
+diff <(grep -oE '//.*' Foo_Win32.cpp) <(grep -oE '//.*' Foo_Linux.cpp)
+```
+
+Only the `>` lines are the fork's to edit. This caught two live cases: `Application_Linux.h:58`
+("Called whenever we receive an application exit request") and `Math_Linux.h:8` ("so we need to handle
+it explicitly") both read as first-person style slips and are byte-identical to the Win32 sibling.
+Rewriting them would have created sibling drift to gain nothing.
+
+**The vendored imgui region in `ImguiPlatform_Linux.cpp` is off limits below its banner.** Lines 40 to
+1122 are upstream `imgui_impl_sdl3.cpp`, and the banner exists to say that re-sync is
+`diff <upstream> <this region>`. Its comments look exactly like candidates for this pass and are not.
+Only the fork's own banner was rewritten, 25 lines to 18, keeping the provenance, the reason rule 8 is
+deliberately broken there, and the change checklist. Verify with `git diff -U0` on that file: every
+hunk should sit above line 40.
+
+**What was cut.** 10 phase and `Progress.md` references, 4 markdown bold markers, 4 first-person or
+filler slips in fork-owned prose. Three banners lost the most: the inotify header, the crash handler,
+and the `ResourceServer` tray note.
+
+**What was kept, and is worth keeping.** Several of these comments carry the only record of a real
+trap. The `fd + 1` encoding in `FileSystemWatcher_Linux.cpp`, because the shared header's
+`IsWatching()` tests against `nullptr` and `inotify_init1` can return fd 0. The async-signal-safety
+rule in `Platform_Linux.cpp`. The `backtrace()` warm-up, which exists so a crash inside the allocator
+does not deadlock the handler reporting it. The negated gamepad Y axes. Scancodes rather than keycodes.
+None of those are visible in the code.
+
+**Verification.** The comment stripper over all 27 files against `HEAD`: identical output, 3983 code
+lines, no diff. Then a full `ninja -f Build/Linux/Esoterica.ninja` - 844 of 844 targets, every binary
+linked. The Windows MSBuild build was not run; every file is inside `#ifdef __linux__` and no code
+changed.
+
+#### What the next session should know
+
+- **Diff against the Win32 sibling before editing any comment in a `_Linux` file.** The one-liners
+  above each function are usually upstream's. This is the rule this task exists to record.
+- The 8 files with no sibling are wholly the fork's: the three `Application_Linux` pairs,
+  `ComPtr_Linux.h`, `ImguiX_Linux.h`, `InputDevice_XBoxController_Linux.cpp`,
+  `SystemDialogs_Linux.cpp` and `FileSystemWatcher_Linux.cpp`.
+- Still untouched: the build tooling. `NinjaGen/*.py`, `DownloadDependencies.sh`, `RunReflection.sh`
+  and `CompileShaders.sh` have had no pass. Python, so a `#` stripper is needed to prove the same
+  property.
+
 ### 2026-09-03 - Comments in `RHI_Vulkan.cpp`. Unplanned. Comment-only, no code change
 
 The comments in `RHI_Vulkan.cpp` had grown into essays. They narrated the porting effort instead of

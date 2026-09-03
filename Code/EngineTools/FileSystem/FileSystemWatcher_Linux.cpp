@@ -12,30 +12,29 @@
 //-------------------------------------------------------------------------
 // inotify file system watcher
 //-------------------------------------------------------------------------
-// The Linux counterpart to FileSystemWatcher.cpp. The header is shared and its members are
-// deliberately platform-neutral, so this file reuses them rather than changing the layout:
+// The shared header's members are named for the Win32 implementation. This file reuses them rather
+// than changing the layout:
 //
 //   m_pDirectoryHandle    the inotify fd, encoded. See "Handle encoding" below.
 //   m_pOverlappedEvent    the watch-descriptor to directory map
 //   m_pResultBuffer       the inotify read buffer
 //   m_numBytesReturned    bytes in that buffer
-//   m_requestPending      unused; inotify has no in-flight request to track
+//   m_requestPending      unused. inotify has no in-flight request to track
 //
 //-------------------------------------------------------------------------
 // Handle encoding
 //-------------------------------------------------------------------------
-// IsWatching() is an inline in the shared header that tests `m_pDirectoryHandle != nullptr`, and
-// inotify_init1 can legitimately return fd 0. Storing the raw fd would make IsWatching() report
-// false for a perfectly good watcher.
+// The shared header's IsWatching() tests m_pDirectoryHandle != nullptr, and inotify_init1 can
+// legitimately return fd 0, which would read as "not watching".
 //
-// So the fd is stored **offset by one**: (void*)( intptr_t )( fd + 1 ), and 1 is subtracted on
-// every use. Nothing else in this file may touch m_pDirectoryHandle directly.
+// So the fd is stored offset by one: (void*)( intptr_t )( fd + 1 ), and 1 is subtracted on every
+// use. Nothing else in this file may touch m_pDirectoryHandle directly.
 //-------------------------------------------------------------------------
 // Recursion
 //-------------------------------------------------------------------------
-// ReadDirectoryChangesW watches a whole tree with one call. **inotify does not**: it watches a
-// single directory, so every subdirectory needs its own watch, and the set has to be maintained
-// as directories are created, deleted and renamed. That bookkeeping is most of this file.
+// ReadDirectoryChangesW watches a whole tree with one call and inotify watches one directory, so
+// every subdirectory needs its own watch and the set has to be maintained as directories are
+// created, deleted and renamed. That bookkeeping is most of this file.
 //-------------------------------------------------------------------------
 
 namespace EE::FileSystem
@@ -259,7 +258,7 @@ namespace EE::FileSystem
     void Watcher::RequestListOfDirectoryChanges()
     {
         // Nothing to do. The Win32 version issues an asynchronous ReadDirectoryChangesW here and
-        // polls it in Update(). inotify queues events in the kernel, so Update() simply reads.
+        // polls it in Update(). inotify queues events in the kernel, so Update() only reads.
     }
 
     void Watcher::ProcessListOfDirectoryChanges()

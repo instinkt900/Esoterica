@@ -92,11 +92,10 @@ namespace EE::FileSystem
         // Nothing is there under that spelling, so walk the path a component at a time and look
         // for an entry that differs only in case.
         //
-        // On Windows this function asks the filesystem for a path's canonical case. Here it is
-        // doing something subtly different: recovering the real path when the caller was given
-        // the wrong case. That matters because several .vcxproj entries disagree with the disk,
-        // for example ThirdParty\enkits against ThirdParty/EnkiTS, and MSBuild never notices.
-        // The Reflector reads those paths directly.
+        // On Windows this asks the filesystem for a path's canonical case. Here it does something
+        // subtly different: it recovers the real path when the caller was given the wrong case.
+        // Several .vcxproj entries disagree with the disk, such as ThirdParty\enkits against
+        // ThirdParty/EnkiTS, and MSBuild never notices. The Reflector reads those paths directly.
         String const requestedPath( pPath );
         String resolvedPath;
         resolvedPath.reserve( requestedPath.length() );

@@ -60,13 +60,12 @@ namespace EE::FileSystem
 
     uint64_t GetFileModifiedTime( char const* path )
     {
-        // The return value is opaque: every caller stores it and later compares it for
-        // equality, to decide whether a source file changed. It never has to mean the same
-        // thing as the Win32 value, which is a FILETIME in 100ns ticks since 1601.
+        // The return value is opaque: callers only compare it for equality, to decide whether a
+        // source file changed, so it need not match the Win32 FILETIME.
         //
-        // Nanoseconds since the epoch is used here because it is the finest granularity the
-        // filesystem offers. Seconds would let two edits inside the same second look identical,
-        // which shows up as a resource that silently fails to recompile.
+        // Nanoseconds since the epoch, because it is the finest granularity the filesystem offers.
+        // Seconds would let two edits inside one second look identical, which shows up as a resource
+        // that silently fails to recompile.
         struct stat fileInfo;
         if ( stat( path, &fileInfo ) != 0 )
         {

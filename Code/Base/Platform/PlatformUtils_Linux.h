@@ -38,15 +38,11 @@ namespace EE::Platform::Linux
 
     // Vulkan surface
     //-------------------------------------------------------------------------
-    // This is the one place in the engine that knows both SDL3 and Vulkan.
+    // The one place in the engine that knows both SDL3 and Vulkan. Creating a VkSurfaceKHR needs a
+    // window system library and Base/Render must not depend on one, so RHI_Vulkan.cpp calls through
+    // here. The handles cross as void*, so this header needs neither SDL nor Vulkan either.
     //
-    // Direct3D 12 hands DXGI an HWND. Vulkan needs a VkSurfaceKHR, and creating one needs a
-    // window system library. Base/Render must not depend on one, so RHI_Vulkan.cpp calls through
-    // here instead and never sees an SDL header. The handles cross as void*, so this header
-    // needs neither SDL nor Vulkan either.
-    //
-    // pNativeWindowHandle is the SDL_Window* that Platform::SetMainWindowHandle holds. See the
-    // 2026-08-30 decision in Docs/Linux/Progress.md.
+    // pNativeWindowHandle is the SDL_Window* that Platform::SetMainWindowHandle holds.
 
     // Returns a VkSurfaceKHR, or nullptr on failure. The caller owns it.
     EE_BASE_API void* CreateVulkanSurface( void* pVulkanInstance, void* pNativeWindowHandle );
@@ -59,9 +55,8 @@ namespace EE::Platform::Linux
 // Win32 name alias
 //-------------------------------------------------------------------------
 // Shared tools code calls these helpers as "Platform::Win32::X", because upstream only ever had a
-// Win32 implementation. Aliasing the namespace keeps those call sites compiling unchanged, which
-// matters more than the name reading oddly here: the alternative is a platform guard around every
-// call, in exactly the editor UI code upstream edits most often.
+// Win32 implementation. The alias keeps those call sites compiling unchanged. The alternative is a
+// platform guard around every call, in the editor UI code upstream edits most often.
 
 namespace EE::Platform
 {

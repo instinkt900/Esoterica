@@ -56,10 +56,9 @@ namespace EE
 
     //-------------------------------------------------------------------------
 
-    // No HINSTANCE, and no icon or splash screen resource IDs. The Windows build loads both from
-    // Code/Applications/Engine/Win32/, which holds a .ico and a .bmp reachable only through a
-    // .rc file. Phase 6 says not to parse those, and LinuxApplication takes file paths that may
-    // be null, so the Linux engine starts with neither. See P6.2.
+    // No HINSTANCE, and no icon or splash screen resource IDs. The Windows build reaches both
+    // through a .rc file, and nothing here parses those, so LinuxApplication takes file paths that
+    // may be null instead.
     EngineApplication::EngineApplication()
         : LinuxApplication( "Esoterica Engine" )
         , m_engine( TFunction<bool( EE::String const& error )>( [this] ( String const& error )-> bool { return FatalError( error ); } ) )
@@ -72,11 +71,10 @@ namespace EE
 
     void EngineApplication::ProcessInputEvent( SDL_Event const& event )
     {
-        // The event travels by pointer, because GenericMessage is four uint64_t and an SDL_Event
-        // is 128 bytes. This is sound only because ForwardInputMessageToInputDevices dispatches
-        // synchronously, from inside LinuxApplication's event loop, while the event is still on
-        // the stack. **Nothing may queue this message for later.** The Win32 sibling passes an
-        // HRAWINPUT handle through the same field. See the P6.4 entry in Docs/Linux/Progress.md.
+        // The event travels by pointer, because GenericMessage is four uint64_t and an SDL_Event is
+        // 128 bytes. Sound only because ForwardInputMessageToInputDevices dispatches synchronously,
+        // while the event is still on LinuxApplication's stack. Never queue this message for later.
+        // The Win32 sibling passes an HRAWINPUT handle through the same field.
         m_engine.GetInputSystem()->ForwardInputMessageToInputDevices( { (uint64_t) &event, 0, 0, 0 } );
     }
 

@@ -4,15 +4,12 @@
 //-------------------------------------------------------------------------
 // Minimal Microsoft::WRL::ComPtr replacement
 //-------------------------------------------------------------------------
-// ShaderReflection_ShaderCompiler.cpp holds DXC interfaces in Microsoft::WRL::ComPtr, from
-// <wrl/client.h>. That header is part of the Windows SDK and has no Linux equivalent.
+// The shader compiler holds DXC interfaces in Microsoft::WRL::ComPtr, from the Windows SDK's
+// <wrl/client.h>, which has no Linux equivalent. DXC's own WinAdapter.h ships CComPtr, but that is
+// the older ATL shape with no Get(), GetAddressOf() or ReleaseAndGetAddressOf(). Providing those
+// three here keeps every call site unedited, which is the point.
 //
-// DXC's own WinAdapter.h ships CComPtr, but its API is the older ATL shape: it has no Get(),
-// GetAddressOf() or ReleaseAndGetAddressOf(), which is what the call sites use. Providing those
-// three here keeps all eleven call sites unedited, which is the point.
-//
-// This is deliberately not a general-purpose COM pointer. It does what the shader compiler
-// needs and nothing else.
+// Not a general-purpose COM pointer. It does what the shader compiler needs and nothing else.
 //-------------------------------------------------------------------------
 
 #include "dxcapi.h"

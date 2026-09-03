@@ -36,10 +36,9 @@ namespace EE
 
     //-------------------------------------------------------------------------
 
-    // No HINSTANCE, and no icon resource ID. The Windows build takes IDI_EDITOR_ICON and the
-    // splash screen ID 102 from Code/Applications/Editor/Win32/Resource.h, which only a .rc file
-    // resolves. Phase 6 says not to parse those, and LinuxApplication takes file paths that may
-    // be null, so the Linux editor starts with neither. Same choice as EngineApplication_Linux.
+    // No HINSTANCE, and no icon resource ID. The Windows build takes its icon and splash screen IDs
+    // from a Resource.h that only a .rc file resolves, and nothing here parses those, so
+    // LinuxApplication takes file paths that may be null instead.
     //
     // The Borderless flag is kept: the editor draws its own title bar, and LinuxApplication's
     // BorderlessWindowHitTest calls GetBorderlessTitleBarInfo below through SDL_SetWindowHitTest.
@@ -60,10 +59,9 @@ namespace EE
 
     void EditorApplication::ProcessInputEvent( SDL_Event const& event )
     {
-        // The event travels by pointer, for the reason the P6.4 entry in Docs/Linux/Progress.md
-        // records: GenericMessage is four uint64_t and an SDL_Event is 128 bytes. Sound only
-        // because ForwardInputMessageToInputDevices dispatches synchronously, while the event is
-        // still on LinuxApplication's stack. Nothing may queue this message for later.
+        // The event travels by pointer, because GenericMessage is four uint64_t and an SDL_Event is
+        // 128 bytes. Sound only because ForwardInputMessageToInputDevices dispatches synchronously,
+        // while the event is still on LinuxApplication's stack. Never queue this message for later.
         m_engine.GetInputSystem()->ForwardInputMessageToInputDevices( { (uint64_t) &event, 0, 0, 0 } );
     }
 

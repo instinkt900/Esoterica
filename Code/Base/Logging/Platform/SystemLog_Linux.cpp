@@ -18,10 +18,9 @@ namespace EE::SystemLog
 
         // Add newline
         //-------------------------------------------------------------------------
-        // Note: this deliberately differs from SystemLog_Win32.cpp, which bounds this check at
-        // 509 even though the buffer is 2048, so messages between 509 and 2045 characters
-        // silently lose their newline. That is an upstream bug, recorded in
-        // Docs/Linux/Progress.md. The bound here is the real buffer size.
+        // Deliberately different from SystemLog_Win32.cpp, which bounds this at 509 even though the
+        // buffer is 2048, so messages between 509 and 2045 characters silently lose their newline.
+        // That is an upstream bug. The bound here is the real buffer size.
 
         if ( numCharsWritten > 0 && numCharsWritten < (int32_t) ( bufferSize - 2 ) )
         {
