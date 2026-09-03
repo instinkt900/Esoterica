@@ -833,13 +833,20 @@ all. Verified in the editor, which passes `maxNumCommands` = 146 where the engin
   was blocked on "this machine's Intel UHD 620" while sitting on the 3090.
   `nvidia-smi --query-gpu=name --format=csv,noheader` settles it, and the repo path is the same on
   both machines.
-- **The engine did not start the Resource Server for itself, and it dies without one.** With
-  nothing on 5556 it retries, logs `Unable to connect to 127.0.0.1 on port 5556`, then asserts
-  `LOST CONNECTION!!` and aborts. Starting `Esoterica.Applications.ResourceServer` by hand first
-  fixed it, and every run above did that. This is worth a look, because "Start here" above says
-  P7.3 opened `EnsureResourceServerIsRunning` to Linux so `-packaged` is no longer required -
-  **not reproduced in this session**, and not investigated either, since starting the server by
-  hand was enough to get on with P9.4.
+- **Start the Resource Server before the engine. Auto-start works, and then loses a race.**
+  P7.3's `EnsureResourceServerIsRunning` does its job: the engine forks the server and it is
+  listening on 5556 within a second, measured. But **`NetworkResourceProvider::Update()` halts on
+  the first frame the client is not yet connected** - `if ( !m_networkClient.IsConnected() ) {
+  EE_TRACE_HALT( "LOST CONNECTION!!" ); }`, with no grace period and no wait-for-ready. The
+  freshly forked server needs about a second to bind, because it creates its own Vulkan context
+  for its UI, and the engine finishes initialising inside that window. So it aborts about two
+  seconds in, having launched the server correctly.
+
+  **Pre-existing, platform-neutral, and not this merge.** The halt is byte-identical at the merge
+  base and upstream did not touch it, even though it did rework `NetworkClient.cpp` and
+  `ResourceProvider_Network.cpp` in `47e6293`. It is upstream's code and it would race on Windows
+  too; nothing about it is a Linux defect, so it is recorded rather than fixed - Conventions rule 3.
+  Starting the server first sidesteps it completely, and every measurement above did that.
 - **Append the `[Render:RHI]` block to `Esoterica.ini`, do not write it with `>`.** The recipe in
   "Start here" truncates, and the file on this machine carries a `[Resource]` section naming
   `CompiledData` and the server. Appending was deliberate; whether truncating it actually breaks a
