@@ -382,6 +382,46 @@ namespace EE::Reflection
         return true;
     }
 
+    #if !_WIN32
+    // Upstream shaders the Linux build does not compile. The counterpart of
+    // Code/Scripts/NinjaGen/Exclusions.txt, which does the same job for C++ sources; the shader
+    // list cannot live there because the Reflector reads the .vcxproj directly rather than going
+    // through NinjaGen. Match is a substring of the project-relative path, '/' separated.
+    //
+    // Say *why* a shader is excluded, and keep the list honest - a line that no longer matches
+    // anything is a leftover from an upstream rename.
+    static bool IsShaderExcludedFromLinuxBuild( String const& projectRelativePath )
+    {
+        static char const* const excludedShaderPaths[] =
+        {
+            // The FFX parallel sort. Its only consumer is Render/Device/DeviceRadixSort.cpp,
+            // which has no callers anywhere in Code/ - upstream removed radix sorting from the
+            // culling pipeline and left the files behind.
+            //
+            // They do not compile, and not because of Linux. Every .esf here does
+            // "#define RWStructuredBuffer RWBuffer" before including FFX_ParallelSort.esh, which
+            // turns the RWStructuredBuffer<FFX_ParallelSortCB> parameter at line 475 into a typed
+            // buffer of a struct. DXC 1.10 rejects that identically for cs_6_6 DXIL and for
+            // SPIR-V, so upstream's own Windows build cannot compile them either. Guarded to
+            // non-Windows regardless: fixing Windows is not this fork's to do.
+            //
+            // Reported upstream rather than fixed here - Conventions rule 3. Remove this entry
+            // when upstream fixes it or deletes the files.
+            "Render/Shaders/FFX/",
+        };
+
+        for ( auto pExcludedPath : excludedShaderPaths )
+        {
+            if ( projectRelativePath.find( pExcludedPath ) != String::npos )
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+    #endif
+
     bool Reflector::ParseProject( ReflectedProject& project )
     {
         std::ifstream prjFile( project.m_path );
@@ -487,6 +527,13 @@ namespace EE::Reflection
 
                 if ( shaderFilePathStr.find( Settings::g_shaderSourceFileExtension ) != String::npos )
                 {
+                    #if !_WIN32
+                    if ( IsShaderExcludedFromLinuxBuild( shaderFilePathStr ) )
+                    {
+                        continue;
+                    }
+                    #endif
+
                     FileSystem::Path shaderFilePath = project.m_directoryPath + shaderFilePathStr;
 
                     #if !_WIN32

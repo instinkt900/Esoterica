@@ -69,3 +69,22 @@ Code/Base/ThirdParty/D3D12MemoryAllocator/**
 # so a shim would make it build - but building a .sln parser on a platform with no .sln is
 # pointless, and the shim would be the first of many.
 Code/Applications/BuildGenerator/**
+
+
+#-------------------------------------------------------------------------
+# Upstream code with no callers, that does not compile
+#-------------------------------------------------------------------------
+
+# The FFX parallel sort driver. It has no callers anywhere in Code/ - upstream removed radix
+# sorting from the culling pipeline in 47e6293 and left the file in the .vcxproj.
+#
+# It includes the generated reflection headers for the seven Render/Shaders/FFX/*.esf shaders,
+# and those shaders do not compile: each one redefines RWStructuredBuffer to RWBuffer before
+# including FFX_ParallelSort.esh, which makes the RWStructuredBuffer<FFX_ParallelSortCB>
+# parameter at line 475 a typed buffer of a struct. DXC 1.10 rejects it for DXIL and SPIR-V
+# alike, so this is upstream's bug and not a Linux one. The shaders are skipped by the matching
+# list in Reflector.cpp; this line drops the C++ that would otherwise fail to find their headers.
+#
+# Reported upstream rather than fixed - Conventions rule 3. Remove both entries when upstream
+# fixes the shaders or deletes the file.
+Code/Engine/Render/Device/DeviceRadixSort.cpp
