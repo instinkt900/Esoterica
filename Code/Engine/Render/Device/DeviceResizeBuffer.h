@@ -11,18 +11,22 @@ namespace EE::Render
 
         //-------------------------------------------------------------------------
 
-        void Initialize( RHI::Context* pContextRHI );
+        void Initialize( RHI::Context* pContextRHI, bool allowShrink );
         void Shutdown( RHI::Context* pContextRHI );
 
         template <typename F>
         void UpdateDeviceResources( size_t newBufferSize, F fn );
+
+    private:
+
+        bool            m_allowShrink = false;
     };
 
     //-------------------------------------------------------------------------
 
-    inline void DeviceResizeBuffer::Initialize( RHI::Context* pContextRHI )
+    inline void DeviceResizeBuffer::Initialize( RHI::Context* pContextRHI, bool allowShrink )
     {
-        // Nothing
+        m_allowShrink = allowShrink;
     }
 
     inline void DeviceResizeBuffer::Shutdown( RHI::Context* pContextRHI )
@@ -44,12 +48,14 @@ namespace EE::Render
                 needNewBuffer = true;
             }
 
-            size_t currentBufferSize = m_pBuffer->m_size;
-            size_t sizeThreshold = ( newBufferSize / 3 ) * 2;
-
-            if ( currentBufferSize > 4096 && currentBufferSize < sizeThreshold ) // Shrink if needed
+            if ( m_allowShrink )
             {
-                needNewBuffer = true;
+                size_t const currentBufferSize = m_pBuffer->m_size;
+
+                if ( currentBufferSize > 4096 && newBufferSize < ( currentBufferSize / 3 ) * 2 ) // Shrink if needed
+                {
+                    needNewBuffer = true;
+                }
             }
         }
 

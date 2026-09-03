@@ -15,8 +15,6 @@ namespace EE::Render
     struct MaterialShaderRenderBucket
     {
         StringID                m_bucketName;
-        RHI::Buffer*            m_clusterVisibleCounterBuffer = nullptr;
-        DeviceResizeBuffer      m_clusterVisibleBuffer = {};
         RHI::Buffer*            m_pDrawCounterBuffer = nullptr;
         DeviceResizeBuffer      m_drawArgumentBuffer = {};
 
@@ -50,7 +48,7 @@ namespace EE::Render
     struct EE_ENGINE_API DeviceRenderView
     {
         // TODO: This is ugly, need to keep in sync with the actual amount of buckets.
-        // Make sure it is in sync with uint ShaderIndexToBucketIndex( uint shaderIndex ) shader function!
+        // Must match the sub-bucket count used by GetBucketTypeForView() in RendererSurfaceShaderLayout.esh!
         static constexpr size_t s_NumRenderBucketsPerViewBucket = 3;
 
         TVector<DeviceRenderViewBucket> m_renderViewBuckets;
@@ -67,6 +65,6 @@ namespace EE::Render
         void Initialize( RenderSystem* pRenderSystem, size_t numMaterialShaderPipelineBuckets );
         void Shutdown( RenderSystem* pRenderSystem );
 
-        void UpdateDeviceResources( RenderSystem* pRenderSystem, TArrayView<uint32_t const> clusterCapacityPerShader );
+        void UpdateDeviceResources( RenderSystem* pRenderSystem, TArrayView<uint32_t const> clusterCapacityPerShader, uint32_t numMeshInstancePages );
     };
 }

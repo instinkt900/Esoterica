@@ -17,7 +17,12 @@ namespace EE
     class Log;
     struct IDataFile;
     namespace TypeSystem { class TypeRegistry; }
-    namespace Resource { struct ResourceDescriptor; }
+
+    namespace Resource
+    {
+        struct ResourceDescriptor;
+        struct CompileDependency;
+    }
 }
 
 //-------------------------------------------------------------------------
@@ -28,7 +33,7 @@ namespace EE
     //-------------------------------------------------------------------------
     // The way we load descriptors is pretty naive and can definitely be improved
 
-    class EE_ENGINETOOLS_API FileRegistry final
+    class EE_ENGINETOOLS_API DataFileSystem final
     {
     public:
 
@@ -117,7 +122,7 @@ namespace EE
 
     public:
 
-        ~FileRegistry();
+        ~DataFileSystem();
 
         inline bool WasInitialized() const { return m_pTypeRegistry != nullptr; }
         void Initialize( TypeSystem::TypeRegistry const* pTypeRegistry, TaskSystem* pTaskSystem, FileSystem::Path const& rawResourceDirPath, FileSystem::Path const& compiledResourceDirPath );
@@ -143,11 +148,11 @@ namespace EE
         bool IsDataFileCacheBuilt() const { return m_state > DatabaseState::BuildingDataFileCache; }
 
         // Are we currently rebuilding the DB?
-        bool IsBuildingCaches() const { return m_state > DatabaseState::Empty && m_state < DatabaseState::Ready; }
+        bool IsBuildingCaches() const { return m_state > DatabaseState::Empty && m_state <= DatabaseState::BuildingDataFileCache; }
 
         // Get the current progress where 0 mean no progress and 1.0f means complete!
         // Progress is per state i.e. progress will reset when we start building the descriptor cache
-        float GetProgress() const;
+        float GetCacheBuildProgress() const;
 
         // General Info
         //-------------------------------------------------------------------------
@@ -219,11 +224,11 @@ namespace EE
         // Get a list of all known resource of the specified type
         TVector<ResourceID> GetAllResourcesOfTypeFiltered( ResourceTypeID resourceTypeID, TFunction<bool( Resource::ResourceDescriptor const* )> const& filter, bool includeDerivedTypes = false ) const;
 
-        // Get all resources that depend on this file - note: this is a very slow function so use sparingly
-        TVector<DataPath> GetAllDependentResources( DataPath sourceFile ) const;
+        // Get all resources that depend on this file either for compilation or install - note: this is a very slow function so use sparingly
+        void GetAllResourcesThatDependOnFile( DataPath const& sourceFile, TVector<DataPath>& outCompileDependents, TVector<ResourceID>* pOutInstallDependents = nullptr ) const;
 
-        // Get all files that have a reference on this file - note: this is a very slow function so use sparingly
-        TVector<FileInfo const*> GetAllFilesThatReferenceFile( DataPath sourceFile ) const;
+        // Get all files that have a reference on this file - this is just checking all data path/resource ID properties - note: this is a very slow function so use sparingly
+        void GetAllFilesThatReferenceFile( DataPath const& sourceFile, TVector<DataFileSystem::FileInfo const*>& outReferencers ) const;
 
         // Event that fires whenever a resource is deleted
         TEventHandle<DataPath> OnFileDeleted() const { return m_fileDeletedEvent; }
@@ -258,7 +263,7 @@ namespace EE
 
         // Directory operations
         DirectoryInfo* FindDirectory( FileSystem::Path const& dirPath );
-        DirectoryInfo const* FindDirectory( FileSystem::Path const& dirPath ) const { return const_cast<FileRegistry*>( this )->FindDirectory( dirPath ); }
+        DirectoryInfo const* FindDirectory( FileSystem::Path const& dirPath ) const { return const_cast<DataFileSystem*>( this )->FindDirectory( dirPath ); }
         DirectoryInfo* FindOrCreateDirectory( FileSystem::Path const& dirPath );
 
         // Add/Remove records
@@ -291,8 +296,9 @@ namespace EE
         mutable TEvent<DataPath>                                    m_fileDeletedEvent;
 
         // Build state
+        mutable Threading::Mutex                                    m_mutex;
         std::atomic<DatabaseState>                                  m_state = DatabaseState::Empty;
-        ITaskSet*                                                   m_pAsyncTask = nullptr;
+        mutable ITaskSet*                                           m_pAsyncTask = nullptr;
         std::atomic<bool>                                           m_cancelActiveTask = false;
         std::atomic<int32_t>                                        m_numItemsProcessed = 0;
         int32_t                                                     m_totalItemsToProcess = 1;

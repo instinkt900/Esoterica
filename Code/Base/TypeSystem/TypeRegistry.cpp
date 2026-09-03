@@ -53,6 +53,7 @@ namespace EE::TypeSystem
         virtual void LoadResources( Resource::ResourceSystem* pResourceSystem, Resource::ResourceRequesterID const& requesterID, IReflectedType* pType ) const override {}
         virtual void UnloadResources( Resource::ResourceSystem* pResourceSystem, Resource::ResourceRequesterID const& requesterID, IReflectedType* pType ) const override {}
         virtual void GetReferencedResources( IReflectedType const* pType, TVector<ResourceID>& outReferencedResources ) const override {}
+        virtual void GetReferencedPaths( IReflectedType const* pType, TVector<DataPath>& outReferencedPaths ) const override {}
 
         virtual LoadingStatus GetResourceLoadingStatus( IReflectedType* pType ) const override
         {

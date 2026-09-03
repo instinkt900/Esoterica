@@ -80,9 +80,9 @@ namespace EE
         //-------------------------------------------------------------------------
 
         auto pResourceSystem = context.GetSystem<Resource::ResourceSystem>();
-        m_fileRegistry.Initialize( m_pTypeRegistry, pTaskSystem, pResourceSystem->GetSettings().m_sourceDataDirectoryPath, pResourceSystem->GetSettings().m_compiledResourceDirectoryPath );
-        m_resourceDeletedEventID = m_fileRegistry.OnFileDeleted().Bind( [this] ( DataPath const& dataPath ) { OnFileDeleted( dataPath ); } );
-        m_pFileRegistry = &m_fileRegistry;
+        m_dataFileSystem.Initialize( m_pTypeRegistry, pTaskSystem, pResourceSystem->GetSettings().m_sourceDataDirectoryPath, pResourceSystem->GetSettings().m_compiledResourceDirectoryPath );
+        m_resourceDeletedEventID = m_dataFileSystem.OnFileDeleted().Bind( [this] ( DataPath const& dataPath ) { OnFileDeleted( dataPath ); } );
+        m_pDataFileSystem = &m_dataFileSystem;
 
         // Icons/Images
         //-------------------------------------------------------------------------
@@ -140,9 +140,9 @@ namespace EE
         // Resources
         //-------------------------------------------------------------------------
 
-        m_pFileRegistry = nullptr;
-        m_fileRegistry.OnFileDeleted().Unbind( m_resourceDeletedEventID );
-        m_fileRegistry.Shutdown();
+        m_pDataFileSystem = nullptr;
+        m_dataFileSystem.OnFileDeleted().Unbind( m_resourceDeletedEventID );
+        m_dataFileSystem.Shutdown();
 
         // Systems
         //-------------------------------------------------------------------------
@@ -201,7 +201,7 @@ namespace EE
 
     void EditorUI::TryCreateNewResourceDescriptorOrDataFile( TypeSystem::TypeID typeID, FileSystem::Path const& startingDir ) const
     {
-        const_cast<DialogManager&>( m_dialogManager ).StartModalDialog<Resource::ResourceDataFileCreatorDialog>( this, typeID, startingDir.IsValid() ? startingDir : m_fileRegistry.GetSourceDataDirectoryPath() );
+        const_cast<DialogManager&>( m_dialogManager ).StartModalDialog<Resource::ResourceDataFileCreatorDialog>( this, typeID, startingDir.IsValid() ? startingDir : m_dataFileSystem.GetSourceDataDirectoryPath() );
 
         /*Resource::ResourceDataFileCreator*& pDataFileCreator = const_cast<Resource::ResourceDataFileCreator*&>( m_pResourceDataFileCreator );
         EE::Delete( pDataFileCreator );
@@ -296,9 +296,9 @@ namespace EE
 
             ImGui::Separator();
 
-            if ( ImGui::MenuItem( "Rebuild File Registry" ) )
+            if ( ImGui::MenuItem( "Rebuild Data File System" ) )
             {
-                m_fileRegistry.RequestRebuild();
+                m_dataFileSystem.RequestRebuild();
             }
 
             ImGui::EndMenu();
@@ -391,7 +391,7 @@ namespace EE
         // Resource Systems
         //-------------------------------------------------------------------------
 
-        m_fileRegistry.Update();
+        m_dataFileSystem.Update();
 
         //-------------------------------------------------------------------------
         // Editor Tool Management
@@ -768,7 +768,7 @@ namespace EE
             EE_ASSERT( request.m_path.IsValid() );
 
             // Don't try to open files that don't exist
-            FileSystem::Path const path = request.m_path.GetFileSystemPath( m_fileRegistry.GetSourceDataDirectoryPath() );
+            FileSystem::Path const path = request.m_path.GetFileSystemPath( m_dataFileSystem.GetSourceDataDirectoryPath() );
             if ( !FileSystem::Exists( path ) )
             {
                 return false;

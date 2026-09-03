@@ -30,7 +30,7 @@ namespace EE::Render
         RHI::DestroyTexture( pRenderSystem->GetContextRHI(), eastl::move( m_depthTargetArray ) );
     }
 
-    void CascadedShadowPass::UpdateDeviceResources( RenderSystem* pRenderSystem, TArrayView<uint32_t const> clusterCapacity )
+    void CascadedShadowPass::UpdateDeviceResources( RenderSystem* pRenderSystem, TArrayView<uint32_t const> clusterCapacity, uint32_t numMeshInstancePages )
     {
         EE_PROFILE_FUNCTION_RENDER();
 
@@ -53,18 +53,17 @@ namespace EE::Render
 
         for ( size_t cascadeIndex = 0; cascadeIndex < NumShadowCascades; ++cascadeIndex )
         {
-            m_renderViews[cascadeIndex].UpdateDeviceResources( pRenderSystem, clusterCapacity );
+            m_renderViews[cascadeIndex].UpdateDeviceResources( pRenderSystem, clusterCapacity, numMeshInstancePages );
         }
     }
 
-    void CascadedShadowPass::DrawShadowCascades( TArrayView<ForwardShadingMaterialShaderPipelineBucket const>   materialShaderPipelineBuckets,
-                                                 TArrayView<uint32_t const>                                     clusterCapacity,
-                                                 RenderViewport const*                                          pRenderViewport,
-                                                 Vector                                                         lightDirection,
-                                                 DeviceResourceStates&                                          resourceStates,
-                                                 RHI::CommandBuffer*                                            pCommandBuffer,
-                                                 ShaderTypes::CascadedShadow*                                   pOutCascadedShadow_WriteCombined,
-                                                 TArrayView<ShaderTypes::RenderView>                            dstRenderViews_WriteCombined )
+    void CascadedShadowPass::UpdateRenderViews
+    (
+        RenderViewport const*                pRenderViewport,
+        Vector                               lightDirection,
+        ShaderTypes::CascadedShadow*         pOutCascadedShadow_WriteCombined,
+        TArrayView<ShaderTypes::RenderView>  dstRenderViews_WriteCombined
+    ) const
     {
         EE_PROFILE_FUNCTION_RENDER();
 
@@ -104,23 +103,26 @@ namespace EE::Render
             frustumCenter *= 1.0F / 8.0F;
             frustumCenter.SetW1();
 
-            Matrix shadowProjectionMatrix = Math::CreateOrthographicProjectionMatrixOffCenter(
+            Matrix shadowProjectionMatrix = Math::CreateOrthographicProjectionMatrixOffCenter
+            (
                 -0.5F, 0.5F, -0.5F, 0.5F,
-                0.0F, 1.0F );
+                0.0F, 1.0F
+            );
             shadowProjectionMatrix = shadowProjectionMatrix * reverseZMatrix;
 
             Matrix shadowViewMatrix = Math::CreateLookAtMatrix( frustumCenter + lightDirection * 0.5F, frustumCenter, Vector::WorldUp );
             Matrix shadowViewProjectionMatrix = shadowViewMatrix * shadowProjectionMatrix;
             globalShadowMatrix = shadowViewProjectionMatrix * textureScaleBiasMatrix;
 
-            std::memcpy(
+            std::memcpy
+            (
                 pOutCascadedShadow_WriteCombined->m_shadowMatrix,
                 globalShadowMatrix.m_rows,
-                sizeof( globalShadowMatrix ) );
+                sizeof( globalShadowMatrix )
+            );
         }
 
         //-------------------------------------------------------------------------
-        // Compute splits
 
         TArray<float, NumShadowCascades> cascadeSplits = {};
 
@@ -145,25 +147,10 @@ namespace EE::Render
             cascadeSplits[split] = ( distance - depthRange.m_begin ) / zRange;
         }
 
-        //-------------------------------------------------------------------------
-        // Begin rendering
-
-        Float2 const viewTopLeft = Float2( 0.0F, 0.0F );
-        Float2 const viewSize = Float2( ShadowMapResolution, ShadowMapResolution );
-
-        EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, "Cascaded Shadows" );
-
-        RHI::CmdSetViewport( pCommandBuffer,
-                     viewTopLeft.m_x, viewTopLeft.m_y, viewSize.m_x, viewSize.m_y,
-                     0.0F, 1.0F );
-        RHI::CmdSetScissor( pCommandBuffer,
-                            uint32_t( viewTopLeft.m_x ), uint32_t( viewTopLeft.m_y ),
-                            uint32_t( viewSize.m_x ), uint32_t( viewSize.m_y ) );
-
         for ( uint32_t cascadeIndex = 0; cascadeIndex < NumShadowCascades; ++cascadeIndex )
         {
-            //-------------------------------------------------------------------------
             // Compute splits
+            //-------------------------------------------------------------------------
 
             float const previousSplitDistance = cascadeIndex ? cascadeSplits[cascadeIndex - 1] : minDistance;
             float const splitDistance = cascadeSplits[cascadeIndex];
@@ -192,16 +179,19 @@ namespace EE::Render
 
             sphereRadius = Math::Ceiling( sphereRadius * 16.0F ) / 16.0F;
 
-            Matrix shadowProjectionMatrix = Math::CreateOrthographicProjectionMatrixOffCenter(
+            Matrix shadowProjectionMatrix = Math::CreateOrthographicProjectionMatrixOffCenter
+            (
                 -sphereRadius, sphereRadius, -sphereRadius, sphereRadius,
-                -sphereRadius * 2.0F, sphereRadius * 2.0F );
+                -sphereRadius * 2.0F, sphereRadius * 2.0F
+            );
             shadowProjectionMatrix = shadowProjectionMatrix * reverseZMatrix;
 
             Matrix shadowViewMatrix = Math::CreateLookAtMatrix( splitFrustumCenter, splitFrustumCenter - lightDirection, Vector::WorldUp );
             Matrix shadowViewProjectionMatrix = shadowViewMatrix * shadowProjectionMatrix;
 
-            //-------------------------------------------------------------------------
             // Snap shadowmap to texel center
+            //-------------------------------------------------------------------------
+
             Vector shadowOrigin = shadowViewProjectionMatrix.TransformVector4( Vector( 0.0F, 0.0F, 0.0F, 1.0F ) );
             shadowOrigin *= ShadowMapResolution * 0.5F;
 
@@ -252,8 +242,8 @@ namespace EE::Render
 
             Memory::CopyToWriteCombined( &dstRenderViews_WriteCombined[cascadeIndex], &shadowRenderView, sizeof( shadowRenderView ) );
 
-            //-------------------------------------------------------------------------
             // Write proxy data
+            //-------------------------------------------------------------------------
 
             Matrix cascadeShadowMatrixInverse = ( shadowViewProjectionMatrix * textureScaleBiasMatrix ).GetInverse();
 
@@ -268,7 +258,38 @@ namespace EE::Render
 
             cascadeOffset.Store( pOutCascadedShadow_WriteCombined->m_cascadeOffsets[cascadeIndex] );
             cascadeScale.Store( pOutCascadedShadow_WriteCombined->m_cascadeScales[cascadeIndex] );
+        }
+    }
 
+    void CascadedShadowPass::DrawShadowCascades
+    (
+        TArrayView<ForwardShadingMaterialShaderPipelineBucket const>   materialShaderPipelineBuckets,
+        RenderViewport const*                                          pRenderViewport,
+        DeviceResourceStates&                                          resourceStates,
+        RHI::CommandBuffer*                                            pCommandBuffer
+    )
+    {
+        EE_PROFILE_FUNCTION_RENDER();
+
+        float const ShadowMapResolution = float( m_pRenderSettings->m_cascadedShadowResolution );
+
+        //-------------------------------------------------------------------------
+        // Begin rendering
+
+        Float2 const viewTopLeft = Float2( 0.0F, 0.0F );
+        Float2 const viewSize = Float2( ShadowMapResolution, ShadowMapResolution );
+
+        EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, "Cascaded Shadows" );
+
+        RHI::CmdSetViewport( pCommandBuffer,
+                     viewTopLeft.m_x, viewTopLeft.m_y, viewSize.m_x, viewSize.m_y,
+                     0.0F, 1.0F );
+        RHI::CmdSetScissor( pCommandBuffer,
+                            uint32_t( viewTopLeft.m_x ), uint32_t( viewTopLeft.m_y ),
+                            uint32_t( viewSize.m_x ), uint32_t( viewSize.m_y ) );
+
+        for ( uint32_t cascadeIndex = 0; cascadeIndex < NumShadowCascades; ++cascadeIndex )
+        {
             // Depth only pass
             //-------------------------------------------------------------------------
 
@@ -288,8 +309,8 @@ namespace EE::Render
             {
                 ForwardShadingMaterialShaderPipelineBucket const& shaderPipelineBucket = materialShaderPipelineBuckets[shaderIndex];
 
-                uint32_t const bucketIndirectCommandCapacity = Math::IntegerDivideCeiling<uint32_t>( clusterCapacity[shaderIndex], RHI::MaxDispatchSize );
                 DeviceRenderViewBucket const& renderViewBucket = m_renderViews[cascadeIndex].m_renderViewBuckets[shaderIndex];
+                uint32_t const bucketIndirectCommandCapacity = uint32_t( renderViewBucket.m_opaqueBucket.m_drawArgumentBuffer.m_pBuffer->m_size / sizeof( ShaderTypes::DrawArgument ) );
 
                 {
                     EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, shaderPipelineBucket.m_shaderName.data() );

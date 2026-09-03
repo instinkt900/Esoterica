@@ -8,8 +8,10 @@
 namespace EE::Animation
 {
     TargetSelectorToolsNode::TargetSelectorToolsNode()
-        : FlowToolsNode()
+        : VariationDataToolsNode()
     {
+        m_defaultVariationData.CreateInstance( GetVariationDataTypeInfo() );
+
         CreateOutputPin( "Pose", GraphValueType::Pose );
         CreateInputPin( "Target", GraphValueType::Target );
         CreateDynamicInputPin( "Option", GetPinTypeForValueType( GraphValueType::Pose ) );
@@ -151,6 +153,27 @@ namespace EE::Animation
         pDefinition->m_positionScoreWeight = m_positionScoreWeight;
         pDefinition->m_isWorldSpaceTarget = m_isWorldSpaceTarget;
 
+        auto pData = GetResolvedVariationDataAs<Data>( context.GetVariationHierarchy(), context.GetVariationID() );
+        pDefinition->m_alignmentBoneID = pData->m_alignmentBoneID;
+
         return pDefinition->m_nodeIdx;
+    }
+
+    void TargetSelectorToolsNode::DrawInfoText( NodeGraph::DrawContext const& ctx, NodeGraph::UserContext* pUserContext )
+    {
+        ImGui::Text( "Position Weight: %.2f", m_positionScoreWeight );
+        ImGui::Text( "Orientation Weight: %.2f", m_orientationScoreWeight );
+
+        if ( m_isWorldSpaceTarget )
+        {
+            ImGui::Text( "Expects World Space Target" );
+        }
+
+        auto pGraphNodeContext = static_cast<ToolsGraphUserContext*>( pUserContext );
+        auto pData = GetResolvedVariationDataAs<Data>( *pGraphNodeContext->m_pVariationHierarchy, pGraphNodeContext->m_selectedVariationID );
+        if ( pData->m_alignmentBoneID.IsValid() )
+        {
+            ImGui::Text( "Align Bone: %s", pData->m_alignmentBoneID.c_str() );
+        }
     }
 }

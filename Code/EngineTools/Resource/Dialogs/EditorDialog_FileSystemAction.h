@@ -1,6 +1,6 @@
 #pragma once
 #include "EngineTools/Core/DialogManager.h"
-#include "EngineTools/FileSystem/FileRegistry.h"
+#include "EngineTools/FileSystem/DataFileSystem.h"
 #include "EngineTools/Widgets/Pickers/DataPathPicker.h"
 
 //-------------------------------------------------------------------------

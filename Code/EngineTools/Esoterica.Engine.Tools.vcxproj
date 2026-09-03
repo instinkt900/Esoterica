@@ -204,7 +204,7 @@
     <ClCompile Include="Import\Importer.cpp" />
     <ClCompile Include="Import\ImportedMesh.cpp" />
     <ClCompile Include="Import\ImportedSkeleton.cpp" />
-    <ClCompile Include="FileSystem\FileRegistry.cpp" />
+    <ClCompile Include="FileSystem\DataFileSystem.cpp" />
     <ClCompile Include="ThirdParty\tinyexr\tinyexr_Esoterica.cpp" />
     <ClCompile Include="ThirdParty\ufbx\ufbx.c" />
     <ClCompile Include="Widgets\Pickers\ResourcePickers.cpp" />
@@ -366,7 +366,7 @@
     <ClInclude Include="Import\Importer.h" />
     <ClInclude Include="Import\ImportedMesh.h" />
     <ClInclude Include="Import\ImportedSkeleton.h" />
-    <ClInclude Include="FileSystem\FileRegistry.h" />
+    <ClInclude Include="FileSystem\DataFileSystem.h" />
     <ClInclude Include="ThirdParty\tinyexr\tinyexr.h" />
     <ClInclude Include="ThirdParty\ufbx\ufbx.h" />
     <ClInclude Include="Widgets\Pickers\ResourcePickers.h" />

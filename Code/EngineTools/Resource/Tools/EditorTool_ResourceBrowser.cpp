@@ -1,6 +1,6 @@
 #include "EditorTool_ResourceBrowser.h"
 #include "EngineTools/Resource/ResourceDescriptor.h"
-#include "EngineTools/FileSystem/FileRegistry.h"
+#include "EngineTools/FileSystem/DataFileSystem.h"
 #include "EngineTools/Core/ToolsContext.h"
 #include "EngineTools/Core/CommonToolTypes.h"
 #include "EngineTools/Core/DialogManager.h"
@@ -23,7 +23,7 @@ namespace EE::Resource
 
     public:
 
-        ResourceBrowserTreeItem( TreeListViewItem* pParent, ToolsContext const& toolsContext, FileRegistry::DirectoryInfo const* pDirectoryEntry )
+        ResourceBrowserTreeItem( TreeListViewItem* pParent, ToolsContext const& toolsContext, DataFileSystem::DirectoryInfo const* pDirectoryEntry )
             : TreeListViewItem( pParent )
             , m_toolsContext( toolsContext )
             , m_nameID( pDirectoryEntry->m_filePath.GetDirectoryName() )
@@ -42,7 +42,7 @@ namespace EE::Resource
             }
         }
 
-        ResourceBrowserTreeItem( TreeListViewItem* pParent, ToolsContext const& toolsContext, FileRegistry::FileInfo const* pFileEntry )
+        ResourceBrowserTreeItem( TreeListViewItem* pParent, ToolsContext const& toolsContext, DataFileSystem::FileInfo const* pFileEntry )
             : TreeListViewItem( pParent )
             , m_toolsContext( toolsContext )
             , m_nameID( pFileEntry->m_filePath.GetFilename() )
@@ -121,7 +121,7 @@ namespace EE::Resource
         m_filter.SetFilterHelpText( "Search..." );
 
         // Rebuild the tree whenever the file registry updates
-        m_resourceDatabaseUpdateEventBindingID = m_pToolsContext->m_pFileRegistry->OnFileSystemCacheUpdated().Bind( [this] () { m_refreshRequested = true; } );
+        m_resourceDatabaseUpdateEventBindingID = m_pToolsContext->m_pDataFileSystem->OnFileSystemCacheUpdated().Bind( [this] () { m_refreshRequested = true; } );
 
         // Create descriptor category tree
         //-------------------------------------------------------------------------
@@ -177,7 +177,7 @@ namespace EE::Resource
 
     ResourceBrowserEditorTool::~ResourceBrowserEditorTool()
     {
-        m_pToolsContext->m_pFileRegistry->OnFileSystemCacheUpdated().Unbind( m_resourceDatabaseUpdateEventBindingID );
+        m_pToolsContext->m_pDataFileSystem->OnFileSystemCacheUpdated().Unbind( m_resourceDatabaseUpdateEventBindingID );
     }
 
     void ResourceBrowserEditorTool::Initialize( UpdateContext const& context )
@@ -222,7 +222,7 @@ namespace EE::Resource
 
     void ResourceBrowserEditorTool::Update( UpdateContext const& context, bool isVisible, bool isFocused )
     {
-        if ( m_pToolsContext->m_pFileRegistry->IsBuildingCaches() )
+        if ( !m_pToolsContext->m_pDataFileSystem->IsFileSystemCacheBuilt() )
         {
             return;
         }
@@ -260,18 +260,18 @@ namespace EE::Resource
         // Draw progress bar
         //-------------------------------------------------------------------------
 
-        if ( m_pToolsContext->m_pFileRegistry->IsBuildingCaches() )
+        if ( m_pToolsContext->m_pDataFileSystem->IsBuildingCaches() )
         {
             ImGui::AlignTextToFramePadding();
-            ImGui::Text( m_pToolsContext->m_pFileRegistry->IsFileSystemCacheBuilt() ? "Building Descriptor Cache: " : "Building File System Cache: " );
+            ImGui::Text( m_pToolsContext->m_pDataFileSystem->IsFileSystemCacheBuilt() ? "Building Descriptor Cache: " : "Building File System Cache: " );
             ImGui::SameLine();
-            ImGui::ProgressBar( m_pToolsContext->m_pFileRegistry->GetProgress() );
+            ImGui::ProgressBar( m_pToolsContext->m_pDataFileSystem->GetCacheBuildProgress() );
         }
 
         // Draw UI
         //-------------------------------------------------------------------------
 
-        if ( m_pToolsContext->m_pFileRegistry->IsFileSystemCacheBuilt() )
+        if ( m_pToolsContext->m_pDataFileSystem->IsFileSystemCacheBuilt() )
         {
             // Folders
             //-------------------------------------------------------------------------
@@ -499,8 +499,8 @@ namespace EE::Resource
 
     void ResourceBrowserEditorTool::RebuildDirectoryTreeView( TreeListViewItem* pRootItem )
     {
-        EE_ASSERT( m_pToolsContext->m_pFileRegistry->IsFileSystemCacheBuilt() );
-        auto pDataDirectory = m_pToolsContext->m_pFileRegistry->GetRawResourceDirectoryEntry();
+        EE_ASSERT( m_pToolsContext->m_pDataFileSystem->IsFileSystemCacheBuilt() );
+        auto pDataDirectory = m_pToolsContext->m_pDataFileSystem->GetRawResourceDirectoryEntry();
 
         //-------------------------------------------------------------------------
 
@@ -570,12 +570,12 @@ namespace EE::Resource
     // Files
     //-------------------------------------------------------------------------
 
-    bool ResourceBrowserEditorTool::DoesFileMatchFilter( FileRegistry::FileInfo const* pFile, bool applyNameFilter )
+    bool ResourceBrowserEditorTool::DoesFileMatchFilter( DataFileSystem::FileInfo const* pFile, bool applyNameFilter )
     {
         bool isVisible = true;
 
         // Raw files
-        if ( pFile->m_fileType == FileRegistry::FileType::Unknown )
+        if ( pFile->m_fileType == DataFileSystem::FileType::Unknown )
         {
             isVisible = m_showRawFiles;
         }
@@ -644,35 +644,35 @@ namespace EE::Resource
 
         //-------------------------------------------------------------------------
 
-        TVector<FileRegistry::FileInfo const*> files;
+        TVector<DataFileSystem::FileInfo const*> files;
         files.reserve( 25000 );
         if ( m_filter.HasFilterSet() )
         {
-            FileRegistry::DirectoryInfo const* pDirectoryInfo = m_pToolsContext->m_pFileRegistry->FindDirectoryEntry( m_selectedDirectory );
+            DataFileSystem::DirectoryInfo const* pDirectoryInfo = m_pToolsContext->m_pDataFileSystem->FindDirectoryEntry( m_selectedDirectory );
             if ( pDirectoryInfo == nullptr )
             {
-                pDirectoryInfo = m_pToolsContext->m_pFileRegistry->FindDirectoryEntry( DataPath( "Data://" ) );
+                pDirectoryInfo = m_pToolsContext->m_pDataFileSystem->FindDirectoryEntry( DataPath( "Data://" ) );
             }
 
             pDirectoryInfo->GetAllFiles( files, true );
         }
         else
         {
-            FileRegistry::DirectoryInfo const* pDirectoryInfo = m_pToolsContext->m_pFileRegistry->FindDirectoryEntry( m_selectedDirectory );
+            DataFileSystem::DirectoryInfo const* pDirectoryInfo = m_pToolsContext->m_pDataFileSystem->FindDirectoryEntry( m_selectedDirectory );
             if ( pDirectoryInfo != nullptr )
             {
-                for ( FileRegistry::FileInfo const* pFileInfo : pDirectoryInfo->m_files )
+                for ( DataFileSystem::FileInfo const* pFileInfo : pDirectoryInfo->m_files )
                 {
                     files.emplace_back( pFileInfo );
                 }
 
-                for ( FileRegistry::DirectoryInfo const &subDir : pDirectoryInfo->m_directories )
+                for ( DataFileSystem::DirectoryInfo const &subDir : pDirectoryInfo->m_directories )
                 {
                     m_directoryList.emplace_back( subDir );
                 }
             }
 
-            auto SortPredicate = [] ( FileRegistry::DirectoryInfo const& a, FileRegistry::DirectoryInfo const& b )
+            auto SortPredicate = [] ( DataFileSystem::DirectoryInfo const& a, DataFileSystem::DirectoryInfo const& b )
             {
                 return _stricmp( a.m_dataPath.c_str(), b.m_dataPath.c_str() ) < 0;
             };
@@ -682,7 +682,7 @@ namespace EE::Resource
 
         //-------------------------------------------------------------------------
 
-        for ( FileRegistry::FileInfo const* pFileInfo : files )
+        for ( DataFileSystem::FileInfo const* pFileInfo : files )
         {
             if ( DoesFileMatchFilter( pFileInfo, true ) )
             {
@@ -705,8 +705,8 @@ namespace EE::Resource
     {
         auto SortPredicate = [this] ( int32_t a, int32_t b )
         {
-            FileRegistry::FileInfo const& lhs = m_fileList[a];
-            FileRegistry::FileInfo const& rhs = m_fileList[b];
+            DataFileSystem::FileInfo const& lhs = m_fileList[a];
+            DataFileSystem::FileInfo const& rhs = m_fileList[b];
 
             switch ( m_sortRule )
             {
@@ -843,7 +843,7 @@ namespace EE::Resource
             // Directory
             //-------------------------------------------------------------------------
 
-            for ( FileRegistry::DirectoryInfo const& directoryInfo : m_directoryList )
+            for ( DataFileSystem::DirectoryInfo const& directoryInfo : m_directoryList )
             {
                 bool const isSelected = ( m_selectedItem == directoryInfo.m_dataPath );
 
@@ -903,9 +903,9 @@ namespace EE::Resource
 
             for ( int32_t const fileInfoIdx : m_sortedFileListIndices )
             {
-                FileRegistry::FileInfo const& fileInfo = m_fileList[fileInfoIdx];
+                DataFileSystem::FileInfo const& fileInfo = m_fileList[fileInfoIdx];
 
-                if ( !m_showRawFiles && fileInfo.m_fileType == FileRegistry::FileType::Unknown )
+                if ( !m_showRawFiles && fileInfo.m_fileType == DataFileSystem::FileType::Unknown )
                 {
                     continue;
                 }
@@ -1024,7 +1024,7 @@ namespace EE::Resource
 
             if ( ImGui::BeginPopup( s_directoryInfoContextMenu ) )
             {
-                FileRegistry::DirectoryInfo const* pDirectoryInfo = m_pToolsContext->m_pFileRegistry->FindDirectoryEntry( m_selectedDirectory );
+                DataFileSystem::DirectoryInfo const* pDirectoryInfo = m_pToolsContext->m_pDataFileSystem->FindDirectoryEntry( m_selectedDirectory );
                 if ( pDirectoryInfo != nullptr )
                 {
                     DrawDirectoryInfoContextMenu( *pDirectoryInfo, false );
@@ -1040,7 +1040,7 @@ namespace EE::Resource
         ImGui::PopStyleVar();
     }
 
-    void ResourceBrowserEditorTool::DrawDirectoryInfoContextMenu( FileRegistry::DirectoryInfo const& directoryInfo, bool isFileListView )
+    void ResourceBrowserEditorTool::DrawDirectoryInfoContextMenu( DataFileSystem::DirectoryInfo const& directoryInfo, bool isFileListView )
     {
         if ( ImGui::MenuItem( EE_ICON_OPEN_IN_NEW" Open In Explorer" ) )
         {
@@ -1059,33 +1059,36 @@ namespace EE::Resource
 
         //-------------------------------------------------------------------------
 
-        if ( !isFileListView )
+        if ( !m_pToolsContext->m_pDataFileSystem->IsBuildingCaches() )
         {
+            if ( !isFileListView )
+            {
+                ImGui::Separator();
+
+                if ( ImGui::BeginMenu( "Create New Descriptor" ) )
+                {
+                    DrawCreateDescriptorMenuCategory( directoryInfo.m_filePath, m_categorizedDescriptorTypes.GetRootCategory() );
+                    ImGui::EndMenu();
+                }
+            }
+
+            //-------------------------------------------------------------------------
+
             ImGui::Separator();
 
-            if ( ImGui::BeginMenu( "Create New Descriptor" ) )
+            if ( ImGui::MenuItem( EE_ICON_RENAME" Rename" ) )
             {
-                DrawCreateDescriptorMenuCategory( directoryInfo.m_filePath, m_categorizedDescriptorTypes.GetRootCategory() );
-                ImGui::EndMenu();
+                m_pToolsContext->m_pDialogManager->StartModalDialog<FileSystemActionDialog>( FileSystemActionDialog::Action::Rename, m_pToolsContext, directoryInfo.m_dataPath );
             }
-        }
 
-        //-------------------------------------------------------------------------
-
-        ImGui::Separator();
-
-        if ( ImGui::MenuItem( EE_ICON_RENAME" Rename" ) )
-        {
-            m_pToolsContext->m_pDialogManager->StartModalDialog<FileSystemActionDialog>( FileSystemActionDialog::Action::Rename, m_pToolsContext, directoryInfo.m_dataPath );
-        }
-
-        if ( ImGui::MenuItem( EE_ICON_ALERT_OCTAGON" Delete" ) )
-        {
-            m_pToolsContext->m_pDialogManager->StartModalDialog<FileSystemActionDialog>( FileSystemActionDialog::Action::Delete, m_pToolsContext, directoryInfo.m_dataPath );
+            if ( ImGui::MenuItem( EE_ICON_ALERT_OCTAGON" Delete" ) )
+            {
+                m_pToolsContext->m_pDialogManager->StartModalDialog<FileSystemActionDialog>( FileSystemActionDialog::Action::Delete, m_pToolsContext, directoryInfo.m_dataPath );
+            }
         }
     }
 
-    void ResourceBrowserEditorTool::DrawFileInfoContextMenu( FileRegistry::FileInfo const& fileInfo )
+    void ResourceBrowserEditorTool::DrawFileInfoContextMenu( DataFileSystem::FileInfo const& fileInfo )
     {
         if ( ImGui::MenuItem( EE_ICON_OPEN_IN_APP" Open" ) )
         {
@@ -1116,26 +1119,29 @@ namespace EE::Resource
             ImGui::SetClipboardText( fileInfo.m_dataPath.c_str() );
         }
 
-        ImGui::Separator();
-
-        if ( fileInfo.IsResourceDescriptorFile() )
+        if ( !m_pToolsContext->m_pDataFileSystem->IsBuildingCaches() )
         {
-            if ( ImGui::MenuItem( EE_ICON_GRAPH" Show Dependencies" ) )
+            ImGui::Separator();
+
+            if ( fileInfo.IsResourceDescriptorFile() )
             {
-                m_pToolsContext->ShowResourceDependencies( fileInfo.GetResourceID() );
+                if ( ImGui::MenuItem( EE_ICON_GRAPH" Show Dependencies" ) )
+                {
+                    m_pToolsContext->ShowResourceDependencies( fileInfo.GetResourceID() );
+                }
             }
-        }
 
-        ImGui::Separator();
+            ImGui::Separator();
 
-        if ( ImGui::MenuItem( EE_ICON_RENAME" Rename" ) )
-        {
-            m_pToolsContext->m_pDialogManager->StartModalDialog<FileSystemActionDialog>( FileSystemActionDialog::Action::Rename, m_pToolsContext, fileInfo.m_dataPath );
-        }
+            if ( ImGui::MenuItem( EE_ICON_RENAME" Rename" ) )
+            {
+                m_pToolsContext->m_pDialogManager->StartModalDialog<FileSystemActionDialog>( FileSystemActionDialog::Action::Rename, m_pToolsContext, fileInfo.m_dataPath );
+            }
 
-        if ( ImGui::MenuItem( EE_ICON_ALERT_OCTAGON" Delete" ) )
-        {
-            m_pToolsContext->m_pDialogManager->StartModalDialog<FileSystemActionDialog>( FileSystemActionDialog::Action::Delete, m_pToolsContext, fileInfo.m_dataPath );
+            if ( ImGui::MenuItem( EE_ICON_ALERT_OCTAGON" Delete" ) )
+            {
+                m_pToolsContext->m_pDialogManager->StartModalDialog<FileSystemActionDialog>( FileSystemActionDialog::Action::Delete, m_pToolsContext, fileInfo.m_dataPath );
+            }
         }
     }
 }

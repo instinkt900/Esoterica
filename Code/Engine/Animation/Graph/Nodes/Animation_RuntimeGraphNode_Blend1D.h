@@ -125,18 +125,14 @@ namespace EE::Animation
             EE_REFLECT_TYPE( Definition );
 
             virtual void InstantiateNode( InstantiationContext const& context, InstantiationOptions options ) const override;
+            virtual bool RequiresPostInstantiationStage() const override { return true; }
+            virtual void PostInstantiateNode( InstantiationContext const& context ) const override;
         };
 
     private:
 
-        virtual void InitializeInternal( GraphContext& context, SyncTrackTime const& initialTime ) override;
-
         void CreateParameterizationFromSpeeds();
 
         virtual bool RestoreGraphState( RecordedGraphState const& inState ) override;
-
-    private:
-
-        bool m_lazyInitializationPerformed = false;
     };
 }

@@ -6,73 +6,55 @@ namespace EE::Render
 {
     void MaterialShaderClusterCapacity::Initialize()
     {
-        m_clusterCapacityPerViewPerShader.resize( 3 ); // 3 view layers total
+        m_clusterCapacityPerShader.clear();
     }
 
     void MaterialShaderClusterCapacity::Shutdown()
     {
-        EE_ASSERT( m_globalClusterCapacity == 1 );
-        for ( TVector<uint32_t> const& perShaderCapacity : m_clusterCapacityPerViewPerShader )
+        for ( uint32_t capacity : m_clusterCapacityPerShader )
         {
-            for ( uint32_t capacity : perShaderCapacity )
-            {
-                EE_ASSERT( capacity == 1 );
-            }
+            EE_ASSERT( capacity == 1 );
         }
 
-        m_clusterCapacityPerViewPerShader.clear();
+        m_clusterCapacityPerShader.clear();
     }
 
-    void MaterialShaderClusterCapacity::AddGlobalClusters( uint32_t numClusters )
+    void MaterialShaderClusterCapacity::AddShaderClusters( size_t shaderIndex, uint32_t numClusters )
     {
-        m_globalClusterCapacity += numClusters;
-    }
-
-    void MaterialShaderClusterCapacity::AddViewLayerClusters( size_t viewIndex, size_t shaderIndex, uint32_t numClusters )
-    {
-        TVector<uint32_t>& capacityPerShader = m_clusterCapacityPerViewPerShader[viewIndex];
-        if ( shaderIndex >= capacityPerShader.size() )
+        if ( shaderIndex >= m_clusterCapacityPerShader.size() )
         {
-            capacityPerShader.resize( shaderIndex + 1, 1 );
+            // New shader slots start with a baseline capacity of 1 cluster
+            m_clusterCapacityPerShader.resize( shaderIndex + 1, 1 );
         }
 
-        capacityPerShader[shaderIndex] += numClusters;
+        m_clusterCapacityPerShader[shaderIndex] += numClusters;
     }
 
-    void MaterialShaderClusterCapacity::RemoveGlobalClusters( uint32_t numClusters )
+    void MaterialShaderClusterCapacity::RemoveShaderClusters( size_t shaderIndex, uint32_t numClusters )
     {
-        EE_ASSERT( m_globalClusterCapacity > numClusters );
-        m_globalClusterCapacity -= numClusters;
-    }
+        EE_ASSERT( shaderIndex < m_clusterCapacityPerShader.size() );
+        EE_ASSERT( m_clusterCapacityPerShader[shaderIndex] > numClusters );
 
-    void MaterialShaderClusterCapacity::RemoveViewLayerClusters( size_t viewIndex, size_t shaderIndex, uint32_t numClusters )
-    {
-        TVector<uint32_t>& capacityPerShader = m_clusterCapacityPerViewPerShader[viewIndex];
-
-        EE_ASSERT( capacityPerShader[shaderIndex] > numClusters );
-        capacityPerShader[shaderIndex] -= numClusters;
+        m_clusterCapacityPerShader[shaderIndex] -= numClusters;
     }
 
     void MaterialShaderClusterCapacity::Validate( size_t numShaders )
     {
-        for ( TVector<uint32_t> & perShaderCapacity : m_clusterCapacityPerViewPerShader )
+        m_clusterCapacityPerShader.resize( numShaders, 1 );
+    }
+
+    TArrayView<uint32_t const> MaterialShaderClusterCapacity::GetShaderClusterCapacity() const
+    {
+        return m_clusterCapacityPerShader;
+    }
+
+    uint32_t MaterialShaderClusterCapacity::GetAllShadersClusterCapacity() const
+    {
+        uint32_t totalCapacity = 0;
+        for ( uint32_t capacity : m_clusterCapacityPerShader )
         {
-            perShaderCapacity.resize( numShaders, 1 );
-
-            for ( uint32_t capacity : perShaderCapacity )
-            {
-                EE_ASSERT( capacity <= m_globalClusterCapacity );
-            }
+            totalCapacity += capacity;
         }
-    }
-
-    uint32_t MaterialShaderClusterCapacity::GetGlobalClusterCapacity() const
-    {
-        return uint32_t( m_globalClusterCapacity );
-    }
-
-    TArrayView<uint32_t const> MaterialShaderClusterCapacity::GetViewLayerClusterCapacity( ViewLayer viewLayer ) const
-    {
-        return m_clusterCapacityPerViewPerShader[uint32_t( viewLayer )];
+        return totalCapacity;
     }
 }

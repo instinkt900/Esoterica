@@ -17,12 +17,4 @@ namespace EE::Render
         ForwardShading,
         GlobalEnvironmentMap,
     };
-
-    template<typename F>
-    static inline void ForEachViewLayer( F fn )
-    {
-        fn( ViewLayer::ShadowMap );
-        fn( ViewLayer::ForwardShading );
-        fn( ViewLayer::GlobalEnvironmentMap );
-    }
 }

@@ -43,6 +43,9 @@ namespace EE::SerializationTest
 
         EE_REFLECT(); // comment
         TVector<SimpleStruct>                       m_dynamicArray = { SimpleStruct(), SimpleStruct() };
+
+        EE_REFLECT(); // comment
+        TVector<DataPath>                           m_dynamicPathArray = { DataPath( "data://a.txt" ), DataPath( "data://b.txt" ) };
     };
 
     struct EE_ENGINETOOLS_API DerivedStruct : public BaseStruct
@@ -76,6 +79,9 @@ namespace EE::SerializationTest
         // Comment description "with quotes"
         EE_REFLECT();
         EulerAngles                                 m_eulerAngles = EulerAngles( 23, 45, 56 );
+
+        EE_REFLECT();
+        TDataFilePath<Physics::PhysicsMaterialLibrary>  m_typedDataPath = DataPath( "data://Default.pml" );
 
         // Comment description "with quotes" expected to be overwritten
         EE_REFLECT( ReadOnly     , Category =   "C",   Description = "meta description 'with quotes' and escape char" );

@@ -82,6 +82,12 @@ namespace EE::Animation
         int32_t const numStateNodes = (int32_t) stateNodes.size();
         EE_ASSERT( numStateNodes >= 1 );
 
+        if ( numStateNodes > StateMachineNode::s_maxStates )
+        {
+            context.LogError( this, "Max number of states exceeded, we only allow a maximum of %d states per state machine.", StateMachineNode::s_maxStates );
+            return InvalidIndex;
+        }
+
         auto conduitNodes = pStateMachineGraph->FindAllNodesOfType<TransitionConduitToolsNode>();
         int32_t const numConduitNodes = (int32_t) conduitNodes.size();
 
@@ -266,6 +272,8 @@ namespace EE::Animation
         ReflectStateEvents( pStateNode->GetUniqueEntryEvents(), pDefinition->m_entryEvents );
         ReflectStateEvents( pStateNode->GetUniqueFullyInStateEvents(), pDefinition->m_fullyInStateEvents );
         ReflectStateEvents( pStateNode->GetUniqueExitEvents(), pDefinition->m_exitEvents );
+
+        pDefinition->m_useActualElapsedTimeInStateForTimedEvents = pStateNode->m_useActualElapsedTimeInStateForTimedEvents;
 
         //-------------------------------------------------------------------------
 

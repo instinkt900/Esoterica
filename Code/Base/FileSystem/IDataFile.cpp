@@ -8,7 +8,6 @@
 namespace EE
 {
     #if EE_DEVELOPMENT_TOOLS
-
     constexpr static char const* const g_versionAttrName = "Version";
 
     //-------------------------------------------------------------------------
@@ -256,6 +255,17 @@ namespace EE
         }
 
         return writeSucceeded;
+    }
+
+    void IDataFile::GetReferencedPaths( TVector<DataPath>& outReferencedPaths ) const
+    {
+        // Get direct references
+        auto pTypeInfo = GetTypeInfo();
+        EE_ASSERT( pTypeInfo != nullptr );
+        pTypeInfo->GetReferencedPaths( this, outReferencedPaths );
+
+        // Get any references that live in some custom structures
+        GetAdditionalReferencedPaths( outReferencedPaths );
     }
     #endif
 }

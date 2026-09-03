@@ -1,5 +1,4 @@
 #include "Animation_RuntimeGraphNode_State.h"
-#include "Engine/Animation/AnimationBoneMask.h"
 #include "Base/Types/ScopedValue.h"
 
 //-------------------------------------------------------------------------
@@ -34,10 +33,11 @@ namespace EE::Animation
         EE_ASSERT( context.IsValid() );
 
         PoseNode::InitializeInternal( context, initialTime );
-        m_transitionState = TransitionState::None;
+        SetTransitionState( TransitionState::None );
         m_sampledEventRange = SampledEventRange();
         m_previousTime = m_currentTime = 0.0f;
         m_duration = 0.0f;
+        m_elapsedTime = 0.0f;
 
         if ( m_pChildNode != nullptr )
         {
@@ -87,21 +87,22 @@ namespace EE::Animation
             m_pChildNode->Shutdown( context );
         }
 
-        m_transitionState = TransitionState::None;
+        m_elapsedTime = 0.0f;
+        SetTransitionState( TransitionState::None );
         PoseNode::ShutdownInternal( context );
     }
 
     void StateNode::StartTransitionIn( GraphContext& context )
     {
         EE_ASSERT( context.IsValid() );
-        m_transitionState = TransitionState::TransitioningIn;
+        SetTransitionState( TransitionState::TransitioningIn );
     }
 
     SampledEventRange StateNode::StartTransitionOut( GraphContext& context, bool isZeroDurationTransition )
     {
         EE_ASSERT( context.IsValid() );
 
-        m_transitionState = TransitionState::TransitioningOut;
+        SetTransitionState( TransitionState::TransitioningOut );
 
         // Since we update states before we register transitions, we need to mark all previous events as from the inactive branch
         context.GetSampledEventsBuffer()->MarkEventsAsFromInactiveBranch( m_sampledEventRange );
@@ -155,19 +156,19 @@ namespace EE::Animation
         // Sample Timed Events
         //-------------------------------------------------------------------------
 
-        Seconds const elapsedTime = m_duration * m_currentTime.ToFloat();
+        Seconds const currentElapsedTime = pStateDefinition->m_useActualElapsedTimeInStateForTimedEvents ? m_elapsedTime : m_duration * m_currentTime.ToFloat();
         for ( auto const& timedEvent : pStateDefinition->m_timedElapsedEvents )
         {
             if ( timedEvent.m_comparisonOperator == TimedEvent::Comparison::GreaterThanEqual )
             {
-                if ( elapsedTime >= timedEvent.m_timeValue )
+                if ( currentElapsedTime >= timedEvent.m_timeValue )
                 {
                     pSampledEventsBuffer->EmplaceGraphEvent( sourcePath, GraphEventType::Timed, timedEvent.m_ID, isInActiveBranch );
                 }
             }
             else
             {
-                if ( elapsedTime <= timedEvent.m_timeValue )
+                if ( currentElapsedTime <= timedEvent.m_timeValue )
                 {
                     pSampledEventsBuffer->EmplaceGraphEvent( sourcePath, GraphEventType::Timed, timedEvent.m_ID, isInActiveBranch );
                 }
@@ -257,6 +258,9 @@ namespace EE::Animation
 
         MarkNodeActive( context );
 
+        // Update time in state
+        m_elapsedTime += context.m_deltaTime;
+
         // Set the result to a valid event range since we are recording it
         GraphPoseNodeResult result;
         m_sampledEventRange = context.GetEmptySampledEventRange();
@@ -288,6 +292,7 @@ namespace EE::Animation
         PoseNode::RecordGraphState( outState );
         outState.WriteValue( m_transitionState );
         outState.WriteValue( m_isFirstStateUpdate );
+        outState.WriteValue( m_elapsedTime );
     }
 
     bool StateNode::RestoreGraphState( RecordedGraphState const& inState )
@@ -297,8 +302,12 @@ namespace EE::Animation
             return false;
         }
 
-        inState.ReadValue( m_transitionState );
+        TransitionState transitionState;
+        inState.ReadValue( transitionState );
+        SetTransitionState( transitionState );
+
         inState.ReadValue( m_isFirstStateUpdate );
+        inState.ReadValue( m_elapsedTime );
 
         return true;
     }

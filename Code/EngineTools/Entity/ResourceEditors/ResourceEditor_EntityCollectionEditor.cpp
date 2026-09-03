@@ -210,29 +210,41 @@ namespace EE::EntityModel
         }
 
         Transform const& selectionTransform = m_editorContext.GetSpatialSelectionTransform();
-        auto const gizmoResult = m_gizmo.UpdateAndDraw( selectionTransform.GetTranslation(), selectionTransform.GetRotation(), *pViewport, m_isViewportFocused || m_isViewportHovered );
-        switch ( gizmoResult.m_state )
+        bool const checkGizmoHotkeys = !IsManipulatingCamera() && ( m_isViewportFocused || m_isViewportHovered ) && m_editorContext.HasSpatialSelection();
+        auto const gizmoResult = m_gizmo.UpdateAndDraw( selectionTransform.GetTranslation(), selectionTransform.GetRotation(), *pViewport, checkGizmoHotkeys );
+
+        if ( IsManipulatingCamera() )
         {
-            case ImGuiX::GizmoState::StartedManipulating:
-            {
-                m_editorContext.BeginManipulatingSpatialSelection( gizmoResult, ImGui::GetIO().KeyAlt );
-            }
-            break;
-
-            case ImGuiX::GizmoState::Manipulating:
-            {
-                m_editorContext.ManipulateSpatialSelection( gizmoResult );
-            }
-            break;
-
-            case ImGuiX::GizmoState::StoppedManipulating:
+            if ( m_editorContext.IsManipulatingSpatialSelection() )
             {
                 m_editorContext.EndManipulatingSpatialSelection( gizmoResult );
             }
-            break;
+        }
+        else // Apply gizmo results
+        {
+            switch ( gizmoResult.m_state )
+            {
+                case ImGuiX::GizmoState::StartedManipulating:
+                {
+                    m_editorContext.BeginManipulatingSpatialSelection( gizmoResult, ImGui::GetIO().KeyAlt );
+                }
+                break;
 
-            default:
-            break;
+                case ImGuiX::GizmoState::Manipulating:
+                {
+                    m_editorContext.ManipulateSpatialSelection( gizmoResult );
+                }
+                break;
+
+                case ImGuiX::GizmoState::StoppedManipulating:
+                {
+                    m_editorContext.EndManipulatingSpatialSelection( gizmoResult );
+                }
+                break;
+
+                default:
+                break;
+            }
         }
     }
 

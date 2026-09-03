@@ -7,25 +7,22 @@
 
 EE_BEGIN_SHADER_TYPES_NAMESPACE
 
-uint ShaderIndexToBucketIndex( uint shaderIndex )
-{
-    // TODO: This needs to be cleaned-up and properly defined somewhere, we have 3 buckets per shader per view.
-    return shaderIndex * 3;
-}
+    // Each shader owns 3 render buckets per view - opaque, alpha test, alpha blend.
+    // Keep in sync with DeviceRenderView::s_NumRenderBucketsPerViewBucket and MaterialShaderRenderBucket!
+    //-------------------------------------------------------------------------
 
-uint ComputeRenderBucketIndex( ShaderParameters shaderParameters, uint renderViewIndex, bool renderViewDepthOnly, uint numRenderViewBucketsPerView )
-{
-    uint renderBucketIndex = renderViewIndex * numRenderViewBucketsPerView + ShaderIndexToBucketIndex( shaderParameters.m_shaderIndex );
-    if ( shaderParameters.m_shaderFlags & EE_SHADER_FLAG_ALPHA_TEST )
+    uint GetBucketTypeForView( ShaderParameters shaderParameters, bool renderViewDepthOnly )
     {
-        renderBucketIndex += 1;
+        if ( shaderParameters.m_shaderFlags & EE_SHADER_FLAG_ALPHA_TEST )
+        {
+            return 1;
+        }
+        if ( ( shaderParameters.m_shaderFlags & EE_SHADER_FLAG_ALPHA_BLEND ) && !renderViewDepthOnly )
+        {
+            return 2;
+        }
+        return 0;
     }
-    else if ( shaderParameters.m_shaderFlags & EE_SHADER_FLAG_ALPHA_BLEND && !renderViewDepthOnly )
-    {
-        renderBucketIndex += 2;
-    }
-    return renderBucketIndex;
-}
 
 EE_END_SHADER_TYPES_NAMESPACE
 

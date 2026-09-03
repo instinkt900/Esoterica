@@ -420,7 +420,7 @@ namespace EE::Animation
         m_recreateCachedPoseBuffer = false;
 
         // Clear transition flags from target
-        m_pTargetNode->SetTransitioningState( StateNode::TransitionState::None );
+        m_pTargetNode->SetTransitionState( StateNode::TransitionState::None );
         m_currentTime = 1.0f;
 
         // Shutdown source node
@@ -460,7 +460,7 @@ namespace EE::Animation
         // We need to explicitly set the transition state of the completed transition's target state as 
         // the shutdown of the transition will set it none. This will cause the state machine to potentially
         // transition to that state erroneously!
-        GetSourceStateNode()->SetTransitioningState( StateNode::TransitionState::TransitioningOut );
+        GetSourceStateNode()->SetTransitionState( StateNode::TransitionState::TransitioningOut );
     }
 
     //-------------------------------------------------------------------------

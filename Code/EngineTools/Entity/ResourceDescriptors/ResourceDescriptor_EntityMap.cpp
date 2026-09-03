@@ -37,4 +37,15 @@ namespace EE::EntityModel
             // No install dependencies
         }
     }
+
+    void EntityMapResourceDescriptor::GetAdditionalReferencedPaths( TVector<DataPath>& outReferencedPaths ) const
+    {
+        TVector<ResourceID> referencedResources;
+        m_mapDescriptor.GetAllReferencedResources( referencedResources );
+
+        for ( auto const& resourceID : referencedResources )
+        {
+            VectorEmplaceBackUnique( outReferencedPaths, resourceID.GetDataPath() );
+        }
+    }
 }

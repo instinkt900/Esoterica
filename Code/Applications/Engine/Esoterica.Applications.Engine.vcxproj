@@ -114,9 +114,7 @@
     <ResourceCompile Include="Win32\Apps.Engine.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="SplashScreen.bmp" />
     <Image Include="Win32\Engine.ico" />
-    <Image Include="Win32\SplashScreen.bmp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Engine\Esoterica.Engine.Runtime.vcxproj">

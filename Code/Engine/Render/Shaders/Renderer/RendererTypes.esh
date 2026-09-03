@@ -6,6 +6,10 @@
 #include "Engine/Render/Shaders/CommonPacking.esh"
 #include "Engine/Render/Shaders/CommonFlags.esh"
 
+// Maximum number of render views supported by the cluster culling pipeline.
+// Per-cluster visibility is packed into a 64-bit mask ( 1 bit per view ).
+#define EE_MAX_CULLING_VIEWS 64
+
 EE_BEGIN_SHADER_TYPES_NAMESPACE
 
     // Rendering passes and internal stuff
@@ -147,11 +151,23 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
 
     struct HLSL_ALIGN_STRUCT RenderBucket
     {
-        BufferHandle                    m_clusterVisibleCounterBuffer;
-        BufferHandle                    m_clusterVisibleBuffer;
         BufferHandle                    m_drawCounterBuffer;
         BufferHandle                    m_drawArgumentBuffer;
+        uint16_t                        m_padding;
+        uint16_t                        m_padding2;
     };
+
+    // Visibility record written by instance culling for each visible instance.
+    struct HLSL_ALIGN_STRUCT InstanceVisibilityRecord
+    {
+        uint                            m_instanceIndex;
+        uint                            m_clusterOffset;
+        uint64_t                        m_viewMask;
+        uint                            m_numClusters;
+        uint                            m_shaderIndex;
+    };
+
+    HLSL_STATIC_ASSERT( sizeof( InstanceVisibilityRecord ) == 24, "Expected exactly 24 bytes" );
 
     // Global data per viewport
     //-------------------------------------------------------------------------
@@ -192,10 +208,10 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
         uint                            m_meshBuffer                        : 16;
         uint                            m_clusterBuffer                     : 16;
         
-        uint                            m_InstanceCulling_CounterBuffer     : 16;
-        uint                            m_ClusterCulling_CounterBuffer      : 16;
+        uint                            m_InstanceCulling_VisibilityBuffer  : 16;
+        uint                            m_ClusterCompaction_ArgumentBuffer  : 16;
 
-        uint                            m_ClusterCulling_ClusterBuffer      : 16;
+        uint                            m_ClusterCulling_CounterBuffer      : 16;
         uint                            m_ClusterCulling_ArgumentBuffer     : 16;
 
     // 16-byte row
@@ -206,17 +222,18 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
         uint                            m_dfgTexture                        : 16;
 
         uint                            m_radianceTexture                   : 16;
-        uint                            m_paddingRow7                       : 16;
+        uint                            m_ClusterRecordBuffer               : 16;
 
-        uint                            m_paddingRow7b;
+        uint                            m_ClusterRecordCountersBuffer       : 16;
+        uint                            m_ClusterRecordOffsetsBuffer        : 16;
 
     // 16-byte row
         uint                            m_directionalLightBuffer            : 16;
         uint                            m_directionalLightPageBuffer        : 16;
 
         uint                            m_numDirectionalLightPages;
-        uint                            m_paddingDirLight0;
-        uint                            m_paddingDirLight1;
+        uint                            m_paddingClusterCulling1            : 16;
+        uint                            m_paddingClusterCulling2            : 16;
 
     // 16-byte row
         uint                            m_pointLightBuffer                  : 16;
@@ -292,12 +309,37 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
 
     //-------------------------------------------------------------------------
 
+    struct HLSL_ALIGN_STRUCT ClusterCompactionRootConstants
+    {
+        CommonRootConstants             m_commonRootConstants;
+
+        uint                            m_pageIndex;
+        uint                            m_pageEntryCount;
+    };
+
+    struct HLSL_ALIGN_INDIRECT_ARGUMENT ClusterCompactionArgument
+    {
+        ClusterCompactionRootConstants  m_rootConstants;
+        uint64_t                        m_rootCBV;
+        uint3                           m_dispatchArguments;
+        uint                            m_padding;
+    };
+
+    #define ClusterCompactionRootSignature   EE_BEGIN_ROOT_SIGNATURE \
+                                             "RootConstants( b0, num32BitConstants = 6, space = 0 )," \
+                                             "CBV( b1, space = 0 )"
+
+    //-------------------------------------------------------------------------
+
     struct HLSL_ALIGN_STRUCT ClusterCullingRootConstants
     {
         CommonRootConstants             m_commonRootConstants;
 
         uint                            m_clusterRangeStart;
         uint                            m_clusterRangeEnd;
+
+        uint                            m_shaderIndex;
+        uint                            m_padding;
     };
 
     struct HLSL_ALIGN_INDIRECT_ARGUMENT ClusterCullingArgument
@@ -305,11 +347,13 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
         ClusterCullingRootConstants     m_rootConstants;
         uint64_t                        m_rootCBV;
         uint3                           m_dispatchArguments;
-        uint                            m_padding;
+        uint3                           m_padding;
     };
 
+    HLSL_STATIC_ASSERT( sizeof( ClusterCullingArgument ) == 64, "Indirect argument layout must match the command signature" );
+
     #define ClusterCullingRootSignature     EE_BEGIN_ROOT_SIGNATURE \
-                                            "RootConstants( b0, num32BitConstants = 12, space = 0 )," \
+                                            "RootConstants( b0, num32BitConstants = 8, space = 0 )," \
                                             "CBV( b1, space = 0 )"
 
     //-------------------------------------------------------------------------
@@ -330,26 +374,17 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
 
     //-------------------------------------------------------------------------
 
-    struct HLSL_ALIGN_STRUCT BucketResolveRootConstants
-    {
-        CommonRootConstants                 m_commonRootConstants;
-    };
-
-    #define BucketResolveRootSignature      EE_BEGIN_ROOT_SIGNATURE \
-                                            "RootConstants( b0, num32BitConstants = 6, space = 0 )," \
-                                            "CBV( b1, space = 0 )"
-
     struct HLSL_ALIGN_STRUCT DrawRootConstants
     {
         CommonRootConstants                 m_commonRootConstants;
 
-        uint                                m_clusterVisibleBuffer          : 16;
-        uint                                m_padding0                      : 16;
-
-        uint                                m_clusterOffset;
+        uint                                m_clusterRecordBase;    // Record index into the cluster culling stream record buffer
         uint                                m_renderViewIndex;
 
-        uint                                m_padding1;
+        uint                                m_clusterMask0;          // 128-bit visibility mask, 1 bit per cluster record
+        uint                                m_clusterMask1;
+        uint                                m_clusterMask2;
+        uint                                m_clusterMask3;
     };
 
     struct HLSL_ALIGN_INDIRECT_ARGUMENT DrawArgument
@@ -357,8 +392,10 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
         DrawRootConstants                   m_rootConstants;
         uint64_t                            m_rootCBV;
         uint3                               m_dispatchArguments;
-        uint3                               m_padding;
+        uint                                m_padding;
     };
+
+    HLSL_STATIC_ASSERT( sizeof( DrawArgument ) == 64, "Don't exceed 64 bytes for this struct, it is performance critical" );
 
     #define DrawRootSignature           EE_BEGIN_ROOT_SIGNATURE \
                                         "RootConstants( b0, num32BitConstants = 10, space = 0 )," \
@@ -443,6 +480,68 @@ EE_END_SHADER_TYPES_NAMESPACE
 //-------------------------------------------------------------------------
 
 #ifndef __cplusplus
+
+    // https://graphics.stanford.edu/~seander/bithacks.html#SelectPosFromMSBRank
+    // Based on the same idea, but selects rank in the LSB order instead
+    uint SelectPosFromLSBRank( uint64_t v, uint64_t r )
+    {
+        // Parallel bit count for 64-bit integer, store intermediate steps
+        uint64_t a = v - ( ( v >> 1 ) & 0x5555555555555555ULL );
+        uint64_t b = ( a & 0x3333333333333333ULL ) + ( ( a >> 2 ) & 0x3333333333333333ULL );
+        uint64_t c = ( b + ( b >> 4 ) ) & 0x0F0F0F0F0F0F0F0FULL;
+        uint64_t d = ( c + ( c >> 8 ) ) & 0x00FF00FF00FF00FFULL;
+        uint64_t e = ( d + ( d >> 16 ) ) & 0x0000FFFF0000FFFFULL;
+
+        uint64_t t = 0;
+        uint s = 0;
+
+        // Binary search: check lower 32 bits
+        t = e & 0xFFFFFFFFULL;
+        if ( r > t ) { s += 32; r -= t; d >>= 32; c >>= 32; b >>= 32; a >>= 32; v >>= 32; }
+
+        // Check lower 16 bits
+        t = d & 0xFFFF;
+        if ( r > t ) { s += 16; r -= t; c >>= 16; b >>= 16; a >>= 16; v >>= 16; }
+
+        // Check lower 8 bits
+        t = c & 0xFF;
+        if ( r > t ) { s += 8; r -= t; b >>= 8; a >>= 8; v >>= 8; }
+
+        // Check lower 4 bits
+        t = b & 0x0F;
+        if ( r > t ) { s += 4; r -= t; a >>= 4; v >>= 4; }
+
+        // Check lower 2 bits
+        t = a & 0x03;
+        if ( r > t ) { s += 2; r -= t; v >>= 2; }
+
+        // Check lower 1 bit
+        t = v & 0x01;
+        if ( r > t ) { s += 1; }
+
+        return s;
+    }
+
+    uint CountBits128( uint64_t2 mask )
+    {
+        return countbits( mask.x ) + countbits( mask.y );
+    }
+
+    // Selects the index of the r-th set bit ( 1-based rank ) of a 128-bit mask
+    uint SelectPosFromLSBRank128( uint4 mask, uint rank )
+    {
+        uint64_t const lowBits = uint64_t( mask.x ) | ( uint64_t( mask.y ) << 32 );
+        uint64_t const highBits = uint64_t( mask.z ) | ( uint64_t( mask.w ) << 32 );
+
+        uint const numLowBits = uint( countbits( lowBits ) );
+        if ( rank <= numLowBits )
+        {
+            return SelectPosFromLSBRank( lowBits, uint64_t( rank ) );
+        }
+
+        return 64 + SelectPosFromLSBRank( highBits, uint64_t( rank - numLowBits ) );
+    }
+
 
     struct VertexOutput
     {

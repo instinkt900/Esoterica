@@ -1,6 +1,6 @@
 #pragma once
 
-#include "EngineTools/FileSystem/FileRegistry.h"
+#include "EngineTools/FileSystem/DataFileSystem.h"
 #include "EngineTools/Core/EditorTool.h"
 #include "EngineTools/Core/ToolsContext.h"
 #include "EngineTools/Core/DialogManager.h"
@@ -223,7 +223,7 @@ namespace EE
         bool                                            m_isUITestWindowOpen = false;
 
         // Resources
-        FileRegistry                                    m_fileRegistry;
+        DataFileSystem                                  m_dataFileSystem;
         EventBindingID                                  m_resourceDeletedEventID;
         float                                           m_resourceBrowserViewWidth = 150;
 

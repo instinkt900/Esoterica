@@ -64,6 +64,7 @@ namespace EE::Reflection
         void GenerateTypeInfoExpectedResourceTypeMethod( std::stringstream& file, ReflectedType const& type );
         void GenerateTypeInfoStaticTypeRegistrationMethods( std::stringstream& file, ReflectedType const& type );
         void GenerateTypeInfoGetReferencedResourceMethod( std::stringstream& file, ReflectedType const& type );
+        void GenerateTypeInfoGetReferencedPathsMethod( std::stringstream& file, ReflectedType const& type );
 
         // Generate an XML version of all the reflected type info
         void GenerateXML();

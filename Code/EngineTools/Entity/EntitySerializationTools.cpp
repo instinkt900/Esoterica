@@ -24,12 +24,8 @@ namespace EE::EntityModel
         EE_ASSERT( !pComponent->IsTransientComponent() );
 
         outDesc.Clear();
-
         outDesc.m_name = pComponent->GetNameID();
-
-        #if EE_DEVELOPMENT_TOOLS
         outDesc.m_transientComponentID = pComponent->GetID();
-        #endif
 
         // Spatial info
         auto pSpatialEntityComponent = TryCast<SpatialEntityComponent>( pComponent );
@@ -61,10 +57,7 @@ namespace EE::EntityModel
     {
         EE_ASSERT( !outDesc.IsValid() );
         outDesc.m_name = pEntity->GetNameID();
-
-        #if EE_DEVELOPMENT_TOOLS
         outDesc.m_transientEntityID = pEntity->GetID();
-        #endif
 
         // Get spatial parent
         if ( pEntity->HasSpatialParent() )

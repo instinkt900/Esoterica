@@ -48,6 +48,8 @@ namespace EE::Animation
 
         TInlineVector<StringID, 10> GetVariationIDs() const;
 
+        void GetReferencedPaths( TVector<DataPath>& outReferencedPaths ) const;
+
     private:
 
         virtual void PostDeserialize( TypeSystem::TypeRegistry const& typeRegistry ) override;

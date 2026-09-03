@@ -180,6 +180,7 @@
     <ClCompile Include="Render\DebugMesh\DebugMesh.cpp" />
     <ClCompile Include="Render\DebugMesh\DebugMeshRegistry.cpp" />
     <ClCompile Include="Render\Device\DeviceAppendBuffer.cpp" />
+    <ClCompile Include="Render\Device\DeviceRadixSort.cpp" />
     <ClCompile Include="Render\Device\SpatialHash.cpp" />
     <ClCompile Include="Render\RenderGeometry.cpp" />
     <ClCompile Include="Render\RenderGeometryBuilder.cpp" />
@@ -409,6 +410,7 @@
     <ClInclude Include="Render\DebugMesh\DebugMesh.h" />
     <ClInclude Include="Render\DebugMesh\DebugMeshRegistry.h" />
     <ClInclude Include="Render\Device\DeviceAppendBuffer.h" />
+    <ClInclude Include="Render\Device\DeviceRadixSort.h" />
     <ClInclude Include="Render\Device\DeviceResizeBuffer.h" />
     <ClInclude Include="Render\Device\SpatialHash.h" />
     <ClInclude Include="Render\RenderAsyncResourceUpdate.h" />
@@ -571,6 +573,14 @@
     <None Include="Render\Shaders\Debug\DebugDrawMesh.esf" />
     <None Include="Render\Shaders\Debug\DebugDrawResolve.esf" />
     <None Include="Render\Shaders\Downsample.esf" />
+    <None Include="Render\Shaders\FFX\FFX_ParallelSort.esh" />
+    <None Include="Render\Shaders\FFX\FFX_ParallelSort_Count.esf" />
+    <None Include="Render\Shaders\FFX\FFX_ParallelSort_Reduce.esf" />
+    <None Include="Render\Shaders\FFX\FFX_ParallelSort_Scan.esf" />
+    <None Include="Render\Shaders\FFX\FFX_ParallelSort_ScanAdd.esf" />
+    <None Include="Render\Shaders\FFX\FFX_ParallelSort_Scatter.esf" />
+    <None Include="Render\Shaders\FFX\FFX_ParallelSort_ScatterPayload.esf" />
+    <None Include="Render\Shaders\FFX\FFX_ParallelSort_SetupIndirect.esf" />
     <None Include="Render\Shaders\FullscreenTriangle.esh" />
     <None Include="Render\Shaders\GTAO\Denoise.esf" />
     <None Include="Render\Shaders\GTAO\MainPass.esf" />
@@ -597,7 +607,7 @@
     <None Include="Render\Shaders\PBR\RadianceFiltering.esf" />
     <None Include="Render\Shaders\PostProcess.esf" />
     <None Include="Render\Shaders\Imgui.esf" />
-    <None Include="Render\Shaders\Renderer\BucketResolve.esf" />
+    <None Include="Render\Shaders\Renderer\ClusterCompaction.esf" />
     <None Include="Render\Shaders\Renderer\ClusterCulling.esf" />
     <None Include="Render\Shaders\Renderer\DefaultMeshShader.esh" />
     <None Include="Render\Shaders\Renderer\InstanceCulling.esf" />

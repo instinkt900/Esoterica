@@ -97,9 +97,13 @@ namespace EE::Render
         RHI::DestroyPipeline( pRenderSystem->GetContextRHI(), eastl::move( m_pPipelineCubemapDownsample ) );
     }
 
-    void GlobalEnvironmentMapPass::UpdateDeviceResources( RenderSystem*                                             pRenderSystem,
-                                                          TArrayView<ForwardShadingMaterialShaderPipelineBucket>    materialShaderPipelineBuckets,
-                                                          TArrayView<uint32_t const>                                clusterCapacity )
+    void GlobalEnvironmentMapPass::UpdateDeviceResources
+    (
+        RenderSystem*                                             pRenderSystem,
+        TArrayView<ForwardShadingMaterialShaderPipelineBucket>    materialShaderPipelineBuckets,
+        TArrayView<uint32_t const>                                clusterCapacity,
+        uint32_t                                                  numMeshInstancePages
+    )
     {
         EE_PROFILE_FUNCTION_RENDER();
 
@@ -137,22 +141,12 @@ namespace EE::Render
 
         for ( DeviceRenderView & renderView : m_renderViews )
         {
-            renderView.UpdateDeviceResources( pRenderSystem, clusterCapacity );
+            renderView.UpdateDeviceResources( pRenderSystem, clusterCapacity, numMeshInstancePages );
         }
     }
 
-    void GlobalEnvironmentMapPass::DrawAndFilterGlobalEnvironmentMap( TArrayView<ForwardShadingMaterialShaderPipelineBucket>    materialShaderPipelineBuckets,
-                                                                      TArrayView<uint32_t const>                                clusterCapacity,
-                                                                      RHI::Buffer*                                              pGlobalParametersBuffer,
-                                                                      RHI::CommandBuffer*                                       pCommandBuffer,
-                                                                      RHI::Texture*                                             pRadianceRenderTarget,
-                                                                      RHI::Texture*                                             pIrradianceRenderTarget,
-                                                                      RHI::BufferHandle                                         renderViewBufferHandle,
-                                                                      uint32_t                                                  renderViewOffset,
-                                                                      TArrayView<ShaderTypes::RenderView>                       dstRenderViews ) const
+    void GlobalEnvironmentMapPass::UpdateRenderViews( TArrayView<ShaderTypes::RenderView> dstRenderViews ) const
     {
-        EE_PROFILE_FUNCTION_RENDER();
-
         Matrix mirrorMatrixX = Matrix::Identity;
         mirrorMatrixX.SetScale( Vector( -1.0F, 1.0F, 1.0F, 1.0F ) );
 
@@ -184,8 +178,62 @@ namespace EE::Render
         mirrorMatrices[4] = mirrorMatrixX; // Positive Z
         mirrorMatrices[5] = mirrorMatrixX; // Negative Z
 
-        //-------------------------------------------------------------------------
+        for ( uint32_t renderViewIndex = 0; renderViewIndex < NumRenderViews; ++renderViewIndex )
+        {
+            Matrix viewProjectionMatrix = viewMatrices[renderViewIndex] * projectionMatrix * mirrorMatrices[renderViewIndex];
+            Matrix viewProjectionMatrixInverse = viewProjectionMatrix.GetInverse();
+
+            alignas( 32 ) ShaderTypes::RenderView deviceRenderView = {};
+            std::memcpy
+            (
+                deviceRenderView.m_viewProjectionMatrix,
+                viewProjectionMatrix.m_rows,
+                sizeof( deviceRenderView.m_viewProjectionMatrix )
+            );
+            std::memcpy
+            (
+                deviceRenderView.m_viewMatrix,
+                viewMatrices[renderViewIndex].m_rows,
+                sizeof( deviceRenderView.m_viewMatrix )
+            );
+            std::memcpy
+            (
+                deviceRenderView.m_inverseViewProjectionMatrix,
+                viewProjectionMatrixInverse.m_rows,
+                sizeof( deviceRenderView.m_inverseViewProjectionMatrix )
+            );
+
+            deviceRenderView.m_renderTargetSize[0] = float( g_CaptureResolution );
+            deviceRenderView.m_renderTargetSize[1] = float( g_CaptureResolution );
+            deviceRenderView.m_renderTargetSize[2] = 1.0F / float( g_CaptureResolution );
+            deviceRenderView.m_renderTargetSize[3] = 1.0F / float( g_CaptureResolution );
+
+            deviceRenderView.m_projectionP00 = projectionMatrix.m_values[0][0];
+            deviceRenderView.m_projectionP11 = projectionMatrix.m_values[1][1];
+            deviceRenderView.m_znear = 0.1F;
+
+            deviceRenderView.m_renderViewFlags = ShaderTypes::RENDER_VIEW_FLAG_NONE;
+            deviceRenderView.m_renderViewLayerFlags = ShaderTypes::RENDER_VIEW_LAYER_FLAG_GLOBAL_ENVIRONMENT_MAP;
+
+            Memory::CopyToWriteCombined( &dstRenderViews[renderViewIndex], &deviceRenderView, sizeof( deviceRenderView ) );
+        }
+    }
+
+    void GlobalEnvironmentMapPass::DrawAndFilterGlobalEnvironmentMap
+    (
+        TArrayView<ForwardShadingMaterialShaderPipelineBucket>    materialShaderPipelineBuckets,
+        RHI::Buffer*                                              pGlobalParametersBuffer,
+        RHI::CommandBuffer*                                       pCommandBuffer,
+        RHI::Texture*                                             pRadianceRenderTarget,
+        RHI::Texture*                                             pIrradianceRenderTarget,
+        RHI::BufferHandle                                         renderViewBufferHandle,
+        uint32_t                                                  renderViewOffset
+    ) const
+    {
+        EE_PROFILE_FUNCTION_RENDER();
+
         // Capture cubemap first
+        //-------------------------------------------------------------------------
 
         {
             EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, "Global Environment Map Capture" );
@@ -193,92 +241,64 @@ namespace EE::Render
             RHI::CmdSetViewport( pCommandBuffer, 0.0F, 0.0F, float( g_CaptureResolution ), float( g_CaptureResolution ), 0.0F, 1.0F );
             RHI::CmdSetScissor( pCommandBuffer, 0, 0, g_CaptureResolution, g_CaptureResolution );
 
-            RHI::CmdBarrier( pCommandBuffer, m_pCaptureRenderTarget,
-                             RHI::PipelineStage::PixelShader, RHI::PipelineStage::Draw,
-                             RHI::ResourceAccess::ShaderResource, RHI::ResourceAccess::RenderTarget,
-                             RHI::TextureState::ShaderResource, RHI::TextureState::RenderTarget,
-                             {}, {} );
+            RHI::CmdBarrier
+            (
+                pCommandBuffer, m_pCaptureRenderTarget,
+                RHI::PipelineStage::PixelShader, RHI::PipelineStage::Draw,
+                RHI::ResourceAccess::ShaderResource, RHI::ResourceAccess::RenderTarget,
+                RHI::TextureState::ShaderResource, RHI::TextureState::RenderTarget,
+                {}, {}
+            );
 
             for ( uint32_t renderViewIndex = 0; renderViewIndex < NumRenderViews; ++renderViewIndex )
             {
-                Matrix viewProjectionMatrix = viewMatrices[renderViewIndex] * projectionMatrix * mirrorMatrices[renderViewIndex];
-                Matrix viewProjectionMatrixInverse = viewProjectionMatrix.GetInverse();
+                EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, "Cubemap Face" );
 
-                alignas( 32 ) ShaderTypes::RenderView deviceRenderView = {};
-                std::memcpy
+                ForwardShadingPass::DrawMaterialShaderBuckets
                 (
-                    deviceRenderView.m_viewProjectionMatrix,
-                    viewProjectionMatrix.m_rows,
-                    sizeof( deviceRenderView.m_viewProjectionMatrix )
+                    materialShaderPipelineBuckets,
+                    m_renderViews[renderViewIndex],
+                    m_pCaptureRenderTarget,
+                    renderViewIndex, 0,
+                    m_pDepthRenderTarget,
+                    pCommandBuffer
                 );
-                std::memcpy
-                (
-                    deviceRenderView.m_viewMatrix,
-                    viewMatrices[renderViewIndex].m_rows,
-                    sizeof( deviceRenderView.m_viewMatrix )
-                );
-                std::memcpy
-                (
-                    deviceRenderView.m_inverseViewProjectionMatrix,
-                    viewProjectionMatrixInverse.m_rows,
-                    sizeof( deviceRenderView.m_inverseViewProjectionMatrix )
-                );
-
-                deviceRenderView.m_renderTargetSize[0] = float( g_CaptureResolution );
-                deviceRenderView.m_renderTargetSize[1] = float( g_CaptureResolution );
-                deviceRenderView.m_renderTargetSize[2] = 1.0F / float( g_CaptureResolution );
-                deviceRenderView.m_renderTargetSize[3] = 1.0F / float( g_CaptureResolution );
-
-                deviceRenderView.m_projectionP00 = projectionMatrix.m_values[0][0];
-                deviceRenderView.m_projectionP11 = projectionMatrix.m_values[1][1];
-                deviceRenderView.m_znear = 0.1F;
-
-                deviceRenderView.m_renderViewFlags = ShaderTypes::RENDER_VIEW_FLAG_NONE;
-                deviceRenderView.m_renderViewLayerFlags = ShaderTypes::RENDER_VIEW_LAYER_FLAG_GLOBAL_ENVIRONMENT_MAP;
-
-                Memory::CopyToWriteCombined( &dstRenderViews[renderViewIndex], &deviceRenderView, sizeof( deviceRenderView ) );
-
-                {
-                    EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, "Cubemap Face" );
-
-                    ForwardShadingPass::DrawMaterialShaderBuckets
-                    (
-                        materialShaderPipelineBuckets,
-                        clusterCapacity,
-                        m_renderViews[renderViewIndex],
-                        m_pCaptureRenderTarget,
-                        renderViewIndex, 0,
-                        m_pDepthRenderTarget,
-                        pCommandBuffer
-                    );
-                }
             }
 
             for ( uint32_t renderViewIndex = 0; renderViewIndex < NumRenderViews; ++renderViewIndex )
             {
-                RHI::CmdBarrier( pCommandBuffer, m_pCaptureRenderTarget,
-                                 RHI::PipelineStage::Draw, RHI::PipelineStage::PixelShader,
-                                 RHI::ResourceAccess::RenderTarget, RHI::ResourceAccess::ShaderResource,
-                                 RHI::TextureState::RenderTarget, RHI::TextureState::ShaderResource,
-                                 { 0, 1, renderViewIndex, 1 }, {} );
+                RHI::CmdBarrier
+                (
+                    pCommandBuffer, m_pCaptureRenderTarget,
+                    RHI::PipelineStage::Draw, RHI::PipelineStage::PixelShader,
+                    RHI::ResourceAccess::RenderTarget, RHI::ResourceAccess::ShaderResource,
+                    RHI::TextureState::RenderTarget, RHI::TextureState::ShaderResource,
+                    { 0, 1, renderViewIndex, 1 }, {}
+                );
             }
 
-            RHI::CmdBarrier( pCommandBuffer, pIrradianceRenderTarget,
-                             RHI::PipelineStage::PixelShader, RHI::PipelineStage::Draw,
-                             RHI::ResourceAccess::ShaderResource, RHI::ResourceAccess::RenderTarget,
-                             RHI::TextureState::ShaderResource, RHI::TextureState::RenderTarget,
-                             {}, {} );
+            RHI::CmdBarrier
+            (
+                pCommandBuffer, pIrradianceRenderTarget,
+                RHI::PipelineStage::PixelShader, RHI::PipelineStage::Draw,
+                RHI::ResourceAccess::ShaderResource, RHI::ResourceAccess::RenderTarget,
+                RHI::TextureState::ShaderResource, RHI::TextureState::RenderTarget,
+                {}, {}
+            );
 
-            RHI::CmdBarrier( pCommandBuffer, pRadianceRenderTarget,
-                             RHI::PipelineStage::PixelShader, RHI::PipelineStage::Draw,
-                             RHI::ResourceAccess::ShaderResource, RHI::ResourceAccess::RenderTarget,
-                             RHI::TextureState::ShaderResource, RHI::TextureState::RenderTarget,
-                             {}, {} );
+            RHI::CmdBarrier
+            (
+                pCommandBuffer, pRadianceRenderTarget,
+                RHI::PipelineStage::PixelShader, RHI::PipelineStage::Draw,
+                RHI::ResourceAccess::ShaderResource, RHI::ResourceAccess::RenderTarget,
+                RHI::TextureState::ShaderResource, RHI::TextureState::RenderTarget,
+                {}, {}
+            );
 
         }
 
-        //-------------------------------------------------------------------------
         // Downsample cubemap
+        //-------------------------------------------------------------------------
 
         {
             EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, "Global Environment Map Cubemap Downsample" );
@@ -313,11 +333,14 @@ namespace EE::Render
                 // But we still need to issue those in the inner loop because next mip level has a dependency on the previous mip level.
                 for ( uint32_t renderViewIndex = 0; renderViewIndex < NumRenderViews; ++renderViewIndex )
                 {
-                    RHI::CmdBarrier( pCommandBuffer, m_pCaptureRenderTarget,
-                                     RHI::PipelineStage::Draw, RHI::PipelineStage::PixelShader,
-                                     RHI::ResourceAccess::RenderTarget, RHI::ResourceAccess::ShaderResource,
-                                     RHI::TextureState::RenderTarget, RHI::TextureState::ShaderResource,
-                                     { mipLevel, 1, renderViewIndex, 1 }, {} );
+                    RHI::CmdBarrier
+                    (
+                        pCommandBuffer, m_pCaptureRenderTarget,
+                        RHI::PipelineStage::Draw, RHI::PipelineStage::PixelShader,
+                        RHI::ResourceAccess::RenderTarget, RHI::ResourceAccess::ShaderResource,
+                        RHI::TextureState::RenderTarget, RHI::TextureState::ShaderResource,
+                        { mipLevel, 1, renderViewIndex, 1 }, {}
+                    );
                 }
             }
 
@@ -325,6 +348,7 @@ namespace EE::Render
 
         // Cubemap ready, irradiance filtering first
         //-------------------------------------------------------------------------
+
         {
             EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, "Global Environment Map Irradiance Filtering" );
 
@@ -355,6 +379,7 @@ namespace EE::Render
 
         // Irradiance ready, radiance filtering last
         //-------------------------------------------------------------------------
+
         {
             EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer, "Global Environment Map Radiance Filtering" );
             RHI::CmdSetPipeline( pCommandBuffer, m_pPipelineRadianceFiltering );
@@ -431,11 +456,14 @@ namespace EE::Render
             RHI::CmdSetViewport( pCommandBuffer, 0.0F, 0.0F, float( g_DFGResolution ), float( g_DFGResolution ), 0.0F, 1.0F );
             RHI::CmdSetScissor( pCommandBuffer, 0, 0, g_DFGResolution, g_DFGResolution );
 
-            RHI::CmdBarrier( pCommandBuffer, m_pDfgRenderTarget,
-                             RHI::PipelineStage::PixelShader, RHI::PipelineStage::Draw,
-                             RHI::ResourceAccess::ShaderResource, RHI::ResourceAccess::RenderTarget,
-                             RHI::TextureState::ShaderResource, RHI::TextureState::RenderTarget,
-                             {}, {} );
+            RHI::CmdBarrier
+            (
+                pCommandBuffer, m_pDfgRenderTarget,
+                RHI::PipelineStage::PixelShader, RHI::PipelineStage::Draw,
+                RHI::ResourceAccess::ShaderResource, RHI::ResourceAccess::RenderTarget,
+                RHI::TextureState::ShaderResource, RHI::TextureState::RenderTarget,
+                {}, {}
+            );
 
             RHI::CmdSetPipeline( pCommandBuffer, m_pPipelinePrecomputeDFG );
 

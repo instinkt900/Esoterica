@@ -150,8 +150,8 @@ namespace EE::Render
 
             m_constantBuffers[frameIndex] = RHI::CreateBuffer( m_pRenderSystem->GetContextRHI(), bufferParameters );
 
-            m_vertexBuffers[frameIndex].Initialize( m_pRenderSystem->GetContextRHI() );
-            m_indexBuffers[frameIndex].Initialize( m_pRenderSystem->GetContextRHI() );
+            m_vertexBuffers[frameIndex].Initialize( m_pRenderSystem->GetContextRHI(), true );
+            m_indexBuffers[frameIndex].Initialize( m_pRenderSystem->GetContextRHI(), true );
         }
 
         ImGuiIO& io = ::ImGui::GetIO();

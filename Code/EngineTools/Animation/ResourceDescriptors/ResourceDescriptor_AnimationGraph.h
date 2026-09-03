@@ -28,6 +28,10 @@ namespace EE::Animation
         virtual void GetInstallDependencies( TypeSystem::TypeRegistry const& typeRegistry, FileSystem::Path const& sourceResourceDirectoryPath, String const& subResourceName, TVector<ResourceID>& outDependencies ) const override;
         virtual void Clear() override {}
 
+    private:
+
+        virtual void GetAdditionalReferencedPaths( TVector<DataPath>& outReferencedPaths ) const override;
+
     public:
 
         EE_REFLECT( Hidden );

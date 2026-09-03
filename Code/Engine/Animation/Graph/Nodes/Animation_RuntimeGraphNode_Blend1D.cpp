@@ -393,7 +393,7 @@ namespace EE::Animation
         m_bsr.m_pSource0 = idx != InvalidIndex ? m_sourceNodes[idx] : nullptr;
 
         inState.ReadValue( idx );
-        m_bsr.m_pSource0 = idx != InvalidIndex ? m_sourceNodes[idx] : nullptr;
+        m_bsr.m_pSource1 = idx != InvalidIndex ? m_sourceNodes[idx] : nullptr;
 
         inState.ReadValue( m_bsr.m_blendWeight );
         inState.ReadValue( m_blendedSyncTrack );
@@ -429,15 +429,10 @@ namespace EE::Animation
         ParameterizedBlendNode::Definition::InstantiateNode( context, InstantiationOptions::NodeAlreadyCreated );
     }
 
-    void VelocityBlendNode::InitializeInternal( GraphContext& context, SyncTrackTime const& initialTime )
+    void VelocityBlendNode::Definition::PostInstantiateNode( InstantiationContext const& context ) const
     {
-        if ( !m_lazyInitializationPerformed )
-        {
-            CreateParameterizationFromSpeeds();
-            m_lazyInitializationPerformed = true;
-        }
-
-        ParameterizedBlendNode::InitializeInternal( context, initialTime );
+        auto pNode = static_cast<VelocityBlendNode*>( context.m_nodePtrs[context.m_currentNodeIdx] );
+        pNode->CreateParameterizationFromSpeeds();
     }
 
     void VelocityBlendNode::CreateParameterizationFromSpeeds()
@@ -450,9 +445,16 @@ namespace EE::Animation
         for ( int16_t i = 0; i < numSources; i++ )
         {
             // The editor tooling guarantees that the source nodes are actually clip references!
-            AnimationClip const* pAnimation = reinterpret_cast<AnimationClipReferenceNode const*>( m_sourceNodes[i] )->GetAnimation();
-            EE_ASSERT( pAnimation != nullptr );
-            values.emplace_back( pAnimation->GetAverageLinearVelocity() );
+            auto pClipNode = reinterpret_cast<AnimationClipReferenceNode const*>( m_sourceNodes[i] );
+            if ( pClipNode->HasAnimation() )
+            {
+                AnimationClip const* pAnimation = pClipNode->GetAnimation();
+                values.emplace_back( pAnimation->GetAverageLinearVelocity() );
+            }
+            else
+            {
+                values.emplace_back( 0.0f );
+            }
         }
 
         // Create parameterization
@@ -470,20 +472,13 @@ namespace EE::Animation
 
         //-------------------------------------------------------------------------
 
-        if ( !m_lazyInitializationPerformed )
-        {
-            CreateParameterizationFromSpeeds();
-        }
-
-        //-------------------------------------------------------------------------
-
         int32_t idx = InvalidIndex;
 
         inState.ReadValue( idx );
         m_bsr.m_pSource0 = ( idx != InvalidIndex ) ? m_sourceNodes[idx] : nullptr;
 
         inState.ReadValue( idx );
-        m_bsr.m_pSource0 = ( idx != InvalidIndex ) ? m_sourceNodes[idx] : nullptr;
+        m_bsr.m_pSource1 = ( idx != InvalidIndex ) ? m_sourceNodes[idx] : nullptr;
 
         inState.ReadValue( m_bsr.m_blendWeight );
         inState.ReadValue( m_blendedSyncTrack );

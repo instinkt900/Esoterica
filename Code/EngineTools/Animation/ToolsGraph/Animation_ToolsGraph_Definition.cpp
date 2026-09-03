@@ -3,6 +3,7 @@
 #include "Nodes/Animation_ToolsGraphNode_Parameters.h"
 #include "Nodes/Animation_ToolsGraphNode_State.h"
 #include "EngineTools/Animation/ResourceDescriptors/ResourceDescriptor_AnimationGraph.h"
+#include "Nodes/Animation_ToolsGraphNode_VariationData.h"
 
 //-------------------------------------------------------------------------
 
@@ -182,5 +183,29 @@ namespace EE::Animation
         }
 
         return IDs;
+    }
+
+    void ToolsGraphDefinition::GetReferencedPaths( TVector<DataPath>& outReferencedPaths ) const
+    {
+        if ( !m_rootGraph.IsSet() )
+        {
+            return;
+        }
+
+        auto variationDataNodes = m_rootGraph.Get()->FindAllNodesOfType<VariationDataToolsNode>( NodeGraph::SearchMode::Recursive, NodeGraph::SearchTypeMatch::Derived );
+        for ( auto pNode : variationDataNodes )
+        {
+            for ( Variation const& variation : m_variationHierarchy.GetAllVariations() )
+            {
+                auto pResolvedData = pNode->GetResolvedVariationData( m_variationHierarchy, variation.m_ID );
+
+                TInlineVector<ResourceID, 2> referencedResources;
+                pResolvedData->GetReferencedResources( referencedResources );
+                for ( auto const& resourceID : referencedResources )
+                {
+                    VectorEmplaceBackUnique( outReferencedPaths, resourceID.GetDataPath() );
+                }
+            }
+        }
     }
 }

@@ -15,14 +15,26 @@ namespace EE
 
     //-------------------------------------------------------------------------
 
+    constexpr static Input::InputID const g_cameraActivationKey = Input::InputID::Mouse_Right;
+    constexpr static Input::InputID const g_cameraOrbitKey = Input::InputID::Keyboard_LAlt;
+    constexpr static Input::InputID const g_cameraPanKey = Input::InputID::Mouse_Middle;
+
+    //-------------------------------------------------------------------------
+
     void ToolsCameraComponent::Initialize()
     {
         CameraComponent::Initialize();
     }
 
+    void ToolsCameraComponent::SetEnabled( bool enabled )
+    {
+        m_isEnabled = enabled;
+        m_isManipulating = false;
+    }
+
     void ToolsCameraComponent::Update( EntityWorldUpdateContext const& ctx )
     {
-        if ( !m_isUpdateEnabled )
+        if ( !m_isEnabled )
         {
             return;
         }
@@ -34,7 +46,7 @@ namespace EE
         EE_ASSERT( pInputSystem != nullptr );
         auto const pKeyboardMouse = pInputSystem->GetKeyboardMouse();
 
-        if ( pKeyboardMouse->IsHeldDown( Input::InputID::Keyboard_LAlt ) || pKeyboardMouse->IsHeldDown( Input::InputID::Keyboard_RAlt ) )
+        if ( pKeyboardMouse->IsHeldDown( g_cameraOrbitKey ) )
         {
             m_mode = Mode::Orbit;
         }
@@ -45,7 +57,7 @@ namespace EE
 
         //-------------------------------------------------------------------------
 
-        m_bIsManipulatingView = false;
+        m_isManipulating = false;
 
         if ( m_mode == Mode::FreeLook )
         {
@@ -64,7 +76,7 @@ namespace EE
         // Position update
         //-------------------------------------------------------------------------
 
-        bool const isMoveModifierDown = pKeyboardMouse->IsHeldDown( Input::InputID::Mouse_Right );
+        bool const isMoveModifierDown = pKeyboardMouse->IsHeldDown( g_cameraActivationKey );
         if ( isMoveModifierDown )
         {
             // Adjust move speed
@@ -108,7 +120,7 @@ namespace EE
             Vector const mouseDelta( pKeyboardMouse->GetMouseDelta() );
             Float2 const directionDelta = ( mouseDelta.GetNegated() * g_mouseSensitivityOrientation ).ToFloat2();
             OrientCamera( deltaTime, directionDelta.m_x, directionDelta.m_y );
-            m_bIsManipulatingView = true;
+            m_isManipulating = true;
         }
         else
         {
@@ -124,12 +136,12 @@ namespace EE
             // Pan Camera
             //-------------------------------------------------------------------------
 
-            if ( pKeyboardMouse->IsHeldDown( Input::InputID::Mouse_Middle ) )
+            if ( pKeyboardMouse->IsHeldDown( g_cameraPanKey ) )
             {
                 Vector const mouseDelta( pKeyboardMouse->GetMouseDelta() );
                 Float2 const directionDelta = ( mouseDelta * g_mouseSensitivityPan ).ToFloat2();
                 PanCamera( deltaTime, -directionDelta.m_x, directionDelta.m_y );
-                m_bIsManipulatingView = true;
+                m_isManipulating = true;
             }
         }
     }
@@ -138,7 +150,7 @@ namespace EE
     {
         Seconds const deltaTime = ctx.GetRawDeltaTime();
 
-        if ( pKeyboardMouse->IsHeldDown( Input::InputID::Mouse_Right ) )
+        if ( pKeyboardMouse->IsHeldDown( g_cameraActivationKey ) )
         {
             Vector const mouseDelta( pKeyboardMouse->GetMouseDelta().m_x, -pKeyboardMouse->GetMouseDelta().m_y, 0 );
             Vector adjustedCameraInputs = ( mouseDelta * g_mouseSensitivityOrientation ) * 10;
@@ -146,14 +158,14 @@ namespace EE
             adjustedCameraInputs *= (float) maxAngularVelocityForThisFrame;
             AdjustOrbitAngle( adjustedCameraInputs.GetX(), adjustedCameraInputs.GetY() );
 
-            m_bIsManipulatingView = true;
-        }
+            float const wheelDelta = pKeyboardMouse->GetValue( Input::InputID::Mouse_WheelVertical );
+            if ( !Math::IsNearZero( wheelDelta ) )
+            {
+                float const adjustedDistance = Math::Max( 0.0f, m_orbitDistance + ( wheelDelta * -g_orbitDistanceSensitivity ) );
+                SetOrbitDistance( adjustedDistance );
+            }
 
-        float const wheelDelta = pKeyboardMouse->GetValue( Input::InputID::Mouse_WheelVertical );
-        if ( !Math::IsNearZero( wheelDelta ) )
-        {
-            float const adjustedDistance = Math::Max( 0.0f, m_orbitDistance + ( wheelDelta * -g_orbitDistanceSensitivity ) );
-            SetOrbitDistance( adjustedDistance );
+            m_isManipulating = true;
         }
     }
 

@@ -143,7 +143,7 @@ namespace EE::Render
                 EE_ASSERT( !pStaticMeshComponent->m_meshInstanceProxy.m_instanceHandle.IsValid() );
 
                 Mesh const* pStaticMesh = pStaticMeshComponent->GetMesh();
-                AddMeshClusters( pStaticMesh, pStaticMeshComponent->GetResolvedMaterials(), pStaticMeshComponent->m_viewLayers );
+                AddMeshClusters( pStaticMesh, pStaticMeshComponent->GetResolvedMaterials() );
 
                 uint32_t instanceDataSizeInBytes = pStaticMeshComponent->ComputeInstanceDataSizeInBytes();
 
@@ -174,7 +174,7 @@ namespace EE::Render
                 EE_ASSERT( !pSkeletalMeshComponent->m_skinningProxy.IsValid() );
 
                 SkeletalMesh const* pSkeletalMesh = pSkeletalMeshComponent->GetMesh();
-                AddMeshClusters( pSkeletalMesh, pSkeletalMeshComponent->GetResolvedMaterials(), pSkeletalMeshComponent->m_viewLayers );
+                AddMeshClusters( pSkeletalMesh, pSkeletalMeshComponent->GetResolvedMaterials() );
 
                 uint32_t instanceDataSizeInBytes = pSkeletalMeshComponent->ComputeInstanceDataSizeInBytes();
 
@@ -254,7 +254,7 @@ namespace EE::Render
             {
                 EE_ASSERT( pStaticMeshComponent->m_meshInstanceProxy.m_instanceHandle.IsValid() );
 
-                RemoveMeshClusters( pStaticMeshComponent->GetMesh(), pStaticMeshComponent->GetResolvedMaterials(), pStaticMeshComponent->m_viewLayers );
+                RemoveMeshClusters( pStaticMeshComponent->GetMesh(), pStaticMeshComponent->GetResolvedMaterials() );
 
                 m_staticMeshComponentInstanceUpdateQueue.Unbind( pStaticMeshComponent, pStaticMeshComponent->GetInstanceDataUpdateSignal() );
 
@@ -275,7 +275,7 @@ namespace EE::Render
                 EE_ASSERT( pSkeletalMeshComponent->m_meshInstanceProxy.IsValid() );
                 EE_ASSERT( pSkeletalMeshComponent->m_skinningProxy.IsValid() );
 
-                RemoveMeshClusters( pSkeletalMeshComponent->GetMesh(), pSkeletalMeshComponent->GetResolvedMaterials(), pSkeletalMeshComponent->m_viewLayers );
+                RemoveMeshClusters( pSkeletalMeshComponent->GetMesh(), pSkeletalMeshComponent->GetResolvedMaterials() );
 
                 m_skeletalMeshComponentInstanceUpdateQueue.Unbind( pSkeletalMeshComponent, pSkeletalMeshComponent->GetInstanceDataUpdateSignal() );
 
@@ -330,7 +330,7 @@ namespace EE::Render
         }
     }
 
-    void RenderWorldSystem::AddMeshClusters( Mesh const* pMeshResource, TInlineVector<Material const*, 50> const& resolvedMaterials, TBitFlags<ViewLayer> viewLayers )
+    void RenderWorldSystem::AddMeshClusters( Mesh const* pMeshResource, TInlineVector<Material const*, 50> const& resolvedMaterials )
     {
         int32_t const numSubmeshes = pMeshResource->GetNumSubmeshes();
         EE_ASSERT( resolvedMaterials.size() == numSubmeshes );
@@ -353,18 +353,11 @@ namespace EE::Render
             Geometry const& geometry = pMeshResource->GetGeometry()[geometryIdx];
             uint32_t const requiredClusterCapacity = geometry.GetNumClusters();
 
-            m_materialShaderClusterCapacity.AddGlobalClusters( requiredClusterCapacity );
-            ForEachViewLayer( [this, viewLayers, &shaderIndex, requiredClusterCapacity] ( ViewLayer viewLayer )
-            {
-                if ( viewLayers.IsFlagSet( viewLayer ) )
-                {
-                    m_materialShaderClusterCapacity.AddViewLayerClusters( uint32_t( viewLayer ), shaderIndex, requiredClusterCapacity );
-                }
-            } );
+            m_materialShaderClusterCapacity.AddShaderClusters( shaderIndex, requiredClusterCapacity );
         }
     }
 
-    void RenderWorldSystem::RemoveMeshClusters( Mesh const* pMeshResource, TInlineVector<Material const*, 50> const& resolvedMaterials, TBitFlags<ViewLayer> viewLayers )
+    void RenderWorldSystem::RemoveMeshClusters( Mesh const* pMeshResource, TInlineVector<Material const*, 50> const& resolvedMaterials )
     {
         int32_t const numSubmeshes = pMeshResource->GetNumSubmeshes();
         EE_ASSERT( resolvedMaterials.size() == numSubmeshes );
@@ -387,14 +380,7 @@ namespace EE::Render
             Geometry const& geometry = pMeshResource->GetGeometry()[geometryIdx];
             uint32_t const requiredClusterCapacity = geometry.GetNumClusters();
 
-            m_materialShaderClusterCapacity.RemoveGlobalClusters( requiredClusterCapacity );
-            ForEachViewLayer( [this, viewLayers, &shaderIndex, requiredClusterCapacity] ( ViewLayer viewLayer )
-            {
-                if ( viewLayers.IsFlagSet( viewLayer ) )
-                {
-                    m_materialShaderClusterCapacity.RemoveViewLayerClusters( uint32_t( viewLayer ), shaderIndex, requiredClusterCapacity );
-                }
-            } );
+            m_materialShaderClusterCapacity.RemoveShaderClusters( shaderIndex, requiredClusterCapacity );
         }
     }
 

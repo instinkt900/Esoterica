@@ -37,54 +37,69 @@ namespace EE::Render
         static TVector<ForwardShadingMaterialShaderPipelineBucket> InitializeMaterialShaderBuckets( RenderSystem* pRenderSystem );
 
         // Depth only pass
-        static void DrawMaterialShaderBuckets_DepthOnly( TArrayView<ForwardShadingMaterialShaderPipelineBucket const>   materialShaderBuckets,
-                                                         TArrayView<uint32_t const>                                     clusterCapacity,
-                                                         DeviceRenderView const&                                        renderView,
-                                                         RHI::Texture*                                                  pDepthTexture,
-                                                         RHI::CommandBuffer*                                            pCommandBuffer );
+        static void DrawMaterialShaderBuckets_DepthOnly
+        (
+            TArrayView<ForwardShadingMaterialShaderPipelineBucket const>    materialShaderBuckets,
+            DeviceRenderView const&                                         renderView,
+            RHI::Texture*                                                   pDepthTexture,
+            RHI::CommandBuffer*                                             pCommandBuffer
+        );
 
         // Shading pass (assumes depth pass was rendered separately, will not work without a depth pass)
-        static void DrawMaterialShaderBuckets_Shading( TArrayView<ForwardShadingMaterialShaderPipelineBucket const>     materialShaderBuckets,
-                                                       TArrayView<uint32_t const>                                       clusterCapacity,
-                                                       DeviceRenderView const&                                          renderView,
-                                                       RHI::Texture*                                                    pColorTexture,
-                                                       uint32_t                                                         colorTargetSlice,
-                                                       uint32_t                                                         colorTargetMipSlice,
-                                                       RHI::Texture*                                                    pDepthTexture,
-                                                       RHI::CommandBuffer*                                              pCommandBuffer );
+        static void DrawMaterialShaderBuckets_Shading
+        (
+            TArrayView<ForwardShadingMaterialShaderPipelineBucket const>    materialShaderBuckets,
+            DeviceRenderView const&                                         renderView,
+            RHI::Texture*                                                   pColorTexture,
+            uint32_t                                                        colorTargetSlice,
+            uint32_t                                                        colorTargetMipSlice,
+            RHI::Texture*                                                   pDepthTexture,
+            RHI::CommandBuffer*                                             pCommandBuffer
+        );
 
         // Depth + Shading passes combined
-        static void DrawMaterialShaderBuckets( TArrayView<ForwardShadingMaterialShaderPipelineBucket const>     materialShaderBuckets,
-                                               TArrayView<uint32_t const>                                       clusterCapacity,
-                                               DeviceRenderView const&                                          renderView,
-                                               RHI::Texture*                                                    pColorTexture,
-                                               uint32_t                                                         colorTargetSlice,
-                                               uint32_t                                                         colorTargetMipSlice,
-                                               RHI::Texture*                                                    pDepthTexture,
-                                               RHI::CommandBuffer*                                              pCommandBuffer );
+        static void DrawMaterialShaderBuckets
+        (
+            TArrayView<ForwardShadingMaterialShaderPipelineBucket const>    materialShaderBuckets,
+            DeviceRenderView const&                                         renderView,
+            RHI::Texture*                                                   pColorTexture,
+            uint32_t                                                        colorTargetSlice,
+            uint32_t                                                        colorTargetMipSlice,
+            RHI::Texture*                                                   pDepthTexture,
+            RHI::CommandBuffer*                                             pCommandBuffer
+        );
 
         //-------------------------------------------------------------------------
 
         void Initialize( RenderPassContext const& context );
         void Shutdown( RenderSystem* pRenderSystem );
 
-        void UpdateDeviceResources( RenderSystem*                                                       pRenderSystem,
-                                    TArrayView<ForwardShadingMaterialShaderPipelineBucket const>        materialShaderBuckets,
-                                    TArrayView<uint32_t const>                                          clusterCapacity );
+        void UpdateDeviceResources
+        (
+            RenderSystem*                                                   pRenderSystem,
+            TArrayView<ForwardShadingMaterialShaderPipelineBucket const>    materialShaderBuckets,
+            TArrayView<uint32_t const>                                      clusterCapacity,
+            uint32_t                                                        numMeshInstancePages
+        );
 
         void UpdateViewportDeviceResources( RenderSystem* pRenderSystem, RenderViewport* pRenderViewport );
 
-        void DepthOnlyPass( TArrayView<ForwardShadingMaterialShaderPipelineBucket const>                materialShaderBuckets,
-                            TArrayView<uint32_t const>                                                  clusterCapacity,
-                            RenderViewport const*                                                       pRenderViewport,
-                            DeviceResourceStates&                                                       resourceStates,
-                            RHI::CommandBuffer*                                                         pCommandBuffer,
-                            TArrayView<ShaderTypes::RenderView>                                         dstRenderViews_WriteCombined ) const;
+        void UpdateRenderViews( RenderViewport const* pRenderViewport, TArrayView<ShaderTypes::RenderView> dstRenderViews_WriteCombined ) const;
 
-        void ShadingPass( TArrayView<ForwardShadingMaterialShaderPipelineBucket const>                  materialShaderBuckets,
-                          TArrayView<uint32_t const>                                                    clusterCapacity,
-                          RenderViewport const*                                                         pRenderViewport,
-                          DeviceResourceStates&                                                         resourceStates,
-                          RHI::CommandBuffer*                                                           pCommandBuffer ) const;
+        void DepthOnlyPass
+        (
+            TArrayView<ForwardShadingMaterialShaderPipelineBucket const>    materialShaderBuckets,
+            RenderViewport const*                                           pRenderViewport,
+            DeviceResourceStates&                                           resourceStates,
+            RHI::CommandBuffer*                                             pCommandBuffer
+        ) const;
+
+        void ShadingPass
+        (
+            TArrayView<ForwardShadingMaterialShaderPipelineBucket const>    materialShaderBuckets,
+            RenderViewport const*                                           pRenderViewport,
+            DeviceResourceStates&                                           resourceStates,
+            RHI::CommandBuffer*                                             pCommandBuffer
+        ) const;
     };
 }

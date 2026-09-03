@@ -14,7 +14,7 @@ namespace EE::Animation
 
     class EE_ENGINE_API GraphDefinition final : public Resource::IResource
     {
-        EE_RESOURCE( "ag", "Animation Graph Definition", Colors::Plum, 80, false );
+        EE_RESOURCE( "ag", "Animation Graph Definition", Colors::Plum, 81, false );
         EE_SERIALIZE( m_variationID, m_skeleton, m_persistentNodeIndices, m_instanceNodeStartOffsets, m_instanceRequiredMemory, m_instanceRequiredAlignment, m_rootNodeIdx, m_controlParameterIDs, m_virtualParameterIDs, m_virtualParameterNodeIndices, m_internalGraphSlots, m_externalGraphSlots, m_resources );
 
         friend class AnimationGraphCompiler;

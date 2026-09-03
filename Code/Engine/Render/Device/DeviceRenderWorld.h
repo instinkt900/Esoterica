@@ -18,6 +18,7 @@ namespace EE::Render
     class SkeletalMesh;
     class RenderSystem;
     class Material;
+    class MaterialShaderClusterCapacity;
 
     // World representation in device memory for rendering purposes
     //-------------------------------------------------------------------------
@@ -60,6 +61,8 @@ namespace EE::Render
         void UpdateDeviceResources_BeforeInstanceInitialize( RenderSystem* pRenderSystem );
         void UpdateDeviceResources_AfterInstanceInitialize( RenderSystem* pRenderSystem );
 
+        void UpdateDeviceResources_CullingBuffers( RenderSystem* pRenderSystem, MaterialShaderClusterCapacity const& materialShaderClusterCapacity, uint32_t numMaterialShaderKeys );
+
         void DispatchWorldUpdate( RHI::BufferHandle meshBuffer, RHI::CommandBuffer* pCommandBuffer, uint32_t frameIndex );
         void WaitForCopyTasks( RenderSystem* pRenderSystem );
 
@@ -79,6 +82,10 @@ namespace EE::Render
         RHI::Buffer* GetMeshInstanceBuffer() const;
         RHI::Buffer* GetMeshInstanceRootBuffer() const;
 
+        RHI::Buffer* GetClusterRecordBuffer() const;
+        RHI::Buffer* GetClusterRecordOffsetsBuffer() const;
+        RHI::Buffer* GetInstanceCullingVisibilityBuffer() const;
+
     private:
 
         template<typename T>
@@ -95,10 +102,12 @@ namespace EE::Render
             {
                 EE_PROFILE_SCOPE_RENDER( "CopyBufferDataTask" );
 
-                Memory::CopyToWriteCombined(
+                Memory::CopyToWriteCombined
+                (
                     m_pDstMemory_WriteCombined + range.start,
                     m_pSrcMemory + range.start,
-                    ( range.end - range.start ) * sizeof( T ) );
+                    ( range.end - range.start ) * sizeof( T )
+                );
             }
         };
 
@@ -152,6 +161,12 @@ namespace EE::Render
         DeviceResizeBuffer                                                          m_spotLightBuffer = {};
         DeviceResizeBuffer                                                          m_skinningTransformBuffer = {};
 
+        DeviceResizeBuffer                                                          m_clusterRecordBuffer = {};
+        DeviceResizeBuffer                                                          m_clusterRecordOffsetsBuffer = {};
+        DeviceResizeBuffer                                                          m_instanceCullingVisibilityBuffer = {};
+
+        TAlignedVector<uint32_t>                                                    m_clusterRecordOffsets;
+
         TArray<RHI::Buffer*, RHI::MaxPendingFrames>                                 m_worldUpdateConstantBuffers = {};
 
         HandleAllocator<uint32_t>                                                   m_meshInstanceRootHandleAllocator = {};
@@ -161,7 +176,7 @@ namespace EE::Render
         HandleAllocator<uint32_t>                                                   m_pointLightHandleAllocator = {};
         HandleAllocator<uint32_t>                                                   m_spotLightHandleAllocator = {};
 
-        UpdateCommandsPool<ShaderTypes::MeshInstanceTransformUpdateCommand>         m_updatePool_MeshInstanceRoot = {};
+        UpdateCommandsPool<ShaderTypes::MeshInstanceRootUpdateCommand>              m_updatePool_MeshInstanceRoot = {};
         UpdateCommandsPool<ShaderTypes::MeshInstanceTransformUpdateCommand>         m_updatePool_MeshInstance = {};
         UpdateCommandsPool<ShaderTypes::DirectionalLightUpdateCommand>              m_updatePool_DirectionalLight = {};
         UpdateCommandsPool<ShaderTypes::PointLightUpdateCommand>                    m_updatePool_PointLight = {};
@@ -173,7 +188,7 @@ namespace EE::Render
 
         CopyBufferDataTask<ShaderTypes::MeshInstanceInitializeCommand>              m_copyInitializeCommands_MeshInstance;
 
-        CopyBufferDataTask<ShaderTypes::MeshInstanceTransformUpdateCommand>         m_copyUpdateCommands_MeshInstanceRoot;
+        CopyBufferDataTask<ShaderTypes::MeshInstanceRootUpdateCommand>              m_copyUpdateCommands_MeshInstanceRoot;
         CopyBufferDataTask<ShaderTypes::MeshInstanceTransformUpdateCommand>         m_copyUpdateCommands_MeshInstance;
         CopyBufferDataTask<ShaderTypes::DirectionalLightUpdateCommand>              m_copyUpdateCommands_DirectionalLight;
         CopyBufferDataTask<ShaderTypes::PointLightUpdateCommand>                    m_copyUpdateCommands_PointLight;

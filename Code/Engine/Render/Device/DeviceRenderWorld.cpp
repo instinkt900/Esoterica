@@ -1,11 +1,13 @@
 #include "DeviceRenderWorld.h"
 #include "Engine/Render/RenderMesh.h"
+#include "Engine/Render/RenderMaterialShaderClusterCapacity.h"
 #include "Engine/Render/RenderSystem.h"
 #include "Base/Profiling.h"
 #include "Base/Types/Arrays.h"
 #include "Base/Render/RHI.h"
 
 #include "Engine/Render/Shaders/Renderer/WorldUpdate.esf"
+#include "Engine/Render/Shaders/Renderer/RendererTypes.esh"
 
 //-------------------------------------------------------------------------
 
@@ -76,17 +78,17 @@ namespace EE::Render
 
         for ( uint32_t frameIndex = 0; frameIndex < RHI::MaxPendingFrames; ++frameIndex )
         {
-            m_meshInstancePageBuffers[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_directionalLightPageBuffers[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_pointLightPageBuffers[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_spotLightPageBuffers[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_initializeBuffers_MeshInstance[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_updateBuffers_MeshInstanceRoot[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_updateBuffers_MeshInstance[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_updateBuffers_DirectionalLight[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_updateBuffers_PointLight[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_updateBuffers_SpotLight[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
-            m_updateBuffers_SkinningTransform[frameIndex].Initialize( pRenderSystem->GetContextRHI() );
+            m_meshInstancePageBuffers[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_directionalLightPageBuffers[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_pointLightPageBuffers[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_spotLightPageBuffers[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_initializeBuffers_MeshInstance[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_updateBuffers_MeshInstanceRoot[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_updateBuffers_MeshInstance[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_updateBuffers_DirectionalLight[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_updateBuffers_PointLight[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_updateBuffers_SpotLight[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
+            m_updateBuffers_SkinningTransform[frameIndex].Initialize( pRenderSystem->GetContextRHI(), true );
 
             RHI::BufferParameters constantBufferParameters = {};
             constantBufferParameters.m_memoryType = RHI::ResourceMemoryType::HostToDevice;
@@ -99,12 +101,18 @@ namespace EE::Render
             m_worldUpdateConstantBuffers[frameIndex] = RHI::CreateBuffer( pRenderSystem->GetContextRHI(), constantBufferParameters );
         }
 
-        m_meshInstanceRootBuffer.Initialize( pRenderSystem->GetContextRHI() );
-        m_meshInstanceBuffer.Initialize( pRenderSystem->GetContextRHI() );
-        m_directionalLightBuffer.Initialize( pRenderSystem->GetContextRHI() );
-        m_pointLightBuffer.Initialize( pRenderSystem->GetContextRHI() );
-        m_spotLightBuffer.Initialize( pRenderSystem->GetContextRHI() );
-        m_skinningTransformBuffer.Initialize( pRenderSystem->GetContextRHI() );
+        m_meshInstanceRootBuffer.Initialize( pRenderSystem->GetContextRHI(), true );
+        m_meshInstanceBuffer.Initialize( pRenderSystem->GetContextRHI(), true );
+        m_directionalLightBuffer.Initialize( pRenderSystem->GetContextRHI(), true );
+        m_pointLightBuffer.Initialize( pRenderSystem->GetContextRHI(), true );
+        m_spotLightBuffer.Initialize( pRenderSystem->GetContextRHI(), true );
+        m_skinningTransformBuffer.Initialize( pRenderSystem->GetContextRHI(), true );
+
+        m_clusterRecordBuffer.Initialize( pRenderSystem->GetContextRHI(), true );
+        m_clusterRecordOffsetsBuffer.Initialize( pRenderSystem->GetContextRHI(), true );
+        m_instanceCullingVisibilityBuffer.Initialize( pRenderSystem->GetContextRHI(), true );
+
+        m_clusterRecordOffsets.clear();
 
         m_pPlaceholderMaterial = pRenderSystem->GetPlaceholderMaterial();
     }
@@ -161,6 +169,10 @@ namespace EE::Render
         m_pointLightBuffer.Shutdown( pRenderSystem->GetContextRHI() );
         m_spotLightBuffer.Shutdown( pRenderSystem->GetContextRHI() );
         m_skinningTransformBuffer.Shutdown( pRenderSystem->GetContextRHI() );
+
+        m_clusterRecordBuffer.Shutdown( pRenderSystem->GetContextRHI() );
+        m_clusterRecordOffsetsBuffer.Shutdown( pRenderSystem->GetContextRHI() );
+        m_instanceCullingVisibilityBuffer.Shutdown( pRenderSystem->GetContextRHI() );
     }
 
     MeshInstanceProxy DeviceRenderWorld::AllocateMeshInstanceRoot( uint32_t num64ByteBlocks )
@@ -173,7 +185,7 @@ namespace EE::Render
         MeshInstanceProxy meshInstanceProxy = {};
         meshInstanceProxy.m_pTransformUpdateCounter = &m_updatePool_MeshInstanceRoot.m_counter;
         meshInstanceProxy.m_pTransformUpdateSequence = &m_updatePool_MeshInstanceRoot.m_sequence;
-        meshInstanceProxy.m_pDstTransformUpdateCommands = m_updatePool_MeshInstanceRoot.m_memoryPool.GetData();
+        meshInstanceProxy.m_pDstRootUpdateCommands = m_updatePool_MeshInstanceRoot.m_memoryPool.GetData();
         meshInstanceProxy.m_instanceHandle = eastl::move( meshInstanceRootHandle );
         return meshInstanceProxy;
     }
@@ -367,10 +379,26 @@ namespace EE::Render
             UpdateBuffer_MeshInstanceTransformUpdate
         );
 
+        //-------------------------------------------------------------------------
+
+        auto UpdateBuffer_MeshInstanceRootUpdate = [pContextRHI, frameIndex] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
+        {
+            RHI::DestroyBuffer( pContextRHI, eastl::move( pOldBuffer ) );
+
+            RHI::BufferParameters rootUpdateBufferParameters = {};
+            rootUpdateBufferParameters.m_memoryType = RHI::ResourceMemoryType::HostToDevice;
+            rootUpdateBufferParameters.m_bufferSize = newBufferSize;
+            rootUpdateBufferParameters.m_bufferStride = sizeof( ShaderTypes::MeshInstanceRootUpdateCommand );
+            rootUpdateBufferParameters.m_flags = RHI::BufferFlags::PersistentMap;
+            rootUpdateBufferParameters.m_debugName.sprintf( "DeviceRenderWorld MeshInstanceRoot Update Buffer %i", frameIndex );
+
+            return RHI::CreateBuffer( pContextRHI, rootUpdateBufferParameters );
+        };
+
         m_updateBuffers_MeshInstanceRoot[frameIndex].UpdateDeviceResources
         (
-            Math::Max( 1U, m_updatePool_MeshInstanceRoot.m_numUpdateCommands ) * sizeof( ShaderTypes::MeshInstanceTransformUpdateCommand ),
-            UpdateBuffer_MeshInstanceTransformUpdate
+            Math::Max( 1U, m_updatePool_MeshInstanceRoot.m_numUpdateCommands ) * sizeof( ShaderTypes::MeshInstanceRootUpdateCommand ),
+            UpdateBuffer_MeshInstanceRootUpdate
         );
 
         //-------------------------------------------------------------------------
@@ -449,7 +477,7 @@ namespace EE::Render
 
             if ( pOldBuffer )
             {
-                pRenderSystem->QueueBufferCopy( pMeshInstanceRootBuffer, 0, pOldBuffer, 0, pOldBuffer->m_size );
+                pRenderSystem->QueueBufferCopy( pMeshInstanceRootBuffer, 0, pOldBuffer, 0, Math::Min( pOldBuffer->m_size, newBufferSize ) );
                 pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
             }
 
@@ -468,7 +496,7 @@ namespace EE::Render
 
             if ( pOldBuffer )
             {
-                pRenderSystem->QueueBufferCopy( pMeshInstanceBuffer, 0, pOldBuffer, 0, pOldBuffer->m_size );
+                pRenderSystem->QueueBufferCopy( pMeshInstanceBuffer, 0, pOldBuffer, 0, Math::Min( pOldBuffer->m_size, newBufferSize ) );
                 pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
             }
 
@@ -491,17 +519,17 @@ namespace EE::Render
 
         auto UpdateBuffer_DirectionalLight = [pRenderSystem] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
         {
-            RHI::BufferParameters params = {};
-            params.m_bufferSize = newBufferSize;
-            params.m_bufferStride = sizeof( ShaderTypes::LightInstance_DirectionalLight );
-            params.m_descriptorTypes.SetMultipleFlags( RHI::DescriptorTypeFlags::Buffer, RHI::DescriptorTypeFlags::RWBuffer );
-            params.m_debugName = "DeviceRenderWorld DirectionalLight Buffer";
+            RHI::BufferParameters directionalLightBufferParameters = {};
+            directionalLightBufferParameters.m_bufferSize = newBufferSize;
+            directionalLightBufferParameters.m_bufferStride = sizeof( ShaderTypes::LightInstance_DirectionalLight );
+            directionalLightBufferParameters.m_descriptorTypes.SetMultipleFlags( RHI::DescriptorTypeFlags::Buffer, RHI::DescriptorTypeFlags::RWBuffer );
+            directionalLightBufferParameters.m_debugName = "DeviceRenderWorld DirectionalLight Buffer";
 
-            RHI::Buffer* pBuffer = RHI::CreateBuffer( pRenderSystem->GetContextRHI(), params );
+            RHI::Buffer* pBuffer = RHI::CreateBuffer( pRenderSystem->GetContextRHI(), directionalLightBufferParameters );
 
             if ( pOldBuffer )
             {
-                pRenderSystem->QueueBufferCopy( pBuffer, 0, pOldBuffer, 0, pOldBuffer->m_size );
+                pRenderSystem->QueueBufferCopy( pBuffer, 0, pOldBuffer, 0, Math::Min( pOldBuffer->m_size, newBufferSize ) );
                 pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
             }
 
@@ -516,17 +544,17 @@ namespace EE::Render
 
         auto UpdateBuffer_PointLight = [pRenderSystem] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
         {
-            RHI::BufferParameters params = {};
-            params.m_bufferSize = newBufferSize;
-            params.m_bufferStride = sizeof( ShaderTypes::LightInstance_PointLight );
-            params.m_descriptorTypes.SetMultipleFlags( RHI::DescriptorTypeFlags::Buffer, RHI::DescriptorTypeFlags::RWBuffer );
-            params.m_debugName = "DeviceRenderWorld PointLight Buffer";
+            RHI::BufferParameters pointLightBufferParameters = {};
+            pointLightBufferParameters.m_bufferSize = newBufferSize;
+            pointLightBufferParameters.m_bufferStride = sizeof( ShaderTypes::LightInstance_PointLight );
+            pointLightBufferParameters.m_descriptorTypes.SetMultipleFlags( RHI::DescriptorTypeFlags::Buffer, RHI::DescriptorTypeFlags::RWBuffer );
+            pointLightBufferParameters.m_debugName = "DeviceRenderWorld PointLight Buffer";
 
-            RHI::Buffer* pBuffer = RHI::CreateBuffer( pRenderSystem->GetContextRHI(), params );
+            RHI::Buffer* pBuffer = RHI::CreateBuffer( pRenderSystem->GetContextRHI(), pointLightBufferParameters );
 
             if ( pOldBuffer )
             {
-                pRenderSystem->QueueBufferCopy( pBuffer, 0, pOldBuffer, 0, pOldBuffer->m_size );
+                pRenderSystem->QueueBufferCopy( pBuffer, 0, pOldBuffer, 0, Math::Min( pOldBuffer->m_size, newBufferSize ) );
                 pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
             }
 
@@ -541,17 +569,17 @@ namespace EE::Render
 
         auto UpdateBuffer_SpotLight = [pRenderSystem] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
         {
-            RHI::BufferParameters params = {};
-            params.m_bufferSize = newBufferSize;
-            params.m_bufferStride = sizeof( ShaderTypes::LightInstance_SpotLight );
-            params.m_descriptorTypes.SetMultipleFlags( RHI::DescriptorTypeFlags::Buffer, RHI::DescriptorTypeFlags::RWBuffer );
-            params.m_debugName = "DeviceRenderWorld SpotLight Buffer";
+            RHI::BufferParameters spotLightBufferParameters = {};
+            spotLightBufferParameters.m_bufferSize = newBufferSize;
+            spotLightBufferParameters.m_bufferStride = sizeof( ShaderTypes::LightInstance_SpotLight );
+            spotLightBufferParameters.m_descriptorTypes.SetMultipleFlags( RHI::DescriptorTypeFlags::Buffer, RHI::DescriptorTypeFlags::RWBuffer );
+            spotLightBufferParameters.m_debugName = "DeviceRenderWorld SpotLight Buffer";
 
-            RHI::Buffer* pBuffer = RHI::CreateBuffer( pRenderSystem->GetContextRHI(), params );
+            RHI::Buffer* pBuffer = RHI::CreateBuffer( pRenderSystem->GetContextRHI(), spotLightBufferParameters );
 
             if ( pOldBuffer )
             {
-                pRenderSystem->QueueBufferCopy( pBuffer, 0, pOldBuffer, 0, pOldBuffer->m_size );
+                pRenderSystem->QueueBufferCopy( pBuffer, 0, pOldBuffer, 0, Math::Min( pOldBuffer->m_size, newBufferSize ) );
                 pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
             }
 
@@ -578,7 +606,7 @@ namespace EE::Render
 
             if ( pOldBuffer )
             {
-                pRenderSystem->QueueBufferCopy( pSkinningTransformBuffer, 0, pOldBuffer, 0, pOldBuffer->m_size );
+                pRenderSystem->QueueBufferCopy( pSkinningTransformBuffer, 0, pOldBuffer, 0, Math::Min( pOldBuffer->m_size, newBufferSize ) );
                 pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
             }
 
@@ -737,6 +765,125 @@ namespace EE::Render
         );
     }
 
+    RHI::Buffer* DeviceRenderWorld::GetClusterRecordBuffer() const
+    {
+        return m_clusterRecordBuffer.m_pBuffer;
+    }
+
+    RHI::Buffer* DeviceRenderWorld::GetClusterRecordOffsetsBuffer() const
+    {
+        return m_clusterRecordOffsetsBuffer.m_pBuffer;
+    }
+
+    RHI::Buffer* DeviceRenderWorld::GetInstanceCullingVisibilityBuffer() const
+    {
+        return m_instanceCullingVisibilityBuffer.m_pBuffer;
+    }
+
+    void DeviceRenderWorld::UpdateDeviceResources_CullingBuffers( RenderSystem* pRenderSystem, MaterialShaderClusterCapacity const& materialShaderClusterCapacity, uint32_t numMaterialShaderKeys )
+    {
+        EE_PROFILE_FUNCTION_RENDER();
+
+        RHI::Context* pContextRHI = pRenderSystem->GetContextRHI();
+
+        // Cluster records - one uint4 per visible cluster, partitioned per shader
+        auto UpdateBuffer_ClusterRecord = [pRenderSystem] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
+        {
+            pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
+
+            RHI::BufferParameters clusterRecordBufferParameters = {};
+            clusterRecordBufferParameters.m_bufferSize = newBufferSize;
+            clusterRecordBufferParameters.m_format = RHI::DataFormat::RGBA32_UInt;
+            clusterRecordBufferParameters.m_descriptorTypes.SetMultipleFlags( RHI::DescriptorTypeFlags::Buffer, RHI::DescriptorTypeFlags::RWBuffer );
+            clusterRecordBufferParameters.m_debugName = "DeviceRenderWorld Cluster Record Buffer";
+
+            return RHI::CreateBuffer( pRenderSystem->GetContextRHI(), clusterRecordBufferParameters );
+        };
+
+        m_clusterRecordBuffer.UpdateDeviceResources
+        (
+            materialShaderClusterCapacity.GetAllShadersClusterCapacity() * sizeof( uint4 ),
+            UpdateBuffer_ClusterRecord
+        );
+
+        // Visibility record per visible instance
+        auto UpdateBuffer_InstanceVisibility = [pRenderSystem] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
+        {
+            pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
+
+            RHI::BufferParameters instanceVisibilityBufferParameters = {};
+            instanceVisibilityBufferParameters.m_bufferSize = newBufferSize;
+            instanceVisibilityBufferParameters.m_bufferStride = sizeof( ShaderTypes::InstanceVisibilityRecord );
+            instanceVisibilityBufferParameters.m_descriptorTypes = RHI::DescriptorTypeFlags::RWBuffer;
+            instanceVisibilityBufferParameters.m_debugName = "DeviceRenderWorld InstanceCulling Visibility Buffer";
+
+            return RHI::CreateBuffer( pRenderSystem->GetContextRHI(), instanceVisibilityBufferParameters );
+        };
+
+        size_t const instanceVisibilityBufferSize = size_t( GetNumMeshInstancePages() ) * 64 * sizeof( ShaderTypes::InstanceVisibilityRecord );
+        m_instanceCullingVisibilityBuffer.UpdateDeviceResources( instanceVisibilityBufferSize, UpdateBuffer_InstanceVisibility );
+
+        // Per-shader offsets into the cluster record buffer
+        {
+            bool offsetsChanged = m_clusterRecordOffsets.size() != numMaterialShaderKeys;
+            if ( offsetsChanged )
+            {
+                m_clusterRecordOffsets.resize( numMaterialShaderKeys );
+            }
+
+            uint32_t streamOffset = 0;
+            for ( uint32_t shaderIndex = 0; shaderIndex < numMaterialShaderKeys; ++shaderIndex )
+            {
+                if ( !offsetsChanged && m_clusterRecordOffsets[shaderIndex] != streamOffset )
+                {
+                    offsetsChanged = true;
+                }
+
+                m_clusterRecordOffsets[shaderIndex] = streamOffset;
+
+                uint32_t const shaderClusterCapacity = materialShaderClusterCapacity.GetShaderClusterCapacity()[shaderIndex];
+
+                streamOffset += Math::Max( shaderClusterCapacity, 1U );
+            }
+
+            EE_ASSERT( streamOffset == materialShaderClusterCapacity.GetAllShadersClusterCapacity() );
+
+            auto UpdateBuffer_ClusterRecordOffsets = [pRenderSystem] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
+            {
+                pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
+
+                RHI::BufferParameters offsetsBufferParameters = {};
+                offsetsBufferParameters.m_bufferSize = newBufferSize;
+                offsetsBufferParameters.m_bufferStride = sizeof( uint32_t );
+                offsetsBufferParameters.m_descriptorTypes = RHI::DescriptorTypeFlags::Buffer;
+                offsetsBufferParameters.m_debugName = "DeviceRenderWorld Cluster Record Offsets Buffer";
+
+                return RHI::CreateBuffer( pRenderSystem->GetContextRHI(), offsetsBufferParameters );
+            };
+
+            m_clusterRecordOffsetsBuffer.UpdateDeviceResources
+            (
+                Math::Max( m_clusterRecordOffsets.size(), size_t( 1 ) ) * sizeof( uint32_t ),
+                UpdateBuffer_ClusterRecordOffsets
+            );
+
+            if ( offsetsChanged && !m_clusterRecordOffsets.empty() )
+            {
+                uint32_t const* pOffsets = m_clusterRecordOffsets.data();
+                size_t const offsetsBufferSize = m_clusterRecordOffsets.size() * sizeof( uint32_t );
+                RHI::Buffer* pOffsetsBuffer = m_clusterRecordOffsetsBuffer.m_pBuffer;
+
+                auto CopyMemory = [pOffsets, offsetsBufferSize] ( uint8_t* pDstMemory_WriteCombined, size_t dstSize )
+                {
+                    EE_ASSERT( dstSize == offsetsBufferSize );
+                    Memory::CopyToWriteCombined( pDstMemory_WriteCombined, pOffsets, offsetsBufferSize );
+                };
+
+                pRenderSystem->QueueBufferUpdate( CopyMemory, pOffsetsBuffer, 0, offsetsBufferSize );
+            }
+        }
+    }
+
     void DeviceRenderWorld::DispatchWorldUpdate( RHI::BufferHandle meshBuffer, RHI::CommandBuffer* pCommandBuffer, uint32_t frameIndex )
     {
         EE_ASSERT( m_copyInitializeCommands_MeshInstance.GetIsComplete() );
@@ -772,7 +919,7 @@ namespace EE::Render
             hasTransformUpdateCommands = true;
 
             m_copyUpdateCommands_MeshInstanceRoot.m_pSrcMemory = m_updatePool_MeshInstanceRoot.m_memoryPool.GetData();
-            m_copyUpdateCommands_MeshInstanceRoot.m_pDstMemory_WriteCombined = static_cast<ShaderTypes::MeshInstanceTransformUpdateCommand*>( m_updateBuffers_MeshInstanceRoot[frameIndex].m_pBuffer->m_pMappedAddress_WriteCombined );
+            m_copyUpdateCommands_MeshInstanceRoot.m_pDstMemory_WriteCombined = static_cast<ShaderTypes::MeshInstanceRootUpdateCommand*>( m_updateBuffers_MeshInstanceRoot[frameIndex].m_pBuffer->m_pMappedAddress_WriteCombined );
             m_copyUpdateCommands_MeshInstanceRoot.m_SetSize = m_updatePool_MeshInstanceRoot.m_numUpdateCommands;
             m_copyUpdateCommands_MeshInstanceRoot.m_MinRange = 1024;
 

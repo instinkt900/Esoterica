@@ -202,6 +202,7 @@ namespace EE::EntityModel
         OBB const& GetSpatialSelectionCombinedBounds() const { return m_selectionCombinedBounds; }
         Transform const GetSpatialSelectionTransform() const { return m_selectionTransform; }
 
+        inline bool IsManipulatingSpatialSelection() const { return m_isManipulatingSpatialSelection; }
         void BeginManipulatingSpatialSelection( ImGuiX::Gizmo::Result const& result, bool duplicateSelectionIfPossible );
         void ManipulateSpatialSelection( ImGuiX::Gizmo::Result const& result );
         void EndManipulatingSpatialSelection( ImGuiX::Gizmo::Result const& result );

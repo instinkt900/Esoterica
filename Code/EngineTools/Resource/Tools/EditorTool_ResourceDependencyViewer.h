@@ -19,6 +19,9 @@ namespace EE::Resource
             void AddInstallDependency( ToolsContext const& toolsContext, ResourceID const& installDependencyID );
             void AddCompileDependency( ToolsContext const& toolsContext, Resource::CompileDependency const& compileDependency );
 
+            inline bool operator==( DataPath const& path ) const { return m_path == path; }
+            inline bool operator==( ResourceID const& resourceID ) const { return m_path == resourceID.GetDataPath(); }
+
         public:
 
             DataPath                            m_path;
@@ -34,15 +37,13 @@ namespace EE::Resource
 
             void ClearDependencyTree() { Clear(); }
 
-            bool operator==( ResourceID const& ID ) const { return m_ID == ID; }
-            bool operator!=( ResourceID const& ID ) const { return m_ID != ID; }
-
         public:
 
             ResourceID                          m_ID;
             String                              m_tabName;
-            FileRegistry::FileInfo const*       m_pFileInfo = nullptr;
-            TVector<DataPath>                   m_dependentResources;
+            DataFileSystem::FileInfo const*     m_pFileInfo = nullptr;
+            TVector<DataPath>                   m_compileDependents;
+            TVector<ResourceID>                 m_installDependents;
         };
 
     public:
@@ -60,7 +61,7 @@ namespace EE::Resource
 
     private:
 
-        void OnFileRegistryUpdated();
+        void OnDataFileSystemUpdated();
 
         inline int32_t FindViewIndex( ResourceID const& ID ) const
         {
@@ -85,6 +86,6 @@ namespace EE::Resource
         ResourceID                  m_viewFocusRequest;
         TVector<ResourceID>         m_viewCloseRequests;
         ResourcePicker              m_resourcePicker;
-        EventBindingID              m_fileRegistryUpdateEventBindingID;
+        EventBindingID              m_dataFileSystemUpdateEventBindingID;
     };
 }

@@ -118,7 +118,7 @@ namespace EE::Resource
         TInlineVector<ResourceTypeID, 4> const applicableResourceTypes = m_pOperation->GetApplicableTypeIDs();
         for ( ResourceTypeID const& typeID : applicableResourceTypes )
         {
-            TVector<ResourceID> const foundResources = m_pToolsContext->m_pFileRegistry->GetAllResourcesOfType( typeID );
+            TVector<ResourceID> const foundResources = m_pToolsContext->m_pDataFileSystem->GetAllResourcesOfType( typeID );
             m_resourcesToProcess.insert( m_resourcesToProcess.end(), foundResources.begin(), foundResources.end() );
         }
 
@@ -158,7 +158,7 @@ namespace EE::Resource
                 else
                 {
                     ResourceID const& resourceID = m_resourcesToProcess[m_resourceToProcessIdx];
-                    auto pDescriptor = m_pToolsContext->m_pFileRegistry->GetLoadedDescriptor<ResourceDescriptor>( resourceID );
+                    auto pDescriptor = m_pToolsContext->m_pDataFileSystem->GetLoadedDescriptor<ResourceDescriptor>( resourceID );
                     if ( pDescriptor != nullptr )
                     {
                         if ( m_pOperation->RequireResourceLoad() )

@@ -33,6 +33,7 @@ namespace EE::EntityModel
         virtual bool SupportsCustomData() const override { return true; }
         virtual bool WriteCustomData( TypeSystem::TypeRegistry const& typeRegistry, Log& log, pugi::xml_node& customDataNode ) const override;
         virtual bool ReadCustomData( TypeSystem::TypeRegistry const& typeRegistry, Log& log, pugi::xml_node& customDataNode ) override;
+        virtual void GetAdditionalReferencedPaths( TVector<DataPath>& outReferencedPaths ) const override;
 
     public:
 

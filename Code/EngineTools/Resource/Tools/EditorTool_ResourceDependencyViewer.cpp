@@ -56,11 +56,16 @@ namespace EE::Resource
     {
         EE_ASSERT( installDependencyID.IsValid() );
 
+        if ( VectorContains( m_installDependencies, installDependencyID, [] ( DependencyTreeNode* pNode, ResourceID const& resourceID ) { return pNode->m_path == resourceID.GetDataPath(); } ) )
+        {
+            return;
+        }
+
         DependencyTreeNode* pInstallDependency = m_installDependencies.emplace_back( EE::New<DependencyTreeNode>() );
         pInstallDependency->m_path = installDependencyID.GetDataPath();
         pInstallDependency->m_isResource = true;
 
-        auto pFileInfo = toolsContext.m_pFileRegistry->GetFileEntry( installDependencyID.GetDataPath() );
+        auto pFileInfo = toolsContext.m_pDataFileSystem->GetFileEntry( installDependencyID.GetDataPath() );
         if ( pFileInfo == nullptr || !pFileInfo->HasLoadedDescriptor() )
         {
             pInstallDependency->m_isMissingOrInvalidFile = true;
@@ -90,11 +95,16 @@ namespace EE::Resource
     {
         EE_ASSERT( compileDependency.m_path.IsValid() );
 
+        if ( VectorContains( m_compileDependencies, compileDependency.m_path, [] ( DependencyTreeNode* pNode, DataPath const& path ) { return pNode->m_path == path; } ) )
+        {
+            return;
+        }
+
         DependencyTreeNode* pInstallDependency = m_compileDependencies.emplace_back( EE::New<DependencyTreeNode>() );
         pInstallDependency->m_path = compileDependency.m_path;
         pInstallDependency->m_isResource = compileDependency.m_isResource;
 
-        auto pFileInfo = toolsContext.m_pFileRegistry->GetFileEntry( compileDependency.m_path );
+        auto pFileInfo = toolsContext.m_pDataFileSystem->GetFileEntry( compileDependency.m_path );
         if ( pFileInfo == nullptr )
         {
             pInstallDependency->m_isMissingOrInvalidFile = true;
@@ -153,12 +163,12 @@ namespace EE::Resource
         : EditorTool( pToolsContext, "Resource Dependency Viewer" )
         , m_resourcePicker( *pToolsContext )
     {
-        m_fileRegistryUpdateEventBindingID = m_pToolsContext->m_pFileRegistry->OnFileSystemCacheUpdated().Bind( [this] () { OnFileRegistryUpdated(); } );
+        m_dataFileSystemUpdateEventBindingID = m_pToolsContext->m_pDataFileSystem->OnFileSystemCacheUpdated().Bind( [this] () { OnDataFileSystemUpdated(); } );
     }
 
     ResourceDependencyViewerEditorTool::~ResourceDependencyViewerEditorTool()
     {
-        m_pToolsContext->m_pFileRegistry->OnFileSystemCacheUpdated().Unbind( m_fileRegistryUpdateEventBindingID );
+        m_pToolsContext->m_pDataFileSystem->OnFileSystemCacheUpdated().Unbind( m_dataFileSystemUpdateEventBindingID );
 
         // Free all dependency trees
         for ( auto& dependencyView : m_dependencyViews )
@@ -175,7 +185,7 @@ namespace EE::Resource
         CreateToolWindow( "Dependency View", [this] ( UpdateContext const& context, bool isFocused ) { DrawWindow( context, isFocused ); } );
     }
 
-    void ResourceDependencyViewerEditorTool::OnFileRegistryUpdated()
+    void ResourceDependencyViewerEditorTool::OnDataFileSystemUpdated()
     {
         for ( DependencyView& view : m_dependencyViews )
         {
@@ -266,7 +276,7 @@ namespace EE::Resource
     {
         m_viewFocusRequest = view.m_ID;
 
-        FileRegistry::FileInfo const* pFileInfo = m_pToolsContext->m_pFileRegistry->GetFileEntry( view.m_ID.GetDataPath() );
+        DataFileSystem::FileInfo const* pFileInfo = m_pToolsContext->m_pDataFileSystem->GetFileEntry( view.m_ID.GetDataPath() );
         if ( pFileInfo == nullptr || !pFileInfo->IsResourceDescriptorFile() )
         {
             m_viewCloseRequests.emplace_back( view.m_ID );
@@ -298,7 +308,7 @@ namespace EE::Resource
         // Get everything that depends on this resource
         //-------------------------------------------------------------------------
 
-        view.m_dependentResources = m_pToolsContext->m_pFileRegistry->GetAllDependentResources( view.m_ID.GetDataPath() );
+        m_pToolsContext->m_pDataFileSystem->GetAllResourcesThatDependOnFile( view.m_ID.GetDataPath(), view.m_compileDependents, &view.m_installDependents );
     }
 
     void ResourceDependencyViewerEditorTool::DrawView( UpdateContext const& context, DependencyView &view )
@@ -317,11 +327,18 @@ namespace EE::Resource
             DrawCompileDependencyNode( pDep );
         }
 
-        ImGui::SeparatorText( "Is Dependency For" );
+        ImGui::SeparatorText( "Is Compile Dependency For" );
 
-        for ( auto pDep : view.m_dependentResources )
+        for ( auto const& dep : view.m_compileDependents )
         {
-            DrawDependentResource( pDep );
+            DrawDependentResource( dep );
+        }
+
+        ImGui::SeparatorText( "Is Install Dependency For" );
+
+        for ( auto const& dep : view.m_installDependents )
+        {
+            DrawDependentResource( dep.GetDataPath() );
         }
     }
 

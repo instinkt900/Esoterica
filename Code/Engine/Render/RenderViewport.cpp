@@ -23,16 +23,16 @@ namespace EE::Render
         UpdateRenderWindow( pWindow );
 
         #if EE_DEVELOPMENT_TOOLS
-        m_instancePickingDistancesBuffer.Initialize( pContextRHI );
+        m_instancePickingDistancesBuffer.Initialize( pContextRHI, true );
 
         m_instancePickingResultsBuffer.Initialize( pContextRHI, "InstancePickingResults" );
         m_debugDrawPickingResultsBuffer.Initialize( pContextRHI, "DebugDrawPickingResults" );
 
         for ( uint32_t frameIndex = 0; frameIndex < RHI::MaxPendingFrames; ++frameIndex )
         {
-            m_debugCommandsBuffers[frameIndex].Shutdown( pContextRHI );
-            m_meshParametersBuffers[frameIndex].Shutdown( pContextRHI );
-            m_meshArgumentBuffers[frameIndex].Shutdown( pContextRHI );
+            m_debugCommandsBuffers[frameIndex].Initialize( pContextRHI, true );
+            m_meshParametersBuffers[frameIndex].Initialize( pContextRHI, true );
+            m_meshArgumentBuffers[frameIndex].Initialize( pContextRHI, true );
         }
         #endif
     }

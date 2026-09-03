@@ -31,7 +31,7 @@ namespace EE
         ToolsCameraComponent() = default;
         ToolsCameraComponent( StringID nameID ) : CameraComponent( nameID ) {}
 
-        inline void SetUpdateEnabled( bool enabled ) { m_isUpdateEnabled = enabled; }
+        void SetEnabled( bool enabled );
 
         void Update( EntityWorldUpdateContext const& ctx );
 
@@ -39,10 +39,9 @@ namespace EE
         //-------------------------------------------------------------------------
 
         Mode GetMode() const { return m_mode; }
+        inline bool IsManipulating() const { return m_isManipulating; }
         inline bool IsInFreeLookMode() const { return m_mode == Mode::FreeLook; }
         inline bool IsInOrbitMode() const { return m_mode == Mode::Orbit; }
-
-        inline bool IsManipulatingView() const { return m_bIsManipulatingView; }
 
         inline Radians GetPitch() const { return m_pitch; }
         inline Radians GetYaw() const { return m_yaw; }
@@ -96,7 +95,6 @@ namespace EE
 
         virtual void Initialize() override;
 
-
         void UpdateFreeLook( EntityWorldUpdateContext const& ctx, Input::KeyboardMouseDevice const* pKeyboardMouse );
 
         void UpdateOrbit( EntityWorldUpdateContext const& ctx, Input::KeyboardMouseDevice const* pKeyboardMouse );
@@ -125,8 +123,8 @@ namespace EE
     private:
 
         Mode                                        m_mode = Mode::FreeLook;
-        bool                                        m_isUpdateEnabled = true;
-        bool                                        m_bIsManipulatingView = false;
+        bool                                        m_isEnabled = true;
+        bool                                        m_isManipulating = false;
 
         float                                       m_defaultMoveSpeed = 10.0f;
         float                                       m_moveSpeed = m_defaultMoveSpeed;

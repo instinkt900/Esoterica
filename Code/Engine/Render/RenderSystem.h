@@ -9,6 +9,7 @@
 #include "Base/Systems.h"
 #include "Base/Render/RHI.h"
 #include "Base/Render/PageAllocator.h"
+#include "Base/Render/Settings/Settings_Render.h"
 #include "Base/Threading/Threading.h"
 
 //-------------------------------------------------------------------------
@@ -26,7 +27,6 @@ namespace EE::Render
     class Mesh;
     struct Geometry;
 
-    class RenderSettings;
     class Window;
     class RenderViewport;
 
@@ -208,6 +208,8 @@ namespace EE::Render
         uint32_t                                                                m_frameIndex = 0;
         uint32_t                                                                m_asyncTransferIndex = 0;
 
+        RenderSettings const*                                                   m_pRenderSettings = nullptr;
+
         #if EE_DEVELOPMENT_TOOLS
         TArray<InternalStage, RHI::MaxPendingFrames>                            m_internalStage = {};
         #endif
@@ -223,6 +225,8 @@ namespace EE::Render
 
         TArray<RHI::CommandPool*, RHI::MaxPendingFrames>                        m_frameCommandPools = {};
         TArray<RHI::CommandBuffer*, RHI::MaxPendingFrames>                      m_frameCommandBuffers = {};
+        TArray<RHI::CommandPool*, RHI::MaxPendingFrames>                        m_frameComputeCommandPools = {};
+        TArray<RHI::CommandBuffer*, RHI::MaxPendingFrames>                      m_frameComputeCommandBuffers = {};
         TArray<uint64_t, RHI::MaxPendingFrames>                                 m_frameSemaphoresGraphics = {};
         TArray<uint64_t, RHI::MaxPendingFrames>                                 m_frameSemaphoresCompute = {};
         TArray<uint64_t, RHI::MaxPendingFrames>                                 m_resourceUpdateSemaphores = {};
@@ -375,7 +379,9 @@ namespace EE::Render
         }
         else
         {
-            RHI::CommandBuffer* pCommandBuffer = m_frameCommandBuffers[m_frameIndex];
+            bool const submitResourceUpdatesOnComputeQueue = m_pRenderSettings->m_enableAsyncCompute;
+
+            RHI::CommandBuffer* pCommandBuffer = submitResourceUpdatesOnComputeQueue ? m_frameComputeCommandBuffers[m_frameIndex] : m_frameCommandBuffers[m_frameIndex];
 
             RHI::BufferSubAllocation stagingAllocation = RHI::BufferSubAllocate( m_pStagingBuffer, dstSize, StagingBufferAlignment );
             if ( !stagingAllocation.IsValid() )
@@ -416,7 +422,11 @@ namespace EE::Render
         EE_ASSERT( Threading::IsMainThread() );
         EE_ASSERT( m_internalStage[m_frameIndex] == InternalStage::ResourceUpdate );
 
-        RHI::CmdCopyBuffer( m_frameCommandBuffers[m_frameIndex], pDstBuffer, dstOffset, pSrcBuffer, srcOffset, srcSize );
+        bool const submitResourceUpdatesOnComputeQueue = m_pRenderSettings->m_enableAsyncCompute;
+
+        RHI::CommandBuffer* pCommandBuffer = submitResourceUpdatesOnComputeQueue ? m_frameComputeCommandBuffers[m_frameIndex] : m_frameCommandBuffers[m_frameIndex];
+
+        RHI::CmdCopyBuffer( pCommandBuffer, pDstBuffer, dstOffset, pSrcBuffer, srcOffset, srcSize );
     }
 
     template<typename F>
@@ -501,7 +511,9 @@ namespace EE::Render
 
         EE_ASSERT( dstTextureState != RHI::TextureState::Undefined );
 
-        RHI::CommandBuffer* pCommandBuffer = m_frameCommandBuffers[m_frameIndex];
+        bool const submitResourceUpdatesOnComputeQueue = m_pRenderSettings->m_enableAsyncCompute;
+
+        RHI::CommandBuffer* pCommandBuffer = submitResourceUpdatesOnComputeQueue ? m_frameComputeCommandBuffers[m_frameIndex] : m_frameCommandBuffers[m_frameIndex];
 
         RHI::Buffer* pExtraStagingBuffer = nullptr;
 
