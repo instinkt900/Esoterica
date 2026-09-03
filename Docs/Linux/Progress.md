@@ -837,7 +837,8 @@ all. Verified in the editor, which passes `maxNumCommands` = 146 where the engin
   was blocked on "this machine's Intel UHD 620" while sitting on the 3090.
   `nvidia-smi --query-gpu=name --format=csv,noheader` settles it, and the repo path is the same on
   both machines.
-- **Start the Resource Server before the engine. Auto-start works, and then loses a race.**
+- **~~Start the Resource Server before the engine.~~ Fixed - just launch the editor or engine.**
+  Kept below because the diagnosis is the useful part, and because the fix reaches Direct3D 12.
   P7.3's `EnsureResourceServerIsRunning` does its job: the engine forks the server and it is
   listening on 5556 within a second, measured. But **`NetworkResourceProvider::Update()` halts on
   the first frame the client is not yet connected** - `if ( !m_networkClient.IsConnected() ) {
@@ -861,8 +862,23 @@ all. Verified in the editor, which passes `maxNumCommands` = 146 where the engin
 
   Upstream's change is arguably the correct one - a real mid-session disconnect should be loud - but
   it turns a benign startup race into a crash, and it is **platform-neutral, so Windows will hit it
-  too.** Upstream's own code, so recorded rather than fixed - Conventions rule 3. Starting the
-  server first sidesteps it, and every measurement above did that.
+  too.**
+
+  **Fixed on escalation**, because it broke the normal way to launch either application rather than
+  being a curiosity. `Update()` now returns early while `IsConnecting()` - `Connecting` or
+  `Reconnecting`, existing API - and halts otherwise, so a real disconnect stays loud and a
+  reconnection survives, which it did not before. Measured on the way: the port is listening at
+  **t=1s**, the client survives **three or four refused attempts**, and a refused connection raises
+  `WebSocketMessageType::Error`, which does **not** change the status - so it stays `Connecting`
+  throughout and ixwebsocket retries by itself. There was never anything wrong; there was only a
+  wait that nothing waited for.
+
+  **This edits an upstream file and the change reaches Direct3D 12.** It is the one row in
+  [TouchedFiles.md](TouchedFiles.md) that changes shared behaviour deliberately rather than adding a
+  platform branch. Re-check it under P8.1, and report the abort upstream - it is theirs.
+
+  Cosmetic leftover: the three refused attempts log at Error level and show in the editor's error
+  counter, though they are now the expected startup path.
 
   **Method note, because this was got wrong twice before it was got right.** Once the merge is
   committed, `git merge-base HEAD upstream/main` **is** `upstream/main`, so every
