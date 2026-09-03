@@ -55,8 +55,15 @@ verification and debt rather than porting. The whole tree builds in Debug and Re
 127.0.0.1:5556, spawns its compiler workers and draws its full UI. Per-task state is in
 [In flight](#in-flight).
 
-**One thing has never been checked at all, and it is the whole of Phase 8's remaining risk: no
-Windows build has been run at any point in this port.**
+**The port builds and runs on Windows.** P8.1, 2026-09-04: MSBuild builds `Linux`-era `main` in
+**Debug**, the Reflector runs, every shader compiles, the Resource Server serves, and the editor
+renders pbrdemo with entity picking working. **One defect, now fixed** - this port had hoisted
+`dxcapi.h` above `d3d12shader.h` and the Windows Reflector stopped compiling. See the entry below.
+
+**What that leaves is comparison, not risk.** Release and Shipping have not been built with
+MSBuild, the two frames have not been compared beyond by eye, and the resource compiler's output
+has not been diffed across the two platforms. Those three are the rest of
+[P8.1](Phases/Phase8-Completion.md#p81---the-windows-build).
 
 **The engine simulates.** P8.2, 2026-09-02: "Play Map" starts and stops game preview cleanly, three
 dynamic physics bodies fall and settle on a static collision mesh, camera control works from
@@ -578,11 +585,12 @@ correct-enough to keep going and wrong enough to sweep before the port is called
 | ~~An indirect `RootSRV` cannot be read~~ **Permanent, P8.5.** | `CreateCommandSignature`, `RHI_Vulkan.cpp` | Only `RootConstants` and `RootCBV` have indirect declarations. `DebugDrawMesh.esf` declares a `RootSRV`, so a signature can carry one | Nothing indexes it yet. A shader that did would need a third declaration macro **The consequence: a shader that indexes an indirect `RootSRV` will not compile a signature for it, and finds out at pipeline creation.** `DebugDrawMesh.esf` declares one, so a signature can carry one; nothing indexes it. A third declaration macro beside `RootConstants` and `RootCBV` is the fix, and it is cheap - but writing it untested, for no caller, is what Phase 8 forbids |
 | ~~The `GPU hang` after a full frame~~ **Fixed.** It was `vkCmdSetFragmentShadingRateKHR` on a transfer command buffer, not the dropped mesh draws. See the 2026-08-31 NVIDIA entry | `BeginCommandBuffer`, `RHI_Vulkan.cpp` | Was recorded as unresolvable without mesh hardware. That was wrong: the kernel named it as `Xid 32` throughout, and a GPU with dedicated queue families made it reproducible | Nothing now. The frame loop runs and shuts down clean |
 
-**Five upstream shader files are unverified on Windows.** `RHI.esh` and the four shaders changed
-by open question 8 and P5.17 compile for both platforms and have only ever been built on Linux.
-They are guarded by `#ifdef __spirv__`, so the Direct3D path should be untouched - "should" is
-the word that needs a Windows build. This is the highest-risk item in the port right now, and it
-needs a **Windows machine**, not new GPU hardware. The two waits are different.
+~~**Five upstream shader files are unverified on Windows.**~~ **Closed by P8.1 on 2026-09-04.**
+`RHI.esh` and the shaders changed by open question 8 and P5.17 compile for both platforms and had
+only ever been built on Linux; "should be untouched on Direct3D 12" was the highest-risk item in
+the port. **They compile and render on Windows**, in Debug, with picking working. The check was by
+eye rather than a pixel diff, so the frame comparison Phase 5 criterion 7 asks for is still a row
+in [Blocked.md](Blocked.md) - but nothing here is unbuilt on Windows any more.
 
 ---
 
@@ -604,7 +612,7 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 >
 > | Task | State |
 > |---|---|
-> | P8.1 The Windows build | not started. **The largest unmeasured risk in the port** |
+> | P8.1 The Windows build | **mostly done**, 2026-09-04. Debug builds and runs - Reflector, shaders, Resource Server, editor rendering pbrdemo with picking. One include-order fix. Release, Shipping and both comparisons are left |
 > | P8.2 Runtime shakedown | **mostly done**, 2026-09-02. Game preview runs, physics simulates, all three animation editors open. Gamepad camera control still needs a controller |
 > | P8.3 Raytracing, or the decision not to | **deferred**, 2026-09-03, by the developer. Still open - a deferral is not one of the two outcomes the task asks for |
 > | P8.4 RHI debt sweep | **done**, 2026-09-03. Phase 5 criteria 1, 8 and 9 closed. Found an upstream translate-gizmo crash |
@@ -699,6 +707,89 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-04 - P8.1 The Windows build. **Debug builds and runs**, and one hoisted include was the whole cost
+
+**The largest unmeasured risk in the port is measured.** A Windows machine built `main` with
+MSBuild in **Debug** and ran it: the Reflector runs, every shader compiles, the Resource Server
+serves, and the editor renders **pbrdemo** with geometry, textures and lighting. Clicking entities
+in the viewport selects the one under the cursor.
+
+**This was `main` after the `47e6293` merge**, so it covers upstream's new culling pipeline as well
+as the port's own edits.
+
+**One defect, and it was in this port's code, not upstream's.**
+
+#### `dxcapi.h` cannot be hoisted above `d3d12shader.h`
+
+Phase 4 rewrote `ShaderReflection_ShaderCompiler.h` so that `d3d12shader.h` and `<wrl/client.h>`
+sat behind `#if _WIN32` and Linux took `ComPtr_Linux.h` instead. Doing that moved the shared
+`#include "dxcapi.h"` **above** the Windows block, because both platforms need it.
+
+On Linux that is fine. On Windows it is not: **`dxcapi.h` never includes what it depends on.** It
+uses `IUnknown`, `REFCLSID` and friends and assumes something earlier declared them - and on
+Windows the thing that did was `d3d12shader.h`, through its own includes. Hoisting it produced a
+cascade of undeclared-identifier and syntax errors and `Esoterica.Applications.Reflector` did not
+compile.
+
+The fix restores `d3d12shader.h` before `dxcapi.h` **on the Windows branch only**, and gives the
+Linux branch its own `#include "dxcapi.h"`. Five lines added, two moved; Linux is unaffected.
+Merged as PR #89.
+
+**The general shape is worth carrying forward.** Splitting a shared include out of a
+platform block reads like a two-line refactor and is not one, because Windows headers depend on
+each other implicitly and the compiler that would say so is the one nobody is running.
+[00-Conventions.md](00-Conventions.md) Rule 2 now says this.
+
+#### What this closed
+
+Five rows left the Windows queue in [Blocked.md](Blocked.md), and two were narrowed rather than
+deleted.
+
+- **Open question 8's `Buffer<uint2>` change, on Direct3D 12.** Six shader files with no
+  `__linux__` branch to hide behind, and the single largest worry in P8.1. A correct-looking lit
+  pbrdemo frame exercises `InstanceCulling.esf`, `LightCulling_CullLights.esf`, `SpatialHash.esh`
+  and `MaterialShaderPBR.esh`, and **working click-selection exercises
+  `InstancePickingResolve.esf`** - the one of the six that a static frame does not reach.
+- **P5.17's indirect root arguments.** The `#ifdef __spirv__` block's `#else` fallback compiles,
+  and the frame renders through the indirect path that Direct3D 12 has always used.
+- **`EE_INDIRECT_PIXEL_ENTRY_INIT`,** empty on Direct3D 12 and called as the first statement of two
+  pixel shaders. Both render.
+- **The two Phase 7 `#elif` edits.** `ResourceServerUI.cpp` - the Resource Server ran and drew its
+  UI - and `Code/Base/_Module/BaseModule.cpp`, which links into everything that built.
+- **`HLSL_STATIC_ASSERT`.** It is compiled out on SPIR-V (`RHI.esh:68`), so **every shared-struct
+  size check in the engine is absent on Linux and present on Windows**, and a Windows shader
+  compile is the only place they can fire. The shaders compiled. They fired, and they passed.
+
+**`ResourceProvider_Network.cpp:97` is re-checked too.** P9.1's early return while `IsConnecting()`
+changed shared behaviour and was owed a Windows look; the editor connected to the Resource Server
+on Windows with no regression. The upstream report is still owed.
+
+#### What is left, and why the task is not done
+
+- **Release and Shipping have not been built with MSBuild.** Debug only.
+- **The standalone `Esoterica.Applications.Engine` has not been run on Windows.** Only the editor.
+- **The two frames have not been compared beyond by eye.** No capture, no pixel diff. Phase 5
+  criterion 7 stays open.
+- **The resource compiler's output has not been diffed across platforms.** Phase 3 criterion 4
+  stays open. Debug and Release on Linux already agree byte for byte across all 38 files, so what
+  is left is genuinely platform-dependent differences.
+- **P5.20's `EE_INTERSTAGE_HANDLE` and `EE_PER_PRIMITIVE` are narrowed, not closed.** They compile
+  and the editor renders, but nothing confirms the debug-draw path they live on was exercised.
+
+**`ResourceServerApplication.cpp:260` is not resolved by this run.** The Debug Resource Server
+started and served without visibly failing, which is what reading freed stack usually looks like.
+It is still an upstream defect and still needs the report.
+
+- Files added: none.
+- Upstream files edited:
+  `Code/Applications/Reflector/ShaderReflection/ShaderReflection_ShaderCompiler.h` (include order
+  on the Windows branch), registered in [TouchedFiles.md](TouchedFiles.md).
+- Acceptance criteria met: P8.1's build and run, in Debug. Phase 5 criterion 7 and Phase 3
+  criterion 4 **not** met.
+- For the next agent: **there is now a Windows desk in the rotation.** The Windows queue in
+  [Blocked.md](Blocked.md) is four rows rather than eight, and every one of them is a comparison or
+  a second configuration - none is a "this might be silently broken" any more.
 
 ### 2026-09-03 - P9.1 to P9.4. **The merge is in and the new culling pipeline renders**, after a dead shader and a black frame
 

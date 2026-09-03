@@ -21,7 +21,7 @@ could ever go upstream.
 >
 > | Task | State |
 > |---|---|
-> | P8.1 The Windows build | not started. **The largest unmeasured risk in the port** |
+> | P8.1 The Windows build | **mostly done**, 2026-09-04. Debug builds and runs, and one hoisted include was the whole cost. Left: Release, Shipping, and the frame and resource-compiler comparisons |
 > | P8.2 Runtime shakedown | **mostly done**, 2026-09-02. Game preview runs, physics simulates, a skeletal asset opens in all three animation editors. Left: a gamepad, and evaluating a graph |
 > | P8.3 Raytracing, or the decision not to | **deferred**, 2026-09-03, by the developer. Not started, and nothing else in the phase waits on it |
 > | P8.4 RHI debt sweep | **done**, 2026-09-03. Mesh picking verified; the barrier debt and both `EE_UNIMPLEMENTED_FUNCTION` markers made permanent; no RenderDoc trigger. Phase 5 criteria 1, 8 and 9 closed |
@@ -29,9 +29,9 @@ could ever go upstream.
 > | P8.6 Sanitizers and build coverage | **done**, 2026-09-03. All nine configurations build, Shipping links with `ld.lld`, TSan found a signal-safety defect. No CI, decided and recorded |
 > | P8.7 Fork review | not started. Do this last |
 >
-> **These are ordered by size and risk, not by dependency.** Only P8.7 has to come last. P8.1 is
-> first because it is the only item that could turn out to be large, and everything else is
-> cheaper to plan once its answer is known.
+> **These are ordered by size and risk, not by dependency.** Only P8.7 has to come last. P8.1 was
+> first because it was the only item that could have turned out to be large. **Its answer is now
+> known and it is small**: one include-order fix, and everything else built and ran.
 >
 > **[Progress.md](../Progress.md) is the authority on what each task actually did.** The
 > descriptions below are the plan.
@@ -47,8 +47,8 @@ could ever go upstream.
 >
 > ### What had never been exercised when this phase opened
 >
-> **This block is what Phase 7 handed over, and P8.2 has since answered most of it.** Kept as the
-> starting position; the table above and [Progress.md](../Progress.md) are current.
+> **This block is what Phase 7 handed over, and P8.1 and P8.2 have since answered most of it.**
+> Kept as the starting position; the table above and [Progress.md](../Progress.md) are current.
 >
 > **The engine has only ever drawn a static scene for about thirty seconds.** Nothing in this port
 > has been observed *simulating*: no physics body has been seen to move, no animation graph has
@@ -56,7 +56,7 @@ could ever go upstream.
 > functional unknown after Windows.
 >
 > **No Windows build has been run at any point in this port.** Not once, in any phase. That is
-> P8.1.
+> P8.1. **Answered on 2026-09-04**: Debug builds and runs, and the cost was one hoisted include.
 >
 > ### Two things that are dead code on *both* backends
 >
@@ -96,13 +96,31 @@ Three kinds of work end up here.
 
 ### P8.1 - The Windows build
 
+> **Mostly done, 2026-09-04. Debug builds with MSBuild and runs**: the Reflector runs, every shader
+> compiles, the Resource Server serves, and the editor renders pbrdemo with entity picking working.
+> **One defect, and it was this port's**: `dxcapi.h` had been hoisted above `d3d12shader.h` in
+> `ShaderReflection_ShaderCompiler.h`, and on Windows it depends on that header's includes having
+> run first. Fixed in PR #89.
+>
+> **Four of the five risks below are measured.** The `Buffer<uint2>` change renders and picks,
+> `HLSL_STATIC_ASSERT` fired and passed, P5.17's `#else` fallback renders,
+> `EE_INDIRECT_PIXEL_ENTRY_INIT` renders, and both Phase 7 `#elif` edits ran. **What is left is not
+> risk, it is comparison**: Release and Shipping have never been built, the standalone
+> `Esoterica.Applications.Engine` has not been run there at all - only the editor - the two frames
+> have been compared only by eye, and the resource compiler's output has never been diffed.
+> P5.20's macros are the one narrowed-not-closed item - they render, but the debug-draw path they
+> live on was not specifically exercised.
+>
+> See the 2026-09-04 entry in [Progress.md](../Progress.md) and the Windows queue in
+> [Blocked.md](../Blocked.md), which is now four rows.
+
 **Needs a Windows machine with MSBuild and a GPU. Nothing else in this phase does.**
 
 "`main` builds on both Windows and Linux" is the invariant every phase's acceptance criteria ends
-with, and **it has never been run**. Every phase since Phase 3 records it as "not run". This is not
-a formality: the port edits ten shader files that compile for *both* platforms.
+with, and **it had never been run** until 2026-09-04. Every phase since Phase 3 records it as "not
+run". This was not a formality: the port edits ten shader files that compile for *both* platforms.
 
-What makes this risky rather than routine:
+What made this risky rather than routine, and what the result block above settles:
 
 - **Open question 8's `Buffer<uint2>` change has no `__linux__` branch to hide behind.** Six
   shader files, and it reaches instance picking, instance culling, light culling and every

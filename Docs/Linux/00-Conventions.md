@@ -64,6 +64,13 @@ Such an edit has three constraints:
   surrounding block, stop and reconsider the design.
 - **Do not improve the existing guard.** Upstream uses both `#if _WIN32` and `#ifdef _WIN32`.
   Leave each one as you found it. Do not normalize them.
+- **Do not hoist a shared include out of the platform block.** Moving an `#include` that both
+  platforms need up above the `#if _WIN32` looks like tidying and reads as zero lines changed. It
+  is not: **Windows headers include each other implicitly**, so the order inside that block is
+  load-bearing. `dxcapi.h` declares none of the `IUnknown` / `REFCLSID` machinery it uses and got
+  it from `d3d12shader.h` sitting above it; hoisting it broke the Windows Reflector, and nobody
+  found out for four phases because no Windows compiler had run. Duplicate the include into both
+  branches instead.
 - **Record the edit in [TouchedFiles.md](TouchedFiles.md)** in the same commit. An edit that is
   missing from the registry is a bug.
 

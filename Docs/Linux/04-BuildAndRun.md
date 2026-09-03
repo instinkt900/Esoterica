@@ -315,7 +315,10 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ./Esoterica.Applications.E
 
 ## What this document does not cover
 
-- **Windows.** Use `Esoterica.slnx`.
+- **Windows.** Use `Esoterica.slnx` and the steps in the root [README.md](../../README.md).
+  **Debug was built and run there on 2026-09-04** - Reflector, shaders, Resource Server and the
+  editor rendering pbrdemo - so the port does not break the Windows build. What is still unbuilt
+  there, and the two comparisons nobody has run, are the Windows queue in [Blocked.md](Blocked.md).
 - **Packaging or shipping a build.** The `Shipping` configuration builds; nothing beyond that
   has been exercised.
 - **Rendering gaps by device.** [Progress.md](Progress.md) has the hardware table and the

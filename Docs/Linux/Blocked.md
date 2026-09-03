@@ -122,23 +122,34 @@ decision was to unblock P9.4 and record the cost here.
 
 ## Needs a Windows machine
 
-**This is the highest-risk queue in the port, and it is not about hardware.** The rows below
-change code that Direct3D 12 also compiles. Every one could be silently wrong on Windows right
-now, and nothing here can tell.
+**This was the highest-risk queue in the port, and on 2026-09-04 most of it was measured.** MSBuild
+built `main` in **Debug** and the editor rendered pbrdemo with picking, which retired five of the
+eight rows that used to be here - including the `Buffer<uint2>` shader change, the one with no
+`__linux__` branch to hide behind. **Nothing left here is a "this might be silently broken".** What
+remains is a second and third configuration, two comparisons nobody has run, and one render path
+nobody looked at.
+
+**One defect was found and fixed**: this port had hoisted `dxcapi.h` above `d3d12shader.h` in
+`ShaderReflection_ShaderCompiler.h`, and the Windows Reflector stopped compiling. PR #89. Read the
+2026-09-04 entry in [Progress.md](Progress.md) before working this queue - the reason it only bites
+Windows generalises to every shared include this port has moved, and it is now
+[Conventions rule 2](00-Conventions.md#rule-2---edits-to-upstream-files-are-elif-additions-only).
 
 Needed: MSBuild, and a GPU for the visual checks. [TouchedFiles.md](TouchedFiles.md) carries the
 authoritative status of each file; the rows below say what to do about it.
 
 | # | What to check | Files | Detail in |
 |---|---|---|---|
-| 1 | **`main` still builds with MSBuild.** The invariant every phase's acceptance criteria ends with, and **it has never been run.** Every phase since Phase 3 records it as "not run" | all | [AGENTS.md](../../AGENTS.md#definition-of-done) |
-| 2 | **Open question 8's `Buffer<uint2>` change, rendered on Direct3D 12.** Six shader files, no `__linux__` branch to hide behind. It reaches instance picking, instance culling, light culling and every material pixel shader | `RHI.esh`, `SpatialHash.esh`, `InstancePickingResolve.esf`, `InstanceCulling.esf`, `LightCulling_CullLights.esf`, `MaterialShaderPBR.esh` | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
-| 3 | **P5.17's indirect root arguments.** All inside `#ifdef __spirv__` with an `#else` falling back to the existing declarations, so Direct3D 12 *should* be untouched. "Should" is the word that needs the build | `RHI.esh`, `ClusterCulling.esf`, `ClusterCompaction.esf`, `DefaultMeshShader.esh`, `DebugDraw.esf`, `DebugDrawMesh.esf` | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
-| 4 | **`EE_INDIRECT_PIXEL_ENTRY_INIT`,** which is empty on Direct3D 12. Two pixel shaders call it as their first statement. Compiles, never looked at | `RHI.esh`, `MaterialShaderPBR.esh`, `DebugDrawMesh.esf` | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
-| 5 | **P5.20's `EE_INTERSTAGE_HANDLE` and `EE_PER_PRIMITIVE`.** Both `__spirv__`-gated and no-ops on Direct3D 12, and `RendererTypes.esh` is a comment only. Same "should" as row 3 | `RHI.esh`, `DebugDraw.esf`, `RendererTypes.esh` | Progress.md, P5.20 entry |
-| 6 | **Resource compiler output byte-identical to Windows.** Phase 3 criterion 4. Debug and Release on Linux already agree byte for byte across all 38 files, which rules out the float-formatting and optimisation differences and leaves only genuinely platform-dependent ones | `Esoterica.Applications.ResourceCompiler` | Progress.md, Phase 3 entry |
-| 7 | **The two Phase 7 `#elif` edits.** `ResourceServerUI.cpp` and `BaseModule.cpp`. Both are sibling branches beside an existing `#if _WIN32`, and no Windows build has seen either | `ResourceServerUI.cpp`, `Code/Base/_Module/BaseModule.cpp` | Progress.md, P7.3 entry |
-| 8 | **`HLSL_STATIC_ASSERT` is compiled out on SPIR-V** (`RHI.esh:68`), so every shared-struct size check is absent on Linux and present on Windows. A Windows build is the only place those assertions fire | `RHI.esh` | [Rendering: where we are](Progress.md#what-works) |
+| 1 | **Release and Shipping with MSBuild, and the standalone engine.** **Debug is verified**, 2026-09-04, and it built the whole tree. The other two configurations have still never been run, and Shipping's LTO is where a Linux/Windows toolchain difference would surface. **Only the editor was run** - `Esoterica.Applications.Engine` has not been launched on Windows at all | all | [AGENTS.md](../../AGENTS.md#definition-of-done), Progress.md 2026-09-04 entry |
+| 2 | **The Windows frame compared against the Linux one.** Phase 5 criterion 7. The 2026-09-04 run confirmed pbrdemo renders and **looks right by eye** - no capture, no pixel diff, so a subtle difference in lighting or shadowing would not have been seen | all shader edits | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
+| 3 | **Resource compiler output byte-identical to Windows.** Phase 3 criterion 4. Debug and Release on Linux already agree byte for byte across all 38 files, which rules out the float-formatting and optimisation differences and leaves only genuinely platform-dependent ones | `Esoterica.Applications.ResourceCompiler` | Progress.md, Phase 3 entry |
+| 4 | **Whether debug draw itself ran on Windows.** P5.20's `EE_INTERSTAGE_HANDLE` and `EE_PER_PRIMITIVE` are `__spirv__`-gated no-ops on Direct3D 12 and they **compile and render**, but the 2026-09-04 run did not confirm the debug-draw path they live on was exercised. Cheapest of the four: turn on a debug draw view in the editor and look | `RHI.esh`, `DebugDraw.esf`, `DebugDrawMesh.esf`, `RendererTypes.esh` | Progress.md, P5.20 and 2026-09-04 entries |
+
+**What left this queue on 2026-09-04**, so that nobody re-adds it: open question 8's `Buffer<uint2>`
+change across all six shaders (picking included, because click-selection works); P5.17's indirect
+root arguments; `EE_INDIRECT_PIXEL_ENTRY_INIT`; the two Phase 7 `#elif` edits in `ResourceServerUI.cpp`
+and `BaseModule.cpp`; and `HLSL_STATIC_ASSERT`, whose shared-struct size checks are absent on SPIR-V
+and **fired and passed** the moment a Windows machine compiled the shaders.
 
 ---
 
@@ -150,8 +161,8 @@ left here is reporting them, because both are upstream's and both reach Windows.
 
 | # | What to do | Files | Detail in |
 |---|---|---|---|
-| 1 | **`RenderSystem` stores a pointer to the settings it is given** (`m_pRenderSettings = &settings`, new in `47e6293`) and reads it every frame, and **both `ResourceServer` entry points pass a stack local.** The Linux one is fixed here by promoting it to a member; **`ResourceServerApplication.cpp:260` still dangles**, so the Win32 Resource Server reads freed stack to choose its frame command buffer. Release hides it because its asserts are compiled out | `ResourceServerApplication.cpp`, `RenderSystem.cpp:23` | Progress.md, P9.1-P9.4 entry |
-| 2 | **`NetworkResourceProvider::Update()` halted on the first frame the client was not yet connected**, so launching without an already-running Resource Server always aborted. **Fixed here** by returning early while `IsConnecting()`. The underlying mistake is upstream's, exposed by `47e6293` turning a never-firing `EE_ASSERT( "string" )` into a real `EE_TRACE_HALT`; **Windows has it too**. Report it. The fix changes shared behaviour, so it also needs re-checking under P8.1 | `ResourceProvider_Network.cpp:97` | Progress.md, P9.1-P9.4 entry |
+| 1 | **`RenderSystem` stores a pointer to the settings it is given** (`m_pRenderSettings = &settings`, new in `47e6293`) and reads it every frame, and **both `ResourceServer` entry points pass a stack local.** The Linux one is fixed here by promoting it to a member; **`ResourceServerApplication.cpp:260` still dangles**, so the Win32 Resource Server reads freed stack to choose its frame command buffer. Release hides it because its asserts are compiled out. **The 2026-09-04 Windows Debug run does not settle this**: the Resource Server started and served without visibly failing, which is what reading freed stack usually looks like | `ResourceServerApplication.cpp`, `RenderSystem.cpp:23` | Progress.md, P9.1-P9.4 entry |
+| 2 | **`NetworkResourceProvider::Update()` halted on the first frame the client was not yet connected**, so launching without an already-running Resource Server always aborted. **Fixed here** by returning early while `IsConnecting()`. The underlying mistake is upstream's, exposed by `47e6293` turning a never-firing `EE_ASSERT( "string" )` into a real `EE_TRACE_HALT`; **Windows has it too**. **The fix is re-checked on Windows** - the editor connected with no regression on 2026-09-04 - so what is left here is only the upstream report | `ResourceProvider_Network.cpp:97` | Progress.md, P9.1-P9.4 and 2026-09-04 entries |
 
 ---
 

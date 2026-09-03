@@ -60,7 +60,7 @@ in parallel, the phase doc says so.
 | [5 - Vulkan RHI](Phases/Phase5-VulkanRHI.md) | Vulkan backend behind `RHI.h`, at full parity | 3-5 months |
 | [6 - Windowing and Input](Phases/Phase6-WindowingInput.md) | `Engine` app renders a map on Linux | 3-4 weeks |
 | [7 - Editor and Tools](Phases/Phase7-EditorTools.md) | Full editor on Linux | 3-4 weeks |
-| [8 - Completion and Fork Review](Phases/Phase8-Completion.md) | The Windows build runs, the engine simulates, the debt is swept, and the fork is assessed | unknown; P8.1 is why |
+| [8 - Completion and Fork Review](Phases/Phase8-Completion.md) | The Windows build runs, the engine simulates, the debt is swept, and the fork is assessed | days. **P8.1 was the unknown and it came in small** |
 | [9 - The First Upstream Merge](Phases/Phase9-UpstreamMerge.md) | `upstream/main` is absorbed, and the merge discipline is tested rather than assumed | days; P9.4 is why |
 
 **Phase 8 was added on 2026-09-02**, after Phase 7's editor shakedown. The original plan ended at
@@ -137,7 +137,7 @@ porting. The whole tree builds in Debug and Release, and nothing in it fails to 
 | 5 - Vulkan RHI | Written, merged and **run**. All seventeen groups including P5.17. Criterion 8 is met for forward shading, cascaded shadows, GTAO, SMAA and debug draw; mesh picking is owed to P8.4. **Raytracing has never executed and nothing can make it** - it has no callers on either backend. See [P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to) |
 | 6 - Windowing and input | Written. SDL3, `LinuxApplication`, the imgui platform backend, keyboard, mouse and gamepad, the surface and the swapchain. The engine opens a window and renders a map |
 | 7 - Editor and tools | **Done.** Both applications build, link and run; the server serves over the network; the editor shakedown of 2026-09-02 met criteria 5, 6, 8, 9 and 10. Four items remain and they are in [Blocked.md](Blocked.md) |
-| 8 - Completion and fork review | **In flight.** Nothing has been built on Windows, nothing has been seen to *simulate*, and the fork has never been measured against upstream |
+| 8 - Completion and fork review | **In flight.** **Windows builds and runs in Debug** (2026-09-04) and the engine simulates; what is left is Release and Shipping, two cross-platform comparisons, raytracing's decision, and the fork review itself |
 | 9 - The first upstream merge | **In flight.** A trial merge of upstream `47e6293` produced **three single-hunk conflicts across 281 changed files**, and upstream touched no `RHI/`, `Vulkan/` or `Linux/` file at all. The text conflicts are cheap; upstream replaced the culling pipeline this port was verified against, and that is [P9.4](Phases/Phase9-UpstreamMerge.md#p94---the-new-culling-pipeline-on-vulkan) |
 
 ### There is almost no unported code left
@@ -163,21 +163,29 @@ Do not chase rendering on the first machine. [Blocked.md](Blocked.md) lists what
 the second one, and what is waiting for a Windows machine instead - two different queues that are
 easy to confuse.
 
-### What has never been checked at all
+### The two things that had never been checked at all
 
-Two things, and they are the whole of Phase 8's risk.
+**Both are now answered, and this section is kept because the phase docs still refer to them as
+Phase 8's whole risk.**
 
-**No Windows build has been run since this port started.** "`main` builds on both Windows and
-Linux" is the invariant every phase's acceptance criteria ends with, and it is the largest
-unmeasured risk in the project. Ten shader files are edited for **both** platforms, with no
-`__linux__` branch to hide behind. See the Windows queue in [Blocked.md](Blocked.md) and
+**The Windows half is answered.** It said, until 2026-09-04, that no Windows build
+had been run since the port started - the invariant every phase's acceptance criteria ends with,
+and the largest unmeasured risk in the project. **MSBuild now builds `main` in Debug and runs it**:
+the Reflector runs, all ten of the shader files edited for *both* platforms compile, the Resource
+Server serves, and the editor renders pbrdemo with entity picking. The whole cost was one hoisted
+include - `dxcapi.h` above `d3d12shader.h` - which broke the Windows Reflector and nothing else.
+
+What is left there is comparison rather than risk: Release and Shipping have not been built with
+MSBuild, the two frames have been compared only by eye, and the resource compiler's output has not
+been diffed across platforms. See the Windows queue in [Blocked.md](Blocked.md) and
 [P8.1](Phases/Phase8-Completion.md#p81---the-windows-build).
 
-**The engine has rendered, and it has never simulated.** Every measurement in this port is a
-static scene held for about thirty seconds. No physics body has been seen to move, no animation
-graph has been evaluated, and **"Play Map" has never been pressed.** That is
-[P8.2](Phases/Phase8-Completion.md#p82---runtime-shakedown), and it is the largest functional
-unknown after Windows.
+**The simulation half was answered on 2026-09-02.** It said that every measurement in this port was
+a static scene held for about thirty seconds and that **"Play Map" had never been pressed**.
+[P8.2](Phases/Phase8-Completion.md#p82---runtime-shakedown) pressed it: game preview starts and
+stops cleanly, three physics bodies fall and settle, and camera control works from keyboard and
+mouse. **An animation graph has still never been evaluated**, and a gamepad has never driven the
+camera - those two are all that is left of it, and both are rows in [Blocked.md](Blocked.md).
 
 ### Things that will surprise you
 
