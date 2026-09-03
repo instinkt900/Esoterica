@@ -32,12 +32,11 @@ namespace EE::Reflection
     #define DXC_ARG_TARGET_BACKEND L"-spirv", L"-fspv-target-env=vulkan1.3", DXC_ARG_MEMORY_LAYOUT DXC_ARG_BINDING_MODEL DXC_ARG_STAGE_IO_ORDER
     #endif
 
-    // **Inter-stage variables are matched by name in Direct3D and by `Location` in Vulkan**, and
-    // DXC's default is to number them in *declaration order*. `MS_main` declares
-    // `out primitives` before `out vertices`, so the mesh shader gave `PrimitiveOutput`
-    // (TEXCOORD4-9) locations 0-5 and `VertexOutput` (TEXCOORD0-3) locations 6-9. `PS_main` takes
-    // `VertexOutput` first, so the pixel shader numbered the same semantics 0-9 in order. Nothing
-    // lined up: the pixel shader read the primitive flags where the world position was written.
+    // Inter-stage variables are matched by name in D3D12 and by Location in Vulkan, and DXC numbers
+    // them in declaration order. A mesh shader that declares its primitive outputs before its vertex
+    // outputs therefore numbers them differently from a pixel shader that takes the vertex outputs
+    // first, and the two stages stop lining up. The pixel shader then reads the primitive flags
+    // where the world position was written.
     //
     // The frame still rasterises, because SV_Position is a builtin and never had a location, so
     // this looks like correct geometry with wrong shading rather than like an interface error.
@@ -63,9 +62,8 @@ namespace EE::Reflection
     // is 20 bytes in C++ and 24 under the default rules, MeshInstance 64 against 80. Nothing
     // diagnoses that; the shader just reads the wrong bytes.
     //
-    // -fvk-use-dx-layout packs the way Direct3D does, which is what the C++ side already assumes.
-    // It requires the scalarBlockLayout feature, core in Vulkan 1.2, so the Vulkan backend must
-    // enable it. See the P4.3 memory layout entry in Docs/Linux/Progress.md.
+    // -fvk-use-dx-layout packs the way D3D12 does, which is what the C++ side already assumes. It
+    // requires the scalarBlockLayout feature, so the Vulkan backend must enable it.
     #if _WIN32
     #define DXC_ARG_MEMORY_LAYOUT
     #else
@@ -78,8 +76,7 @@ namespace EE::Reflection
     // bindings per shader from whichever numbers are still free, which is not a contract the
     // backend can bind against. Set 1 holds the two heaps at fixed bindings. Set 0 holds the
     // root parameters, at the register index plus a per-register-type shift, so that b2, t2 and
-    // u2 cannot land on one binding. See the P4.3 entry in Docs/Linux/Progress.md for the whole
-    // decision, and for what the Vulkan backend has to build to match it.
+    // u2 cannot land on one binding.
     #if _WIN32
     #define DXC_ARG_BINDING_MODEL
     #else

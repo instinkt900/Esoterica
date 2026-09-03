@@ -677,6 +677,81 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-03 - Comments in the tooling and in the fork's edits to upstream files. Unplanned
+
+The last of the comment pass. Two groups: the build tooling, and the comments this fork added when it
+edited an upstream file.
+
+**The rule for an upstream file is narrower than the keep test.** Only the comments the fork added are
+in scope. An upstream comment is upstream's, whatever it says. Which lines are ours:
+
+```bash
+git diff upstream/main -- <file> | grep '^+' | grep -E '^\+\s*(//|#)'
+```
+
+Across the 88 upstream files this fork touches, about 400 comment lines are fork-added, and only 31 of
+them carried anything worth changing: 26 phase or doc-path pointers, and 5 markdown bold markers. Six
+files needed edits at all. `Memory.cpp`, `ClangParser.cpp`, `Reflector.cpp` and the rest were already
+short and why-focused.
+
+**Two greps that look like offenders and are not.** `deferred_to_phase = 'Phase 5'` in `Toolchain.py`
+is a code value, not a comment, and "Phase 5" is vocabulary this generator actually uses. And `**` in
+`Code/**/ThirdParty` is a glob, not emphasis. Both were left alone.
+
+#### The guard that proves no upstream line was touched
+
+The invariant worth reusing: **the set of upstream lines the fork does not retain must be identical
+before and after.** Alignment-independent, so a shifted diff hunk cannot produce a false pass:
+
+```bash
+comm -23 <(git show upstream/main:"$f" | sed 's/[[:space:]]*$//' | sort -u) \
+         <(sed 's/[[:space:]]*$//' "$f" | sort -u)
+```
+
+A first attempt compared the `-` lines of `git diff upstream/main` instead. That flagged `NinjaGen.py`
+for an `else:`, which turned out to be git re-aligning a hunk after a comment shrank. The line was
+never touched. **Do not use diff-line sets for this; use the `comm` form above.**
+
+#### A Python docstring is not a comment
+
+A comment stripper treats `"""..."""` as a string literal, so a docstring edit reads as a code change.
+Two docstrings were edited here, in `Toolchain.py` and `SourceLists.py`, both only to drop a doc-path
+pointer. Docstrings are prose and are in scope, but the proof has to change: compare the parsed AST
+with docstrings normalised away.
+
+```bash
+python3 -c "import ast,sys; ..."   # see the PR for the full script
+```
+
+Both files: AST identical.
+
+#### Verification
+
+- No upstream-owned line altered or lost, by the `comm` guard, across all 6 edited upstream files.
+- Comment-only by the stripper for the 6 non-Python files.
+- AST identical for the 3 Python files.
+- `ninja -f Build/Linux/Esoterica.ninja`: 841 of 841 targets.
+- `NinjaGen.py` regenerates: 13 projects, 888 sources, 9 configurations. Needs
+  `PATH=External/LLVM/bin:$PATH`, or it fails looking for `clang++`.
+- `CompileShaders.sh`: all stages compile and code generation succeeds. This is the one that matters
+  for the `.esh` edits, because `RHI.esh` is included by every shader and **the C++ build does not
+  recompile shaders**. It produced no change to any tracked file.
+
+Windows MSBuild was not run. Nothing outside a `__linux__` guard changed behaviour, and the shader
+edits are comments that DXC strips on both platforms.
+
+#### What is now done, and what is left
+
+Every hand-written file in the fork has had the pass: `RHI_Vulkan.cpp`, the 27 `_Linux` files, the
+tooling, and the fork's additions to upstream files. Nothing is outstanding.
+
+Deliberately never in scope, and worth knowing before someone "finishes the job":
+
+- `Code/**/ThirdParty/` - upstream vendors it.
+- The vendored imgui region of `ImguiPlatform_Linux.cpp`, below its banner.
+- `ninja_syntax.py` - vendored from the ninja project.
+- Every comment inherited from a `_Win32` sibling or from upstream.
+
 ### 2026-09-03 - Comments in the 27 `_Linux` files. Unplanned. Comment-only, no code change
 
 The same treatment as `RHI_Vulkan.cpp`, applied to every `*_Linux.{cpp,h}` file. Same keep test, same

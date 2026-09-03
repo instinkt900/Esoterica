@@ -245,11 +245,10 @@ def project_compile_flags( repo_root, project, configuration, problems ):
     # visibility( "default" ) branch for Linux, but the vendored imgui and EASTL headers define
     # IMGUI_API and EASTL_API as __declspec, which clang parses and then ignores on ELF. Under
     # -fvisibility=hidden those symbols would be hidden, and Engine and EngineTools would fail
-    # to link against them. Code/**/ThirdParty cannot be edited (Conventions rule 5).
+    # to link against them, and the vendored headers are not this fork's to edit.
     #
-    # Default visibility for everything is the ordinary ELF behaviour, and it is what the
-    # dllexport model approximates on Windows. Phase 5 or 7 can revisit this if .so load time
-    # ever matters.
+    # Default visibility for everything is the ordinary ELF behaviour, and what the dllexport model
+    # approximates on Windows. Revisit only if .so load time ever matters.
 
     return flags
 
@@ -373,8 +372,7 @@ def emit( repo_root, solution, configurations ):
                                  f'{configuration.base_name}. Nothing is linked.' )
                 continue
 
-            # An empty source list is normal in Phase 0. Esoterica.Applications.Engine has only
-            # a Win32 entry point until Phase 6 adds the Linux one.
+            # An empty source list is normal while a project still has only a Win32 entry point.
             if not object_files:
                 problems.append( f'{project.name}: no sources in {configuration.name}. '
                                  f'{output_path} is not built.' )
@@ -395,15 +393,12 @@ def emit( repo_root, solution, configurations ):
                 rule_name = ( f'so_{identifier}' if shared else f'exe_{identifier}' )
                 shared_flag = '-shared ' if shared else ''
 
-                # **A shared library needs an soname, or its dependents record a path.** The
-                # dependency libraries are passed to the linker as repository-relative paths, and
-                # without an soname the linker copies that path verbatim into the dependent's
-                # DT_NEEDED. The loader then resolves it against the *working directory*, so the
-                # binary only runs from the repository root and $ORIGIN never gets a say. Naming
-                # the library gives DT_NEEDED a bare filename, which $ORIGIN then finds.
-                #
-                # Found by running the engine for the first time in P6.7: it failed with
-                # "cannot open shared object file" for its own libraries, from its own directory.
+                # A shared library needs an soname, or its dependents record a path. Dependency
+                # libraries reach the linker as repository-relative paths, and without an soname the
+                # linker copies that path verbatim into the dependent's DT_NEEDED. The loader then
+                # resolves it against the working directory, so the binary only runs from the
+                # repository root and $ORIGIN never gets a say. Naming the library gives DT_NEEDED a
+                # bare filename, which $ORIGIN then finds.
                 if shared:
                     shared_flag += f'-Wl,-soname,{Path( output_path ).name} '
 
@@ -495,8 +490,8 @@ def main():
     for problem in problems:
         print( f'problem: {problem}', file = sys.stderr )
 
-    # Problems are reported, not fatal. Several are expected in Phase 0: dependencies that do
-    # not arrive until a later phase, and projects whose only source is a Win32 entry point.
+    # Problems are reported, not fatal. Some are expected: a dependency that is not downloaded yet,
+    # or a project whose only source is a Win32 entry point.
     print( f'{len( problems )} problem(s).' )
     return 0
 

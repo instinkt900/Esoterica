@@ -347,10 +347,9 @@ namespace EE::Render
         // stale snapshot can land last and overwrite the newer data. Ordering them is the caller's
         // job in both APIs; only the values differ, so this reaches Direct3D 12 too.
         //
-        // Left unordered this is not cosmetic: the cluster buffer is what feeds
-        // InstanceCulling.esf's `( gsNumVisibleClusters + 63 ) / 64` dispatch size, and a garbage
-        // cluster count there is an indirect dispatch that never terminates - Xid 109 CTX SWITCH
-        // TIMEOUT, which is the P7.6 editor hang.
+        // Left unordered this is not cosmetic: the cluster buffer feeds InstanceCulling.esf's
+        // dispatch size, and a garbage cluster count there is an indirect dispatch that never
+        // terminates, which hangs the GPU.
         RHI::CmdBarrier( m_frameCommandBuffers[m_frameIndex], pDstBuffer,
                          RHI::PipelineStage::Copy, RHI::PipelineStage::Copy,
                          RHI::ResourceAccess::CopyDestination, RHI::ResourceAccess::CopyDestination );

@@ -10,7 +10,7 @@ reads the Visual Studio project files, and it runs when upstream changes, not on
 
 Why lists rather than deriving the source list from the .vcxproj files on every build: upstream
 churns about five source-list entries a year, so live parsing bought almost nothing and cost a
-pile of filename heuristics. Docs/Linux/Progress.md records the measurement and the decision.
+pile of filename heuristics.
 """
 
 import re
