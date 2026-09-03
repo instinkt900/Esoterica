@@ -615,6 +615,20 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 > **The original plan ended at Phase 7 and was right that the port would work by then.** What it
 > had no place for was the work left over *after* the thing works: verification that no machine
 > could do at the time, shortcuts taken deliberately, and the question of what this fork is.
+>
+> ### **[Phase 9](Phases/Phase9-UpstreamMerge.md), added 2026-09-03.**
+>
+> | Task | State |
+> |---|---|
+> | P9.1 The mechanical merge | not started. Three conflicts, one trivial, plus the source-list resync |
+> | P9.2 `ClusterCulling.esf` shim | not started. Upstream rewrote the kernel under P5.17's shim |
+> | P9.3 The indirect argument buffers | not started. **Wrong here hangs the GPU, it does not fail to compile** |
+> | P9.4 The new culling pipeline, on Vulkan | not started. **The real work**, and it needs the 3090 |
+> | P9.5 Post-merge audit and provenance | not started. Do this last |
+>
+> **Upstream pushed a 281-file commit and the merge discipline has to be tested rather than
+> assumed.** Phase 8 and Phase 9 are independent; neither blocks the other, P8.1 included. The
+> survey is the 2026-09-03 entry below.
 
 ---
 
@@ -676,6 +690,72 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-03 - Upstream pushed 281 files. A trial merge produced **three single-hunk conflicts**, and Phase 9 exists
+
+Upstream `47e6293` "Push Esoterica Main @800" landed: **281 files, +5,668 / -36,670**. New
+spatial-hash light culling, a new instance and cluster culling system with a compaction pass, FFX
+parallel sort, animation graph changes, resource server rework, and a `FileRegistry` to
+`DataFileSystem` rename.
+
+Merged on a scratch branch off `linux/rhi-vulkan-comment-cleanup`, measured, then aborted. **The
+tree was left clean and nothing was committed.** This entry is the survey; the work is
+[Phase 9](Phases/Phase9-UpstreamMerge.md).
+
+**The numbers, which are the point of the whole merge discipline:**
+
+| | count |
+|---|---|
+| Files the fork has touched since the fork point | 155 |
+| Files upstream touched in this commit | 143 |
+| Overlap | 17 |
+| Files that auto-merged | 140 |
+| **Conflicts** | **3**, one hunk each |
+
+**Upstream touched zero files under `RHI/`, `Vulkan/` or any `Linux/` directory**, and 52 of the
+fork's 155 files live there. The largest surface of this port has no contention with upstream at
+all. Conventions rule 1 - add files rather than edit them - is what bought that, and this is the
+first measurement of it.
+
+**Of the 14 overlapping files that auto-merged, the fork's deltas were 1 to 12 lines each against
+upstream rewrites of 55 to 192 lines.** The three load-bearing ones were checked by hand and all
+three survived: `InstanceCulling.esf`'s `Buffer<uint2>` plus `PackUint64` shim, `DeviceRenderWorld.cpp`'s
+LP64 `Math::Max( size_t( 1 ), ... )` fix, and `RendererTypes.esh`'s `PrimitiveOutput` decoration
+note. Upstream independently wrote `Math::Max( m_clusterRecordOffsets.size(), size_t( 1 ) )` in its
+new code, so the LP64 hazard did not recur.
+
+Upstream's additions were scanned for the two patterns that have bitten this port before. **No new
+`ULL`-literal `Math::Max` against a `.size()`, and no new `Buffer<uint64_t>` typed loads in the
+shaders.** The new `uint64_t` use is scalars and groupshared arrays, which are fine.
+
+**The three conflicts:**
+
+- **`EditorUI.h`** - trivial. Pure include collision from the `FileRegistry.h` to
+  `DataFileSystem.h` rename, against the `EditorTool.h` include P7.0 added on the line above.
+  Keep both. That rename reaches 29 files but only 5 the fork has anything in, and 4 of those
+  merged cleanly because upstream did the rename in them itself.
+- **`ClusterCulling.esf`** - real. The fork's version carries P5.17's
+  `EE_INDIRECT_DISPATCH_ENTRY_ARGS` at 64 threads; upstream rewrote the kernel to 128 threads with
+  `Buffer<uint4> clusterRecordBuffer` and 128-bit groupshared masks. The shim has to be reapplied
+  onto the new body, not merged into the old one. P9.2.
+- **`Renderer_ForwardShading.cpp`** - real, and the one worth flagging. The fork's 8 lines include
+  the Vulkan indirect-argument zeroing, and **upstream deleted the entire clear block** as part of
+  "simplified buffer barrier handling", replacing it with an assert. The requirement did not go
+  away, its home did - and upstream added a *second* argument buffer,
+  `m_ClusterCompaction_ArgumentBuffer`, that needs the same treatment. **The failure mode is a GPU
+  hang, not a compile error.** P9.3.
+
+**`SyncUpstream.py` caught the source-list drift on its own** and printed exactly the delta: one
+added source (`Render/Device/DeviceRadixSort.cpp`) and one rename
+(`FileSystem/FileRegistry.cpp` to `FileSystem/DataFileSystem.cpp`). That is the mechanism from
+[02-Architecture.md](02-Architecture.md#decision-three-source-lists-checked-against-the-vcxproj-files)
+doing the job it was built for, on the first merge that tested it. Nine new shader files also
+arrive, in `Code/Engine/Render/Shaders/FFX/` plus `ClusterCompaction.esf`.
+
+**What this does not mean.** Three conflicts is the good news and it is also the trap. Upstream
+replaced the culling pipeline that every Vulkan conformance finding in Phases 5 and 8 was made
+against, and **none of the new code has ever been compiled for SPIR-V, let alone run against this
+backend.** The merge is cheap; the conformance work behind it is not, and that is P9.4.
 
 ### 2026-09-03 - Comments in the tooling and in the fork's edits to upstream files. Unplanned
 

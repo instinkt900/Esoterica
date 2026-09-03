@@ -35,6 +35,11 @@ This reverses the original plan, which called for weekly merges. The measurement
 [Progress.md](Progress.md) is what changed it: at this rate of upstream change, the drift is not
 the risk. Half-finished work colliding with a merge is.
 
+**A merge was asked for on 2026-09-03**, and it is
+[Phase 9](Phases/Phase9-UpstreamMerge.md). That phase holds what the trial merge found - three
+conflicts, and which ones are not trivial. This document still holds the procedure, and Phase 9
+does not repeat it.
+
 The rest of this document is the procedure for when a merge **is** asked for.
 
 ## The merge procedure
