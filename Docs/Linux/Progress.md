@@ -620,15 +620,24 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 >
 > | Task | State |
 > |---|---|
-> | P9.1 The mechanical merge | not started. Three conflicts, one trivial, plus the source-list resync |
-> | P9.2 `ClusterCulling.esf` shim | not started. Upstream rewrote the kernel under P5.17's shim |
-> | P9.3 The indirect argument buffers | not started. **Wrong here hangs the GPU, it does not fail to compile** |
-> | P9.4 The new culling pipeline, on Vulkan | not started. **The real work**, and it needs the 3090 |
-> | P9.5 Post-merge audit and provenance | not started. Do this last |
+> | P9.1 The mechanical merge | **done**, 2026-09-03. Three conflicts resolved, source list resynced, 841/841 builds. Upstream's dead FFX radix sort had to be excluded first |
+> | P9.2 `ClusterCulling.esf` shim | **done**, 2026-09-03. Reapplied onto upstream's new 128-thread kernel; the file differs from upstream by the shim alone |
+> | P9.3 The indirect argument buffers | **done**, 2026-09-03. Only the culling one needs zeroing, and that was checked rather than assumed. Verified in the editor, which passes `maxNumCommands` = 146 |
+> | P9.4 The new culling pipeline, on Vulkan | **mostly done**, 2026-09-03. **The engine and the editor both render pbrdemo, validation-clean.** Two defects found and fixed. Left: comparing the frame against a pre-merge reference |
+> | P9.5 Post-merge audit and provenance | not started. Do this last. The audit is run; the sync point and merge notes are not yet recorded |
 >
 > **Upstream pushed a 281-file commit and the merge discipline has to be tested rather than
-> assumed.** Phase 8 and Phase 9 are independent; neither blocks the other, P8.1 included. The
-> survey is the 2026-09-03 entry below.
+> assumed.** Phase 8 and Phase 9 are independent; neither blocks the other, P8.1 included.
+>
+> **The merge is in and it renders.** Three single-hunk conflicts across 281 files, and upstream
+> touched no `RHI/`, `Vulkan/` or `Linux/` file at all - the discipline paid. **What the merge cost
+> was not conflict resolution.** It was three things no conflict marker pointed at: upstream's dead
+> FFX radix sort does not compile on any platform and blocked the whole build, `WaveMatch` has no
+> core Vulkan lowering, and a new indirect shader arrived without P5.17's shim and rendered a black
+> frame with no validation message. See the two 2026-09-03 entries below.
+>
+> **The Linux renderer is now NVIDIA-only.** That is new, it is a scope change, and it has its own
+> queue in [Blocked.md](Blocked.md).
 
 ---
 
@@ -690,6 +699,151 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-03 - P9.1 to P9.4. **The merge is in and the new culling pipeline renders**, after a dead shader and a black frame
+
+Upstream `47e6293` is merged onto a branch and both applications draw pbrdemo through its new
+culling pipeline on the RTX 3090, host validation on, **zero validation messages and no
+message-ID filters**, no device memory leaked.
+
+**The three conflicts were the cheap part, and they took a morning.** Each resolved file is now
+exactly upstream's version plus the fork's minimal intent. What the merge actually cost was three
+things no conflict marker pointed at.
+
+#### The registry check, and one gap it found
+
+Note that `01-UpstreamMerges.md` step 3 gives `git diff --name-only HEAD..upstream/main`, which is
+the **whole fork divergence** - 282 files - not what the merge brings. Use the merge base:
+
+```bash
+git diff --name-only $( git merge-base HEAD upstream/main ) upstream/main    # 143 files
+```
+
+Upstream changed **13 of the 87 files in [TouchedFiles.md](TouchedFiles.md)**, and zero under
+`RHI/`, `Vulkan/` or any `Linux/` directory. `RHI.h` and `RHI.esh` are untouched, so the Vulkan
+backend owed no new interface - the single best number in this merge. The post-merge audit found
+no new `_WIN32`, `_MSC_VER` or `windows.h` path outside thirdparty.
+
+**One registry gap:** `EntitySerializationTools.cpp` carries a fork edit (`<eastl/sort.h>` case
+fix) and was never registered. Nothing failed, because upstream touched the file and it merged
+cleanly. Registered now. **The gap is the finding, not the edit** - a wrong registry is a defect in
+the merge procedure.
+
+#### Blocker 1: upstream's dead FFX radix sort stops the entire build
+
+Seven `Render/Shaders/FFX/*.esf` shaders and `DeviceRadixSort.cpp` arrived. `DeviceRadixSort` has
+**no callers anywhere in `Code/`** - upstream's own changelog says radix sorting was removed from
+the culling pipeline, and the squashed push carries both halves.
+
+The shaders do not compile, and **not because of Linux**. Each `.esf` does
+`#define RWStructuredBuffer RWBuffer` before including `FFX_ParallelSort.esh`, which turns the
+`RWStructuredBuffer<FFX_ParallelSortCB>` parameter at line 475 into a typed buffer of a struct:
+
+```bash
+dxc -T cs_6_6 -HV 2021 -enable-16bit-types         # error at 475:99
+dxc -T cs_6_6 -HV 2021 -enable-16bit-types -spirv  # error at 475:99, identical
+```
+
+**Upstream's Windows build cannot compile these either.** The function body is in the header and
+HLSL parses every body, so all seven fail although only `SetupIndirect` calls it.
+
+**This blocked everything, not just shaders.** The Reflector runs its shader pass *before* type
+reflection and exits 1, so a merged tree generated **zero** typeinfo files and nothing linked. A
+merge that only breaks a shader still breaks the whole build.
+
+Excluded, both entries guarded to non-Windows: `IsShaderExcludedFromLinuxBuild` in `Reflector.cpp`
+(the shader list cannot live in `Exclusions.txt`, because the Reflector reads the `.vcxproj`
+directly rather than going through NinjaGen) and `DeviceRadixSort.cpp` in `Exclusions.txt`. Each
+names the other. Reported upstream rather than fixed - Conventions rule 3.
+
+#### Blocker 2: `WaveMatch` has no core Vulkan lowering, and the renderer is now NVIDIA-only
+
+`ClusterCompaction.esf` calls `WaveMatch`. Core SM 6.5 on Direct3D 12, so it costs upstream
+nothing. DXC can only lower it to `OpGroupNonUniformPartitionNV`, and the first
+`vkCreateComputePipelines` failed:
+
+```
+VUID-VkShaderModuleCreateInfo-pCode-08742: SPV_NV_shader_subgroup_partitioned was declared,
+but one of the following requirements is required (VK_NV_shader_subgroup_partitioned)
+```
+
+Enabled behind an availability check. **The only vendor extension this backend enables, and
+compaction writes the draw arguments - so an AMD or Intel GPU renders no geometry at all.** Both
+development machines are NVIDIA, so nothing here can see the consequence. Escalated and accepted;
+it has its own [Blocked.md](Blocked.md) queue, and it contradicts Phase 5's parity scope and the
+"Vulkan 1.3" target, which should be revisited together.
+
+#### Blocker 3: the black frame. A new indirect shader with no root arguments
+
+With the pipeline created, both applications ran 45 seconds clean and presented a **black frame**.
+Not one missing effect - **no geometry and no sky.**
+
+**What localised it was the editor, not the engine.** Its imgui UI drew perfectly, the Resource
+Browser listed the data tree, and the Outliner named the real map entities - `Boulder`, `Floor`,
+`Skybox`. So present, the swapchain, descriptor binding and resource loading were all fine, the map
+was loaded, and only the world render drew nothing. **An engine that renders nothing tells you far
+less than an editor that renders everything except the viewport.**
+
+`ClusterCompaction.esf` is new in `47e6293`, is reached by `CmdExecuteIndirect`, and upstream passes
+**`nullptr`** for its root constants:
+
+```cpp
+RHI::CmdSetRootConstants( pCommandBuffer_GeometryCulling, 0, nullptr,
+                          sizeof( ShaderTypes::ClusterCompactionRootConstants ) );
+```
+
+They come per-command out of the argument buffer. Direct3D 12 binds them for every command; on
+Vulkan that is precisely what P5.17's shim exists to do, and **upstream wrote the shader without
+it** - plain `EE_DECLARE_ROOT_CONSTANTS` and `EE_DECLARE_ROOT_CBV`. So `RootCBV` read as zero,
+every buffer handle was 0, the pass wrote no cluster records, and nothing was drawn.
+
+**Validation cannot see this. Reading descriptor 0 is legal.** It is the failure mode `RHI.esh`
+already warns about for pixel shaders - "omitting it reads every `RootCBV` field as 0" - now seen
+in a compute shader.
+
+Fixed by applying the shim unchanged. **Then every other indirect shader was checked rather than
+assumed:** the engine's four - `ClusterCulling`, `ClusterCompaction`, `DebugDraw`, `DebugDrawMesh` -
+all carry it; the five that do not are the excluded FFX sort.
+
+**The lesson for the next merge: a new upstream shader reached by `CmdExecuteIndirect` needs P5.17's
+shim, and nothing warns you.** Not the compiler, not validation, not the build. Grep new `.esf`
+files against the `CmdExecuteIndirect` call sites.
+
+#### P9.3 held up
+
+Only `ClusterCulling_ArgumentBuffer` needs the frame-start zeroing, and that was checked rather
+than carried over. `RHI_Vulkan.cpp`'s `Dispatch` path ignores the counter buffer and records
+`maxNumCommands` dispatches unconditionally, so `ClusterCompaction.esf` appending through an
+`InterlockedAdd` leaves stale slots, while `InstanceCulling.esf` writing slot `groupID`
+unconditionally for every page does not - and its `CmdExecuteIndirect` passes no count buffer at
+all. Verified in the editor, which passes `maxNumCommands` = 146 where the engine passes 1.
+
+#### What is not closed
+
+- **The frame has not been compared against a pre-merge reference**, so P9.4's "correct frame"
+  criterion is still open. Everything the docs list is present - geometry, textures, normals, IBL,
+  direct lighting, shadows, sky, reflective ground plane. Thin sliver geometry near the horizon is
+  most likely distant boulders at a near-ground camera angle, and that is **unverified**.
+- **Windows is still unbuilt.** P8.1 owes it and this merge does not change that.
+- **P9.5** has had its audit run but the sync point and merge notes are not yet recorded.
+
+#### Two things about running it, for the next session
+
+- **Check which machine you are on before believing a hardware wait.** This session claimed P9.4
+  was blocked on "this machine's Intel UHD 620" while sitting on the 3090.
+  `nvidia-smi --query-gpu=name --format=csv,noheader` settles it, and the repo path is the same on
+  both machines.
+- **The engine did not start the Resource Server for itself, and it dies without one.** With
+  nothing on 5556 it retries, logs `Unable to connect to 127.0.0.1 on port 5556`, then asserts
+  `LOST CONNECTION!!` and aborts. Starting `Esoterica.Applications.ResourceServer` by hand first
+  fixed it, and every run above did that. This is worth a look, because "Start here" above says
+  P7.3 opened `EnsureResourceServerIsRunning` to Linux so `-packaged` is no longer required -
+  **not reproduced in this session**, and not investigated either, since starting the server by
+  hand was enough to get on with P9.4.
+- **Append the `[Render:RHI]` block to `Esoterica.ini`, do not write it with `>`.** The recipe in
+  "Start here" truncates, and the file on this machine carries a `[Resource]` section naming
+  `CompiledData` and the server. Appending was deliberate; whether truncating it actually breaks a
+  run was **not** tested in isolation, so treat this as caution rather than a measured finding.
 
 ### 2026-09-03 - Upstream pushed 281 files. A trial merge produced **three single-hunk conflicts**, and Phase 9 exists
 

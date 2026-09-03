@@ -101,6 +101,23 @@ than waiting for a driver to catch it. All three remaining feature blocks now cl
 backend does not use, the way the mesh shader block always did, so there is nothing left for a
 stricter driver to reject. It was never observable on this one.
 
+### Needs a non-NVIDIA GPU, which is a queue of its own
+
+**The Linux renderer is NVIDIA-only as of the 47e6293 merge, and nothing here can see it.** Both
+development machines are NVIDIA, so this queue cannot be worked on either of them. It is not a
+driver-strictness wait like the row above - the code simply will not run elsewhere.
+
+| # | What to check | Files | Detail in |
+|---|---|---|---|
+| 1 | **`VK_NV_shader_subgroup_partitioned` is now a hard requirement.** Upstream's `ClusterCompaction.esf` calls `WaveMatch`, which is core SM 6.5 on Direct3D 12 and which DXC can only lower to `OpGroupNonUniformPartitionNV`. There is no core Vulkan 1.3 equivalent. Compaction writes the draw arguments, so **an AMD or Intel GPU renders no geometry at all**, not one missing effect. The backend logs a warning naming the consequence and carries on | `RHI_Vulkan.cpp`, `ClusterCompaction.esf` | Progress.md, P9.4 entry |
+
+This contradicts two things that were decided earlier and should be revisited together rather than
+one at a time: Phase 5's **"full feature parity with the Direct3D 12 backend"**, and the stated
+target of **Vulkan 1.3** rather than Vulkan-1.3-plus-a-vendor-extension. The alternative was
+rewriting `WaveMatch` as a portable subgroup ballot loop in a shared shader, which reaches
+Direct3D 12 and is therefore an escalation of its own. Escalated and accepted on 2026-09-03; the
+decision was to unblock P9.4 and record the cost here.
+
 ---
 
 ## Needs a Windows machine
@@ -116,7 +133,7 @@ authoritative status of each file; the rows below say what to do about it.
 |---|---|---|---|
 | 1 | **`main` still builds with MSBuild.** The invariant every phase's acceptance criteria ends with, and **it has never been run.** Every phase since Phase 3 records it as "not run" | all | [AGENTS.md](../../AGENTS.md#definition-of-done) |
 | 2 | **Open question 8's `Buffer<uint2>` change, rendered on Direct3D 12.** Six shader files, no `__linux__` branch to hide behind. It reaches instance picking, instance culling, light culling and every material pixel shader | `RHI.esh`, `SpatialHash.esh`, `InstancePickingResolve.esf`, `InstanceCulling.esf`, `LightCulling_CullLights.esf`, `MaterialShaderPBR.esh` | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
-| 3 | **P5.17's indirect root arguments.** All inside `#ifdef __spirv__` with an `#else` falling back to the existing declarations, so Direct3D 12 *should* be untouched. "Should" is the word that needs the build | `RHI.esh`, `ClusterCulling.esf`, `DefaultMeshShader.esh`, `DebugDraw.esf`, `DebugDrawMesh.esf` | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
+| 3 | **P5.17's indirect root arguments.** All inside `#ifdef __spirv__` with an `#else` falling back to the existing declarations, so Direct3D 12 *should* be untouched. "Should" is the word that needs the build | `RHI.esh`, `ClusterCulling.esf`, `ClusterCompaction.esf`, `DefaultMeshShader.esh`, `DebugDraw.esf`, `DebugDrawMesh.esf` | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
 | 4 | **`EE_INDIRECT_PIXEL_ENTRY_INIT`,** which is empty on Direct3D 12. Two pixel shaders call it as their first statement. Compiles, never looked at | `RHI.esh`, `MaterialShaderPBR.esh`, `DebugDrawMesh.esf` | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
 | 5 | **P5.20's `EE_INTERSTAGE_HANDLE` and `EE_PER_PRIMITIVE`.** Both `__spirv__`-gated and no-ops on Direct3D 12, and `RendererTypes.esh` is a comment only. Same "should" as row 3 | `RHI.esh`, `DebugDraw.esf`, `RendererTypes.esh` | Progress.md, P5.20 entry |
 | 6 | **Resource compiler output byte-identical to Windows.** Phase 3 criterion 4. Debug and Release on Linux already agree byte for byte across all 38 files, which rules out the float-formatting and optimisation differences and leaves only genuinely platform-dependent ones | `Esoterica.Applications.ResourceCompiler` | Progress.md, Phase 3 entry |
