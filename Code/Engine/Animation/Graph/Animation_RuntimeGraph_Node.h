@@ -146,6 +146,8 @@ namespace EE::Animation
             // Factory method, will create the node instance and set all necessary node ptrs
             // NOTE!!! Node ptrs are not guaranteed to contain a constructed node so DO NOT ACCESS them in this function!!!
             virtual void InstantiateNode( InstantiationContext const& context, InstantiationOptions options ) const = 0;
+            virtual bool RequiresPostInstantiationStage() const { return false; }
+            virtual void PostInstantiateNode( InstantiationContext const& context ) const {}
 
             // Serialization methods
             virtual void Load( Serialization::BinaryInputArchive& archive );

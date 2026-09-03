@@ -25,19 +25,26 @@ namespace EE::Render
         void Initialize( RenderPassContext const& context );
         void Shutdown( RenderSystem* pRenderSystem );
 
-        void UpdateDeviceResources( RenderSystem*                                               pRenderSystem,
-                                    TArrayView<ForwardShadingMaterialShaderPipelineBucket>      materialShaderPipelineBuckets,
-                                    TArrayView<uint32_t const>                                  clusterCapacity );
+        void UpdateDeviceResources
+        (
+            RenderSystem*                                               pRenderSystem,
+            TArrayView<ForwardShadingMaterialShaderPipelineBucket>      materialShaderPipelineBuckets,
+            TArrayView<uint32_t const>                                  clusterCapacity,
+            uint32_t                                                    numMeshInstancePages
+        );
 
-        void DrawAndFilterGlobalEnvironmentMap( TArrayView<ForwardShadingMaterialShaderPipelineBucket>      materialShaderPipelineBuckets,
-                                                TArrayView<uint32_t const>                                  clusterCapacity,
-                                                RHI::Buffer*                                                pGlobalParametersBuffer,
-                                                RHI::CommandBuffer*                                         pCommandBuffer,
-                                                RHI::Texture*                                               pRadianceRenderTarget,
-                                                RHI::Texture*                                               pIrradianceRenderTarget,
-                                                RHI::BufferHandle                                           renderViewBufferHandle,
-                                                uint32_t                                                    renderViewOffset,
-                                                TArrayView<ShaderTypes::RenderView>                         dstRenderViews ) const;
+        void DrawAndFilterGlobalEnvironmentMap
+        (
+            TArrayView<ForwardShadingMaterialShaderPipelineBucket>      materialShaderPipelineBuckets,
+            RHI::Buffer*                                                pGlobalParametersBuffer,
+            RHI::CommandBuffer*                                         pCommandBuffer,
+            RHI::Texture*                                               pRadianceRenderTarget,
+            RHI::Texture*                                               pIrradianceRenderTarget,
+            RHI::BufferHandle                                           renderViewBufferHandle,
+            uint32_t                                                    renderViewOffset
+        ) const;
+
+        void UpdateRenderViews( TArrayView<ShaderTypes::RenderView> dstRenderViews ) const;
 
         void UpdateDeviceResources_DFG( RHI::Context* pContextRHI );
         void PrecomputeDFG( RHI::CommandBuffer* pCommandBuffer );

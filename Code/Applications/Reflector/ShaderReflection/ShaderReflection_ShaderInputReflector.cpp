@@ -145,6 +145,7 @@ namespace EE::Reflection
             // HLSL load / create function
 
             stream << "#ifndef __cplusplus\n";
+            stream << "#ifndef EE_SHADER_REFLECTION_DATA_ONLY\n";
             stream << "#define " << structName.c_str() << "RootConstant(B, S) \"RootConstants( \" B \", num32BitConstants = " << structureSize / 4 << ", \" S \" ),\" \n";
             stream << structName.c_str() << " Create" << structName.c_str() << "( " << structName.c_str() << "Data data )\n";
             stream << "{\n";
@@ -200,6 +201,7 @@ namespace EE::Reflection
             stream << "    " << structName.c_str() << "Data data = shaderDataBuffer.Load<" << structName.c_str() << "Data>( offsetIn32ByteBlocks * 32 );\n";
             stream << "    return Create" << structName.c_str() << "( data );\n";
             stream << "}\n";
+            stream << "#endif\n"; // EE_SHADER_REFLECTION_DATA_ONLY
             stream << "#endif\n";
 
             // C++ setter function

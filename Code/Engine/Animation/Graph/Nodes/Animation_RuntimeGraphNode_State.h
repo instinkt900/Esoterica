@@ -9,6 +9,7 @@ namespace EE::Animation
     class EE_ENGINE_API StateNode final : public PoseNode
     {
         friend class TransitionNode;
+        friend class StateMachineNode;
 
     public:
 
@@ -18,6 +19,36 @@ namespace EE::Animation
             TransitioningIn,
             TransitioningOut,
         };
+
+        // This is a helper to set a flag in the parent state machine
+        struct TransitionFlag
+        {
+            TransitionFlag() = default;
+
+            TransitionFlag( uint64_t* pFlags, uint8_t idx ) : m_pFlags ( pFlags )
+            {
+                EE_ASSERT( idx < 64 );
+                m_flagMask = uint64_t( 1 ) << idx;
+            }
+
+            EE_FORCE_INLINE void Set( bool isSet )
+            {
+                if ( isSet )
+                {
+                    ( *m_pFlags ) |= m_flagMask;
+                }
+                else
+                {
+                    ( *m_pFlags ) &= ~m_flagMask;
+                }
+            }
+
+        private:
+
+            uint64_t*   m_pFlags = nullptr;
+            uint64_t    m_flagMask = 0;
+        };
+
         //-------------------------------------------------------------------------
 
         struct TimedEvent
@@ -72,6 +103,7 @@ namespace EE::Animation
             int16_t                                     m_layerRootMotionWeightNodeIdx = InvalidIndex;
             int16_t                                     m_layerBoneMaskNodeIdx = InvalidIndex;
             bool                                        m_isOffState = false;
+            bool                                        m_useActualElapsedTimeInStateForTimedEvents = false;
         };
 
     public:
@@ -86,10 +118,15 @@ namespace EE::Animation
         inline bool IsOffState() const { return GetDefinition<StateNode>()->m_isOffState; }
 
         // Transitions
-        inline void SetTransitioningState( TransitionState newState ) { m_transitionState = newState; }
         inline bool IsTransitioning() const { return m_transitionState != TransitionState::None; }
         inline bool IsTransitioningIn() const { return m_transitionState == TransitionState::TransitioningIn; }
         inline bool IsTransitioningOut() const { return m_transitionState == TransitionState::TransitioningOut; }
+
+        inline void SetTransitionState( TransitionState newState )
+        {
+            m_transitionState = newState;
+            m_transitionFlag.Set( IsTransitioning() );
+        }
 
     private:
 
@@ -119,6 +156,8 @@ namespace EE::Animation
         FloatValueNode*                                 m_pLayerWeightNode = nullptr;
         FloatValueNode*                                 m_pLayerRootMotionWeightNode = nullptr;
         TransitionState                                 m_transitionState = TransitionState::None;
+        TransitionFlag                                  m_transitionFlag;
+        Seconds                                         m_elapsedTime = 0.0f;
         bool                                            m_isFirstStateUpdate = false;
     };
 }

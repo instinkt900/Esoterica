@@ -287,15 +287,14 @@ namespace EE
 
             ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
 
-            if ( m_pCamera->IsManipulatingView() )
+            if ( IsManipulatingCamera() )
             {
-                m_pCamera->SetUpdateEnabled( m_isViewportFocused );
                 ImGui::SetMouseCursor( ImGuiMouseCursor_None );
                 ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
             }
-            else
+            else // Enable the camera update only if the viewport is focused and hovered (this is necessary to avoid the camera reading inputs when the viewport is not focused)
             {
-                m_pCamera->SetUpdateEnabled( m_isViewportFocused && m_isViewportHovered );
+                m_pCamera->SetEnabled( m_isViewportFocused && m_isViewportHovered );
             }
         }
     }
@@ -1011,7 +1010,7 @@ namespace EE
                     InlineString payloadStr = (char*) pPayload->Data;
 
                     ResourceID const resourceID( payloadStr.c_str() );
-                    if ( resourceID.IsValid() && m_pToolsContext->m_pFileRegistry->DoesFileExist( resourceID ) )
+                    if ( resourceID.IsValid() && m_pToolsContext->m_pDataFileSystem->DoesFileExist( resourceID ) )
                     {
                         // Unproject mouse into viewport
                         Float2 const mouseViewportPos = ImGui::GetMousePos();
@@ -1122,6 +1121,11 @@ namespace EE
         m_pCamera->ResetMoveSpeed();
 
         pCameraSystem->EnableToolsCamera();
+    }
+
+    bool EditorTool::IsManipulatingCamera() const
+    {
+        return m_pCamera->IsManipulating();
     }
 
     void EditorTool::ResetCameraView()
@@ -1839,7 +1843,7 @@ namespace EE
         }
 
         // Don't try to open files that dont exist
-        if ( !pToolsContext->m_pFileRegistry->DoesFileExist( path ) )
+        if ( !pToolsContext->m_pDataFileSystem->DoesFileExist( path ) )
         {
             return nullptr;
         }

@@ -162,6 +162,8 @@ namespace EE::Render
 
         for ( MeshLODSettings const& lod : meshGroup.m_lodSettings )
         {
+            uint32_t const lodGeometryBaseIndex = uint32_t( mesh.m_geometry.size() );
+
             // Do we have an explicit LOD mesh specified, if so, use that
             DataPath lodMeshDataPath;
             if ( !lod.m_filenameSuffix.empty() )
@@ -322,7 +324,7 @@ namespace EE::Render
                         continue;
                     }
 
-                    Geometry const& geometry = mesh.m_geometry[geometryIndex];
+                    Geometry const& geometry = mesh.m_geometry[lodGeometryBaseIndex + geometryIndex];
                     if ( geometry.m_clusterVertices.empty() || geometry.m_clusterTriangles.empty() )
                     {
                         continue;
@@ -331,7 +333,7 @@ namespace EE::Render
                     Mesh::Submesh submesh = {};
                     submesh.m_ID = importedSubmesh.m_ID;
                     submesh.m_materialNameID = importedSubmesh.m_materialID;
-                    submesh.m_geometryIdx = geometryIndex;
+                    submesh.m_geometryIdx = lodGeometryBaseIndex + geometryIndex;
                     submesh.m_lodMask = uint8_t( 1 ) << uint8_t( mesh.m_geometryLODDistance.size() );
 
                     mesh.m_submeshes.emplace_back( eastl::move( submesh ) );

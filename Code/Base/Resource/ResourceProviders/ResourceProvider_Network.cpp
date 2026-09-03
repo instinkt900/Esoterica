@@ -10,6 +10,23 @@
 #if EE_DEVELOPMENT_TOOLS
 namespace EE::Resource
 {
+    NetworkResourceProvider::NetworkResourceProvider( ResourceSettings const& settings, TaskSystem& taskSystem )
+        : ResourceProvider( settings ), m_taskSystem( taskSystem )
+        , m_deserializationTask( [this] ( TaskSetPartition range, uint32_t threadnum ) { DeserializeReceivedMessages(); } )
+    {}
+
+    NetworkResourceProvider::~NetworkResourceProvider()
+    {
+        m_taskSystem.WaitForTask( &m_deserializationTask );
+
+        // Flush deserialization queue
+        Network::Message* pMessage = nullptr;
+        while ( m_unserializedMessages.try_dequeue( pMessage ) )
+        {
+            EE::Delete( pMessage );
+        }
+    }
+
     bool NetworkResourceProvider::IsReady() const
     {
         return m_networkClient.IsConnected();
@@ -40,14 +57,13 @@ namespace EE::Resource
     {
         EE_ASSERT( pRequest != nullptr && pRequest->IsValid() && pRequest->GetLoadingStatus() == LoadingStatus::Loading );
 
+        Threading::ScopeLock const sl( m_requestModificationMutex );
+
         #if EE_DEVELOPMENT_TOOLS
         auto foundIter = VectorFind( m_sentRequests, pRequest->GetResourceID() );
         EE_ASSERT( foundIter == m_sentRequests.end() );
         #endif
 
-        //-------------------------------------------------------------------------
-
-        Threading::ScopeLock const sl( m_requestModificationMutex );
         m_pendingRequests.emplace_back( pRequest );
     }
 
@@ -73,57 +89,33 @@ namespace EE::Resource
         m_externallyUpdatedResources.clear();
         #endif
 
-        // Check for any network messages
+        // Update network client
         //-------------------------------------------------------------------------
 
-        auto MessageHandler = [this] ( Network::Message const& message )
-        {
-            switch ( (NetworkMessageID) message.GetMessageID() )
-            {
-                case NetworkMessageID::ResourceRequestHeartbeat:
-                {
-                    NetworkResourceResponse response = message.GetPayload<NetworkResourceResponse>();
-                    EE_ASSERT( !response.m_results.empty() );
-                    m_serverHeartbeats.insert( m_serverHeartbeats.end(), response.m_results.begin(), response.m_results.end() );
-                }
-                break;
-
-                case NetworkMessageID::ResourceRequestComplete:
-                {
-                    NetworkResourceResponse response = message.GetPayload<NetworkResourceResponse>();
-                    EE_ASSERT( !response.m_results.empty() );
-                    m_serverResults.insert( m_serverResults.end(), response.m_results.begin(), response.m_results.end() );
-                }
-                break;
-
-                case NetworkMessageID::ResourceUpdated:
-                {
-                    #if EE_DEVELOPMENT_TOOLS
-                    NetworkResourceResponse response = message.GetPayload<NetworkResourceResponse>();
-                    EE_ASSERT( !response.m_results.empty() );
-
-                    for ( auto const& result : response.m_results )
-                    {
-                        m_externallyUpdatedResources.emplace_back( result.m_resourceID );
-                    }
-                    #endif
-                }
-                break;
-
-                default:
-                break;
-            };
-        };
-
-        m_networkClient.Update( MessageHandler );
+        m_networkClient.UpdateAndTransferMessageOwnership( [this] ( Network::Message* pMessage ) { m_unserializedMessages.enqueue( pMessage ); } );
 
         if ( !m_networkClient.IsConnected() )
         {
-            EE_ASSERT( "LOST CONNECTION!!" );
+            // Not yet connected is not the same as lost. EnsureResourceServerIsRunning starts the
+            // Resource Server and returns immediately, and the server needs a second or two to
+            // finish its own initialisation and complete the websocket handshake. ixwebsocket
+            // retries on its own meanwhile - a refused connection raises WebSocketMessageType::Error,
+            // which leaves the status at Connecting - so there is nothing to do but wait a frame.
+            //
+            // Without this the first frame after startup halts every time the server was not
+            // already listening. Before this fork's upstream merge the halt was
+            // EE_ASSERT( "LOST CONNECTION!!" ), which asserts on a string literal and so never
+            // fired; making it a real halt exposed the wait.
+            if ( m_networkClient.IsConnecting() )
+            {
+                return;
+            }
+
+            EE_TRACE_HALT( "LOST CONNECTION!!" );
             return;
         }
 
-        // Lock all requests
+        // Lock mutex
         //-------------------------------------------------------------------------
 
         Threading::ScopeLock const sl( m_requestModificationMutex );
@@ -220,6 +212,24 @@ namespace EE::Resource
             }
         }
 
+        // Deserialization task
+        //-------------------------------------------------------------------------
+
+        if ( m_deserializationTask.GetIsComplete() )
+        {
+            m_serverResults.insert( m_serverResults.end(), m_deserializedServerResults.begin(), m_deserializedServerResults.end() );
+            m_deserializedServerResults.clear();
+
+            m_serverHeartbeats.insert( m_serverHeartbeats.end(), m_deserializedServerHeartbeats.begin(), m_deserializedServerHeartbeats.end() );
+            m_deserializedServerHeartbeats.clear();
+
+            m_externallyUpdatedResources.insert( m_externallyUpdatedResources.end(), m_deserializedExternalResourceUpdates.begin(), m_deserializedExternalResourceUpdates.end() );
+            m_deserializedExternalResourceUpdates.clear();
+
+            // Kick off new task
+            m_taskSystem.ScheduleTask( &m_deserializationTask );
+        }
+
         // Process all server results
         //-------------------------------------------------------------------------
 
@@ -243,7 +253,7 @@ namespace EE::Resource
             }
 
             // Trigger tools notification on failure
-            if( result.m_filePath.empty() )
+            if ( result.m_filePath.empty() )
             {
                 ImGuiX::NotifyError( "%s failed to Compile!\n\nLog: %s", result.m_resourceID.c_str(), result.m_log.c_str() );
             }
@@ -256,6 +266,59 @@ namespace EE::Resource
         }
 
         m_serverResults.clear();
+    }
+
+    void NetworkResourceProvider::DeserializeReceivedMessages()
+    {
+        Timer<PlatformClock> timer;
+        Network::Message* pMessage = nullptr;
+        while ( m_unserializedMessages.try_dequeue( pMessage ) )
+        {
+            EE_ASSERT( pMessage != nullptr );
+
+            switch ( (NetworkMessageID) pMessage->GetMessageID() )
+            {
+                case NetworkMessageID::ResourceRequestHeartbeat:
+                {
+                    NetworkResourceResponse response = pMessage->GetPayload<NetworkResourceResponse>();
+                    EE_ASSERT( !response.m_results.empty() );
+                    m_deserializedServerHeartbeats.insert( m_deserializedServerHeartbeats.end(), response.m_results.begin(), response.m_results.end() );
+                }
+                break;
+
+                case NetworkMessageID::ResourceRequestComplete:
+                {
+                    NetworkResourceResponse response = pMessage->GetPayload<NetworkResourceResponse>();
+                    EE_ASSERT( !response.m_results.empty() );
+                    m_deserializedServerResults.insert( m_deserializedServerResults.end(), response.m_results.begin(), response.m_results.end() );
+                }
+                break;
+
+                case NetworkMessageID::ResourceUpdated:
+                {
+                    NetworkResourceResponse response = pMessage->GetPayload<NetworkResourceResponse>();
+                    EE_ASSERT( !response.m_results.empty() );
+
+                    for ( auto const& result : response.m_results )
+                    {
+                        m_deserializedExternalResourceUpdates.emplace_back( result.m_resourceID );
+                    }
+                }
+                break;
+
+                default:
+                break;
+            };
+
+            EE::Delete( pMessage );
+
+            //-------------------------------------------------------------------------
+
+            if ( timer.GetElapsedTimeMilliseconds() > 16 )
+            {
+                return;
+            }
+        }
     }
 }
 #endif

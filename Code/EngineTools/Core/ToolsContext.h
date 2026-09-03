@@ -14,7 +14,7 @@ namespace EE
     class EntityWorldManager;
     class SystemRegistry;
     class DataPath;
-    class FileRegistry;
+    class DataFileSystem;
     class DialogManager;
     namespace Resource { class ResourceSystem; }
     namespace TypeSystem { class TypeRegistry; }
@@ -40,7 +40,7 @@ namespace EE
     public:
 
         virtual ~ToolsContext() = default;
-        inline bool IsValid() const { return m_pTypeRegistry != nullptr && m_pFileRegistry != nullptr && m_pSystemRegistry != nullptr; }
+        inline bool IsValid() const { return m_pTypeRegistry != nullptr && m_pDataFileSystem != nullptr && m_pSystemRegistry != nullptr; }
         FileSystem::Path const& GetSourceDataDirectory() const;
         FileSystem::Path const& GetCompiledResourceDirectory() const;
 
@@ -90,7 +90,7 @@ namespace EE
 
         TypeSystem::TypeRegistry const*                     m_pTypeRegistry = nullptr;
         SystemRegistry const*                               m_pSystemRegistry = nullptr;
-        FileRegistry const*                                 m_pFileRegistry = nullptr;
+        DataFileSystem const*                               m_pDataFileSystem = nullptr;
         DialogManager*                                      m_pDialogManager = nullptr;
         ImGuiX::ImageCache*                                 m_pImageCache = nullptr;
     };

@@ -348,8 +348,8 @@ the next review has a baseline to compare against.
 - **Do not fix platform-neutral upstream bugs found in this phase.** Record them. Conventions
   rule 3. The Test Compile panel overlap in `ResourceServerUI.cpp:881` is the current example.
 - **Do not merge `upstream/main` as part of P8.7.** The review simulates a merge on a scratch
-  branch and deletes it. Merging is on request only; see
-  [01-UpstreamMerges.md](../01-UpstreamMerges.md#when-to-merge).
+  branch and deletes it. The real merge is [Phase 9](Phase9-UpstreamMerge.md); merging is on
+  request only, see [01-UpstreamMerges.md](../01-UpstreamMerges.md#when-to-merge).
 - **Do not open a PR against upstream**, whatever P8.7 concludes. The review produces a
   recommendation, not an approach to upstream.
 - **Do not treat the sanitizer findings as this phase's problem.** Record them; fix the ones that
@@ -365,6 +365,11 @@ of the risk in this phase; P8.3 to P8.6 are known, scoped and recorded, and P8.7
 navmesh generation, packaging, a Vulkan backend on Windows, and ARM64. None of them belong here,
 and P8.7 should say so explicitly rather than leave a reader wondering whether they were forgotten.
 
-**When this phase closes, the port is done.** There is no Phase 9. If the work does not fit one of
-the seven tasks above, it is either out of scope or a new phase, and either one is a decision to
-record rather than to make quietly.
+**When this phase closes, the porting is done.** If the work does not fit one of the seven tasks
+above, it is either out of scope or a new phase, and either one is a decision to record rather than
+to make quietly.
+
+**There is now a [Phase 9](Phase9-UpstreamMerge.md)**, added 2026-09-03 when upstream pushed a
+281-file commit. It is not porting work - it is the first test of the merge discipline this whole
+port was arranged around. **It does not block anything here and nothing here blocks it**, P8.1
+included; see [What this phase does not settle](Phase9-UpstreamMerge.md#what-this-phase-does-not-settle).

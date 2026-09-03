@@ -931,6 +931,7 @@ namespace EE::Reflection
         outputFileStream << "        virtual bool AreAllPropertyValuesEqual( IReflectedType const* pTypeInstance, IReflectedType const* pOtherTypeInstance ) const override { EE_HALT(); return false; }\n";
         outputFileStream << "        virtual bool IsPropertyValueEqual( IReflectedType const* pTypeInstance, IReflectedType const* pOtherTypeInstance, uint64_t propertyID, int32_t arrayIdx = InvalidIndex ) const override { EE_HALT(); return false; }\n";
         outputFileStream << "        virtual void ResetToDefault( IReflectedType* pTypeInstance, uint64_t propertyID ) const override { EE_HALT(); }\n";
+        outputFileStream << "        virtual void GetReferencedPaths( IReflectedType const* pType, TVector<DataPath>& outReferencedPaths ) const override { EE_HALT(); }\n";
 
         //-------------------------------------------------------------------------
 
@@ -1004,6 +1005,7 @@ namespace EE::Reflection
         GenerateTypeInfoAreAllPropertiesEqualMethod( outputFileStream, typeInfo );
         GenerateTypeInfoIsPropertyEqualMethod( outputFileStream, typeInfo );
         GenerateTypeInfoSetToDefaultValueMethod( outputFileStream, typeInfo );
+        GenerateTypeInfoGetReferencedPathsMethod( outputFileStream, typeInfo );
 
         outputFileStream << "        };\n";
         outputFileStream << "    }\n";
@@ -1847,7 +1849,7 @@ namespace EE::Reflection
             }
         }
 
-        file << "            }\n";
+        file << "            }\n\n";
     }
 
     void TypeInfoCodeGenerator::GenerateTypeInfoExpectedResourceTypeMethod( std::stringstream& file, ReflectedType const& type )
@@ -2355,7 +2357,7 @@ namespace EE::Reflection
 
         if ( type.HasResourcePtrOrStructProperties() )
         {
-            file << "                auto pActualType = reinterpret_cast<" << type.m_namespace.c_str() << type.m_name.c_str() << " const*>( pType );\n";
+            file << "                auto pActualType = reinterpret_cast<" << type.m_namespace.c_str() << type.m_name.c_str() << " const*>( pType );\n\n";
 
             for ( auto& propertyDesc : type.m_properties )
             {
@@ -2374,7 +2376,7 @@ namespace EE::Reflection
                             file << "                {\n";
                             file << "                    if ( resourcePtr.IsSet() )\n";
                             file << "                    {\n";
-                            file << "                        outReferencedResources.emplace_back( resourcePtr.GetResourceID() );\n";
+                            file << "                        VectorEmplaceBackUnique( outReferencedResources, resourcePtr.GetResourceID() );\n";
                             file << "                    }\n";
                             file << "                }\n";
                         }
@@ -2384,7 +2386,7 @@ namespace EE::Reflection
                             {
                                 file << "                if ( pActualType->" << propertyDesc.m_name.c_str() << "[" << i << "].IsSet() )\n";
                                 file << "                {\n";
-                                file << "                    outReferencedResources.emplace_back( pActualType->" << propertyDesc.m_name.c_str() << "[" << i << "].GetResourceID() );\n";
+                                file << "                    VectorEmplaceBackUnique( outReferencedResources, pActualType->" << propertyDesc.m_name.c_str() << "[" << i << "].GetResourceID() );\n";
                                 file << "                }\n";
                             }
                         }
@@ -2393,7 +2395,7 @@ namespace EE::Reflection
                     {
                         file << "                if ( pActualType->" << propertyDesc.m_name.c_str() << ".IsSet() )\n";
                         file << "                {\n";
-                        file << "                    outReferencedResources.emplace_back( pActualType->" << propertyDesc.m_name.c_str() << ".GetResourceID() );\n";
+                        file << "                    VectorEmplaceBackUnique( outReferencedResources, pActualType->" << propertyDesc.m_name.c_str() << ".GetResourceID() );\n";
                         file << "                }\n";
                     }
 
@@ -2440,6 +2442,145 @@ namespace EE::Reflection
 
                     file << "\n";
                 }
+            }
+        }
+
+        file << "            }\n\n";
+    }
+
+    void TypeInfoCodeGenerator::GenerateTypeInfoGetReferencedPathsMethod( std::stringstream& file, ReflectedType const& type )
+    {
+        file << "            virtual void GetReferencedPaths( IReflectedType const* pType, TVector<DataPath>& outReferencedPaths ) const override final\n";
+        file << "            {\n";
+        file << "                auto pActualType = reinterpret_cast<" << type.m_namespace.c_str() << type.m_name.c_str() << " const*>( pType );\n\n";
+
+        for ( auto& propertyDesc : type.m_properties )
+        {
+            if ( propertyDesc.m_typeID == TypeSystem::CoreTypeID::TResourcePtr || propertyDesc.m_typeID == TypeSystem::CoreTypeID::ResourcePtr )
+            {
+                if ( propertyDesc.m_isDevOnly )
+                {
+                    file << "                #if EE_DEVELOPMENT_TOOLS\n";
+                }
+
+                if ( propertyDesc.IsArrayProperty() )
+                {
+                    if ( propertyDesc.IsDynamicArrayProperty() )
+                    {
+                        file << "                for ( auto const& resourcePtr : pActualType->" << propertyDesc.m_name.c_str() << " )\n";
+                        file << "                {\n";
+                        file << "                    if ( resourcePtr.IsSet() )\n";
+                        file << "                    {\n";
+                        file << "                        VectorEmplaceBackUnique( outReferencedPaths, resourcePtr.GetResourceID().GetDataPath() );\n";
+                        file << "                    }\n";
+                        file << "                }\n";
+                    }
+                    else // Static array
+                    {
+                        for ( auto i = 0; i < propertyDesc.m_arraySize; i++ )
+                        {
+                            file << "                if ( pActualType->" << propertyDesc.m_name.c_str() << "[" << i << "].IsSet() )\n";
+                            file << "                {\n";
+                            file << "                    VectorEmplaceBackUnique( outReferencedPaths, pActualType->" << propertyDesc.m_name.c_str() << "[" << i << "].GetResourceID().GetDataPath() );\n";
+                            file << "                }\n";
+                        }
+                    }
+                }
+                else
+                {
+                    file << "                if ( pActualType->" << propertyDesc.m_name.c_str() << ".IsSet() )\n";
+                    file << "                {\n";
+                    file << "                    VectorEmplaceBackUnique( outReferencedPaths, pActualType->" << propertyDesc.m_name.c_str() << ".GetResourceID().GetDataPath() );\n";
+                    file << "                }\n";
+                }
+
+                if ( propertyDesc.m_isDevOnly )
+                {
+                    file << "                #endif\n";
+                }
+
+                file << "\n";
+            }
+            else if ( propertyDesc.m_typeID == TypeSystem::CoreTypeID::TDataFilePath || propertyDesc.m_typeID == TypeSystem::CoreTypeID::DataPath )
+            {
+                if ( propertyDesc.m_isDevOnly )
+                {
+                    file << "                #if EE_DEVELOPMENT_TOOLS\n";
+                }
+
+                if ( propertyDesc.IsArrayProperty() )
+                {
+                    if ( propertyDesc.IsDynamicArrayProperty() )
+                    {
+                        file << "                for ( auto const& path : pActualType->" << propertyDesc.m_name.c_str() << " )\n";
+                        file << "                {\n";
+                        file << "                    if ( path.IsValid() )\n";
+                        file << "                    {\n";
+                        file << "                        VectorEmplaceBackUnique( outReferencedPaths, (DataPath const&) path );\n";
+                        file << "                    }\n";
+                        file << "                }\n";
+                    }
+                    else // Static array
+                    {
+                        for ( auto i = 0; i < propertyDesc.m_arraySize; i++ )
+                        {
+                            file << "                if ( pActualType->" << propertyDesc.m_name.c_str() << "[" << i << "].IsValid() )\n";
+                            file << "                {\n";
+                            file << "                    VectorEmplaceBackUnique( outReferencedPaths, (DataPath const&) pActualType->" << propertyDesc.m_name.c_str() << "[" << i << "] );\n";
+                            file << "                }\n";
+                        }
+                    }
+                }
+                else
+                {
+                    file << "                if ( pActualType->" << propertyDesc.m_name.c_str() << ".IsValid() )\n";
+                    file << "                {\n";
+                    file << "                    VectorEmplaceBackUnique( outReferencedPaths, (DataPath const&) pActualType->" << propertyDesc.m_name.c_str() << " );\n";
+                    file << "                }\n";
+                }
+
+                if ( propertyDesc.m_isDevOnly )
+                {
+                    file << "                #endif\n";
+                }
+
+                file << "\n";
+            }
+            else if ( !IsCoreType( propertyDesc.m_typeID ) && !propertyDesc.IsEnumProperty() && !propertyDesc.IsBitFlagsProperty() )
+            {
+                if ( propertyDesc.m_isDevOnly )
+                {
+                    file << "                #if EE_DEVELOPMENT_TOOLS\n";
+                }
+
+                if ( propertyDesc.IsArrayProperty() )
+                {
+                    if ( propertyDesc.IsDynamicArrayProperty() )
+                    {
+                        file << "                for ( auto& propertyValue : pActualType->" << propertyDesc.m_name.c_str() << " )\n";
+                        file << "                {\n";
+                        file << "                    " << propertyDesc.m_typeName.c_str() << "::s_pTypeInfo->GetReferencedPaths( &propertyValue, outReferencedPaths );\n";
+                        file << "                }\n";
+                    }
+                    else // Static array
+                    {
+                        for ( auto i = 0; i < propertyDesc.m_arraySize; i++ )
+                        {
+                            file << "                " << propertyDesc.m_typeName.c_str() << "::s_pTypeInfo->GetReferencedPaths( &pActualType->" << propertyDesc.m_name.c_str() << "[" << i << "], outReferencedPaths ); \n";
+                        }
+                    }
+                }
+                else
+                {
+                    file << "                " << propertyDesc.m_typeName.c_str() << "::s_pTypeInfo->GetReferencedPaths( &pActualType->" << propertyDesc.m_name.c_str() << ", outReferencedPaths );\n";
+                }
+
+                if ( propertyDesc.m_isDevOnly )
+                {
+                    file << "                #endif\n";
+                }
+
+                file << "\n";
             }
         }
 

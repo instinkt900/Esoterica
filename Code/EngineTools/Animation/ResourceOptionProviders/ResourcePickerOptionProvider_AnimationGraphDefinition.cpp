@@ -1,7 +1,7 @@
 #include "EngineTools/Widgets/Pickers/ResourcePickers.h"
 #include "EngineTools/Animation/ResourceDescriptors/ResourceDescriptor_AnimationGraph.h"
 #include "EngineTools/Animation/ToolsGraph/Animation_ToolsGraph_Variations.h"
-#include "EngineTools/FileSystem/FileRegistry.h"
+#include "EngineTools/FileSystem/DataFileSystem.h"
 #include "EngineTools/Core/ToolsContext.h"
 
 //-------------------------------------------------------------------------
@@ -22,7 +22,7 @@ namespace EE::Animation
         {
             FileSystem::Extension const resourceTypeIDString = GraphDefinition::GetStaticResourceTypeID().ToString();
 
-            TVector<FileRegistry::FileInfo const*> graphResources = m_toolsContext.m_pFileRegistry->GetAllResourceFileEntries( GraphDefinition::GetStaticResourceTypeID() );
+            TVector<DataFileSystem::FileInfo const*> graphResources = m_toolsContext.m_pDataFileSystem->GetAllResourceFileEntries( GraphDefinition::GetStaticResourceTypeID() );
             for ( auto const& fileEntry : graphResources )
             {
                 GraphResourceDescriptor const* pGraphDescriptor = Cast<GraphResourceDescriptor>( fileEntry->m_pDataFile );
@@ -47,7 +47,7 @@ namespace EE::Animation
                 variationID = Variation::s_defaultVariationID;
             }
 
-            FileRegistry::FileInfo const* pGraphFileEntry = m_toolsContext.m_pFileRegistry->GetFileEntry( graphResourceID );
+            DataFileSystem::FileInfo const* pGraphFileEntry = m_toolsContext.m_pDataFileSystem->GetFileEntry( graphResourceID );
             if ( pGraphFileEntry == nullptr )
             {
                 return false;

@@ -59,7 +59,7 @@ namespace EE
     //-------------------------------------------------------------------------
 
     EngineApplication::EngineApplication( HINSTANCE hInstance )
-        : Win32Application( hInstance, "Esoterica Engine", IDI_ENGINE_ICON, IDB_SPLASHSCREEN )
+        : Win32Application( hInstance, "Esoterica Engine", IDI_ENGINE_ICON )
         , m_engine( TFunction<bool( EE::String const& error )>( [this] ( String const& error )-> bool { return FatalError( error ); } ) )
     {}
 

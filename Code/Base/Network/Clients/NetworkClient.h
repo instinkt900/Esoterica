@@ -32,7 +32,13 @@ namespace EE::Network
 
         virtual bool Start( char const* pAddress, uint16_t port ) = 0;
         virtual void Stop() = 0;
+
+        // Pump the message queue and process all received messages (network client keeps ownership of messages)
         void Update( TFunction<void( Message const& )> const& handlerFunc );
+
+        // Pump the message queue and process all received messages (network client transfers ownership of messages)
+        // Note: Processing code is now responsible for deleting the messages
+        void UpdateAndTransferMessageOwnership( TFunction<void( Message* )> const& handlerFunc );
 
         // Connection
         //-------------------------------------------------------------------------

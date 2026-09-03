@@ -7,9 +7,21 @@
 
 namespace EE::Animation
 {
-    class TargetSelectorToolsNode : public FlowToolsNode
+    class TargetSelectorToolsNode : public VariationDataToolsNode
     {
         EE_REFLECT_TYPE( TargetSelectorToolsNode );
+
+    public:
+
+        struct Data final : public VariationDataToolsNode::Data
+        {
+            EE_REFLECT_TYPE( Data );
+
+        public:
+
+            EE_REFLECT( CustomEditor = "AnimGraph_ID" );
+            StringID	            m_alignmentBoneID;
+        };
 
     public:
 
@@ -35,8 +47,10 @@ namespace EE::Animation
 
     protected:
 
+        virtual TypeSystem::TypeInfo const* GetVariationDataTypeInfo() const override { return TargetSelectorToolsNode::Data::s_pTypeInfo; }
         virtual void PostPropertyEdit( TypeSystem::PropertyInfo const* pPropertyEdited ) override;
         virtual void RefreshDynamicPins() override;
+        virtual void DrawInfoText( NodeGraph::DrawContext const& ctx, NodeGraph::UserContext* pUserContext ) override;
 
     private:
 

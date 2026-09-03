@@ -44,7 +44,8 @@ namespace EE::Render
             return;
         }
 
-        m_meshInstanceRootProxy.WriteRootTransform( GetWorldTransform(), GetWorldNonUniformScale() );
+        AABB const worldAABB = GetWorldBounds().GetAABB();
+        m_meshInstanceRootProxy.WriteRootTransform( GetWorldTransform(), GetWorldNonUniformScale(), worldAABB.m_center.ToFloat3(), worldAABB.m_halfExtents.ToFloat3() );
     }
 
     void StaticMeshComponent::OnNonUniformScaleChanged()
@@ -54,7 +55,8 @@ namespace EE::Render
             return;
         }
 
-        m_meshInstanceRootProxy.WriteRootTransform( GetWorldTransform(), GetWorldNonUniformScale() );
+        AABB const worldAABB = GetWorldBounds().GetAABB();
+        m_meshInstanceRootProxy.WriteRootTransform( GetWorldTransform(), GetWorldNonUniformScale(), worldAABB.m_center.ToFloat3(), worldAABB.m_halfExtents.ToFloat3() );
     }
 
     void StaticMeshComponent::OnRenderInstanceDataUpdated()
@@ -77,7 +79,8 @@ namespace EE::Render
             GetResolvedMaterials()
         );
 
-        m_meshInstanceRootProxy.WriteRootTransform( GetWorldTransform(), GetWorldNonUniformScale() );
+        AABB const worldAABB = GetWorldBounds().GetAABB();
+        m_meshInstanceRootProxy.WriteRootTransform( GetWorldTransform(), GetWorldNonUniformScale(), worldAABB.m_center.ToFloat3(), worldAABB.m_halfExtents.ToFloat3() );
         m_meshInstanceProxy.WriteLocalTransforms( GetMesh()->GetSubmeshLocalTransforms() );
     }
 

@@ -32,16 +32,23 @@ namespace EE::Render
         void Initialize( RenderPassContext const& context );
         void Shutdown( RenderSystem* pRenderSystem );
 
-        void UpdateDeviceResources( RenderSystem* pRenderSystem, TArrayView<uint32_t const> clusterCapacity );
+        void UpdateDeviceResources( RenderSystem* pRenderSystem, TArrayView<uint32_t const> clusterCapacity, uint32_t numMeshInstancePages );
 
-        void DrawShadowCascades( TArrayView<ForwardShadingMaterialShaderPipelineBucket const>   materialShaderPipelineBuckets,
-                                 TArrayView<uint32_t const>                                     clusterCapacity,
-                                 RenderViewport const*                                          pRenderViewport,
-                                 Vector                                                         lightDirection,
-                                 DeviceResourceStates&                                          resourceStates,
-                                 RHI::CommandBuffer*                                            pCommandBuffer,
-                                 ShaderTypes::CascadedShadow*                                   pOutCascadedShadow_WriteCombined,
-                                 TArrayView<ShaderTypes::RenderView>                            dstRenderViews_WriteCombined );
+        void UpdateRenderViews
+        (
+            RenderViewport const*                                          pRenderViewport,
+            Vector                                                         lightDirection,
+            ShaderTypes::CascadedShadow*                                   pOutCascadedShadow_WriteCombined,
+            TArrayView<ShaderTypes::RenderView>                            dstRenderViews_WriteCombined
+        ) const;
+
+        void DrawShadowCascades
+        (
+            TArrayView<ForwardShadingMaterialShaderPipelineBucket const>   materialShaderPipelineBuckets,
+            RenderViewport const*                                          pRenderViewport,
+            DeviceResourceStates&                                          resourceStates,
+            RHI::CommandBuffer*                                            pCommandBuffer
+        );
 
     public:
 

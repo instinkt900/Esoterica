@@ -464,6 +464,7 @@ project Esoterica.Engine.Runtime
   src Render/DebugMesh/DebugMesh.cpp
   src Render/DebugMesh/DebugMeshRegistry.cpp
   src Render/Device/DeviceAppendBuffer.cpp
+  src Render/Device/DeviceRadixSort.cpp
   src Render/Device/DeviceRenderView.cpp
   src Render/Device/DeviceRenderWorld.cpp
   src Render/Device/DeviceResourceState.cpp
@@ -642,7 +643,7 @@ project Esoterica.Engine.Tools
   src Entity/ResourceDescriptors/ResourceDescriptor_EntityCollection.cpp
   src Entity/ResourceDescriptors/ResourceDescriptor_EntityMap.cpp
   src Entity/ResourceEditors/ResourceEditor_EntityCollectionEditor.cpp
-  src FileSystem/FileRegistry.cpp
+  src FileSystem/DataFileSystem.cpp
   src FileSystem/FileSystemWatcher.cpp
   src Game/ResourceCompilers/ResourceCompiler_Hitbox.cpp
   src Game/ResourceDescriptors/ResourceDescriptor_Hitbox.cpp

@@ -1,104 +1,32 @@
 # Material Rendering Pipeline
 
-The material rendering pipeline is a fully GPU-driven path for opaque and transparent triangle meshes. Frustum culling, occlusion culling, cluster culling, and indirect draw argument generation all run in compute shaders — there is no per-instance work on the CPU.
+The material rendering pipeline is a fully GPU-driven path for opaque and transparent triangle meshes. Frustum culling, cluster compaction, cluster culling, and indirect draw argument generation all run in compute shaders — there is no per-instance work on the CPU.
 
 The pipeline produces ready-to-use indirect draw argument buffers for each shader and render view.
 
-```mermaid
-stateDiagram-v2
-    classDef computeDispatch font-weight: bold, stroke-width: 2px, stroke: lightgray;
-    classDef meshDispatch font-weight: bold, stroke-width: 2px, stroke: lightgray;
-    classDef forEach font-style: italic;
-
-    ForEachRenderView1: For each render view
-    ForEachRenderView2: For each render view
-
-    ForEachRenderView1:::forEach
-    ForEachRenderView2:::forEach
-
-    AllRenderViews1: AllRenderViews[...]
-    AllRenderViews2: AllRenderViews[...]
-
-    [*] --> FrameStart
-
-    InstanceCulling:::computeDispatch
-    ClusterCulling:::computeDispatch
-    BucketResolve:::computeDispatch
-
-    CascadedShadowPass:::meshDispatch
-    ForwardShadingPass:::meshDispatch
-    OtherMeshRenderPasses[...]:::meshDispatch
-    OtherRenderPasses:::meshDispatch
-
-    Viewport                        --> RenderView : VP matrix, camera parameters, etc
-    BucketShaderA                   --> RenderView
-    BucketShaderB                   --> RenderView
-    BucketShaderC                   --> RenderView
-
-    RenderView                      --> AllRenderViews1 : MainCameraView, ShadowCascadeViews[...], other views
-
-    FrameStart                      --> InstanceCulling
-    InstanceCulling                 --> ClusterCulling : IndirectArguments, MeshClusters
-
-    AllRenderViews1                 --> InstanceCulling
-    AllRenderViews1                 --> ClusterCulling
-    AllRenderViews1                 --> BucketResolve
-
-    ClusterCulling                  --> ForEachRenderView1
-
-    ForEachRenderView1              --> VisibleClustersShaderA : uint2
-    ForEachRenderView1              --> VisibleClustersShaderB : uint2
-    ForEachRenderView1              --> VisibleClustersShaderC : uint2
-
-    VisibleClustersShaderA          --> BucketResolve
-    VisibleClustersShaderB          --> BucketResolve
-    VisibleClustersShaderC          --> BucketResolve
-
-    BucketResolve                   --> ForEachRenderView2
-    ForEachRenderView2              --> DrawArgumentsShaderA : IndirectArguments
-    ForEachRenderView2              --> DrawArgumentsShaderB : IndirectArguments
-    ForEachRenderView2              --> DrawArgumentsShaderC : IndirectArguments
-
-    DrawArgumentsShaderA            --> AllRenderViews2
-    DrawArgumentsShaderB            --> AllRenderViews2
-    DrawArgumentsShaderC            --> AllRenderViews2
-
-    AllRenderViews2                 --> CascadedShadowPass : ShadowCascadeViews[...]
-    AllRenderViews2                 --> ForwardShadingPass : MainCameraView
-
-    AllRenderViews2                 --> OtherMeshRenderPasses[...] : other views
-
-    ForwardShadingPass              --> FrameEnd
-    CascadedShadowPass              --> ForwardShadingPass : shadow render targets
-    CascadedShadowPass              --> FrameEnd
-    OtherMeshRenderPasses[...]      --> FrameEnd
-
-    OtherRenderPasses               --> FrameEnd : PostProcessing, custom rendering, etc
-
-    FrameEnd --> [*]
-```
-
 ## Render Views
 
-We create a render view for the main camera, each shadow cascade, and each reflection probe. Directional lights create 4 render views each for Cascaded Shadow Mapping.
+We create a render view for the main camera, each shadow cascade, and each environment map face. Directional lights create 4 render views each for Cascaded Shadow Mapping.
 
-Each view allocates per-shader buffers for visible cluster indices. The cluster culling pass fills these with `uint2` per visible cluster — cluster index and instance index.
+Each render view maps to one bit of a 64-bit view mask. The culling passes produce one indirect draw argument buffer per shader, per render view and sub-bucket, through a shared compaction pass that batches clusters into per-shader record chunks and mesh dispatch arguments.
 
 ## Culling Passes
 
-**Instance culling** is a coarse pass that runs once for all views. If an instance is visible in any view we consider it visible in all views. This pass reduces the cluster count that feeds into cluster culling.
+Culling is done using 3 indirect compute dispatches:
 
-**Cluster culling** runs per-view. It performs frustum and backface culling on each cluster that passed instance culling, followed by fine-grained per-triangle culling on the survivors.
+**Instance culling** runs one 64-thread group per mesh instance page, tests each instance against every render view, and writes visible instances as compacted records into a per-page visibility buffer. Each page emits one indirect argument that drives the next stage.
 
-Each visible cluster writes a `uint2` — cluster index and instance index. That is 64 bits per cluster (up to 64 triangles), versus 96 bits per triangle (`uint3` triangle indices) in a traditional compute-based culling approaches.
+**Cluster compaction** runs one 128-thread group per page, groups the page's visible instances by material shader, and writes cluster records into per-shader chunks of a shared record buffer. Each chunk appends one cluster culling argument, the argument encodes cluster record into the root constants.
 
-Because visible clusters are already bucketed per shader, the cluster culling pass can route clusters to different shaders at no extra cost. This enables LOD transition blending and gameplay effects — such as making an area around the player transparent — without CPU involvement or material parameter changes.
+**Cluster culling** runs one 128-thread group per 128 cluster records, performs per-cluster frustum and screen-size tests per view, and builds a 128-bit visibility mask per view and sub-bucket. Each non-empty mask is appended as an indirect mesh dispatch argument into that view, shader and sub-bucket's draw argument buffer.
 
-## Bucket Resolve
+## Draw Arguments
 
-The bucket resolve pass runs after cluster culling. It generates indirect mesh dispatch arguments, batching many clusters into a small number of mesh dispatches.
+Three sub-buckets exist per shader per view: opaque, alpha-tested and alpha-blended. The sub-bucket is selected at runtime using the shader flags specified in the material.
 
-At the end of the pipeline each render pass receives a ready-to-use draw argument buffer per shader, per render view. Shadow passes do a single depth pass; the forward shading pass runs a depth prepass followed by opaque and alpha blending passes.
+Each bucket has its own draw counter and draw argument buffer; culling appends masks through atomic counters, batching many clusters into a small number of mesh dispatches per bucket.
+
+Each render pass executes its draw argument buffers with the per-bucket counters. Shadow passes do a single depth pass; the forward shading pass runs a depth prepass followed by opaque and alpha blending passes.
 
 ## Light and Decal Culling
 

@@ -33,18 +33,25 @@
 ### Compute shaders
 
 
-| Name                    | VGPR   | SGPR    | Occupancy   | LDS          | Scratch   |
-| ----------------------- | ------ | ------- | ----------- | ------------ | --------- |
-| DebugDrawResolve        | 18/256 | 32/104  | 92.97%      | 0.00/64.00Kb | 0Kb       |
-| Denoise                 | 42/256 | 48/104  | 83.59%      | 0.00/64.00Kb | 0Kb       |
-| MainPass                | 53/256 | 48/104  | 79.30%      | 0.00/64.00Kb | 0Kb       |
-| PrefilterDepth          | 30/256 | 48/104  | 88.28%      | 0.50/64.00Kb | 0Kb       |
-| InstancePickingResolve  | 9/256  | 20/104  | 96.48%      | 0.00/64.00Kb | 0Kb       |
-| BucketResolve           | 17/256 | 32/104  | 93.36%      | 0.00/64.00Kb | 0Kb       |
-| ClusterCulling          | 38/256 | 60/104  | 85.16%      | 0.00/64.00Kb | 0Kb       |
-| InstanceCulling         | 38/256 | 76/104  | 85.16%      | 1.00/64.00Kb | 0Kb       |
-| LightCulling_CullLights | 29/256 | 58/104  | 88.67%      | 0.50/64.00Kb | 0Kb       |
-| WorldUpdate             | 19/256 | 28/104  | 92.58%      | 0.00/64.00Kb | 0Kb       |
+| Name                            | VGPR   | SGPR    | Occupancy   | LDS          | Scratch   |
+| ------------------------------- | ------ | ------- | ----------- | ------------ | --------- |
+| DebugDrawResolve                | 18/256 | 32/104  | 92.97%      | 0.00/64.00Kb | 0Kb       |
+| FFX_ParallelSort_Count          | 12/256 | 20/104  | 95.31%      | 8.00/64.00Kb | 0Kb       |
+| FFX_ParallelSort_Reduce         | 10/256 | 20/104  | 96.09%      | 0.50/64.00Kb | 0Kb       |
+| FFX_ParallelSort_Scan           | 15/256 | 20/104  | 94.14%      | 2.50/64.00Kb | 0Kb       |
+| FFX_ParallelSort_ScanAdd        | 16/256 | 24/104  | 93.75%      | 2.50/64.00Kb | 0Kb       |
+| FFX_ParallelSort_Scatter        | 19/256 | 26/104  | 92.58%      | 2.00/64.00Kb | 0Kb       |
+| FFX_ParallelSort_ScatterPayload | 27/256 | 34/104  | 89.45%      | 2.00/64.00Kb | 0Kb       |
+| FFX_ParallelSort_SetupIndirect  | 34/256 | 32/104  | 86.72%      | 0.00/64.00Kb | 0Kb       |
+| Denoise                         | 42/256 | 48/104  | 83.59%      | 0.00/64.00Kb | 0Kb       |
+| MainPass                        | 53/256 | 48/104  | 79.30%      | 0.00/64.00Kb | 0Kb       |
+| PrefilterDepth                  | 30/256 | 48/104  | 88.28%      | 0.50/64.00Kb | 0Kb       |
+| InstancePickingResolve          | 9/256  | 20/104  | 96.48%      | 0.00/64.00Kb | 0Kb       |
+| ClusterCompaction               | 23/256 | 34/104  | 91.02%      | 3.00/64.00Kb | 0Kb       |
+| ClusterCulling                  | 42/256 | 68/104  | 83.59%      | 3.00/64.00Kb | 0Kb       |
+| InstanceCulling                 | 43/256 | 82/104  | 83.20%      | 2.00/64.00Kb | 0Kb       |
+| LightCulling_CullLights         | 29/256 | 58/104  | 88.67%      | 0.50/64.00Kb | 0Kb       |
+| WorldUpdate                     | 19/256 | 28/104  | 92.58%      | 0.00/64.00Kb | 0Kb       |
 
 ## RDNA 3.5 (Radeon 8040S)
 
@@ -81,18 +88,25 @@
 ### Compute shaders
 
 
-| Name                    | VGPR   | SGPR    | Occupancy   | LDS          | Scratch   |
-| ----------------------- | ------ | ------- | ----------- | ------------ | --------- |
-| DebugDrawResolve        | 18/256 | 32/104  | 92.97%      | 0.00/64.00Kb | 0Kb       |
-| Denoise                 | 41/256 | 48/104  | 83.98%      | 0.00/64.00Kb | 0Kb       |
-| MainPass                | 51/256 | 48/104  | 80.08%      | 0.00/64.00Kb | 0Kb       |
-| PrefilterDepth          | 32/256 | 48/104  | 87.50%      | 0.50/64.00Kb | 0Kb       |
-| InstancePickingResolve  | 9/256  | 20/104  | 96.48%      | 0.00/64.00Kb | 0Kb       |
-| BucketResolve           | 17/256 | 32/104  | 93.36%      | 0.00/64.00Kb | 0Kb       |
-| ClusterCulling          | 40/256 | 56/104  | 84.38%      | 0.00/64.00Kb | 0Kb       |
-| InstanceCulling         | 40/256 | 74/104  | 84.38%      | 1.00/64.00Kb | 0Kb       |
-| LightCulling_CullLights | 22/256 | 62/104  | 91.41%      | 0.50/64.00Kb | 0Kb       |
-| WorldUpdate             | 19/256 | 28/104  | 92.58%      | 0.00/64.00Kb | 0Kb       |
+| Name                            | VGPR   | SGPR    | Occupancy   | LDS          | Scratch   |
+| ------------------------------- | ------ | ------- | ----------- | ------------ | --------- |
+| DebugDrawResolve                | 18/256 | 32/104  | 92.97%      | 0.00/64.00Kb | 0Kb       |
+| FFX_ParallelSort_Count          | 12/256 | 20/104  | 95.31%      | 8.00/64.00Kb | 0Kb       |
+| FFX_ParallelSort_Reduce         | 10/256 | 20/104  | 96.09%      | 0.50/64.00Kb | 0Kb       |
+| FFX_ParallelSort_Scan           | 15/256 | 20/104  | 94.14%      | 2.50/64.00Kb | 0Kb       |
+| FFX_ParallelSort_ScanAdd        | 16/256 | 24/104  | 93.75%      | 2.50/64.00Kb | 0Kb       |
+| FFX_ParallelSort_Scatter        | 19/256 | 26/104  | 92.58%      | 2.00/64.00Kb | 0Kb       |
+| FFX_ParallelSort_ScatterPayload | 27/256 | 34/104  | 89.45%      | 2.00/64.00Kb | 0Kb       |
+| FFX_ParallelSort_SetupIndirect  | 34/256 | 33/104  | 86.72%      | 0.00/64.00Kb | 0Kb       |
+| Denoise                         | 41/256 | 48/104  | 83.98%      | 0.00/64.00Kb | 0Kb       |
+| MainPass                        | 51/256 | 48/104  | 80.08%      | 0.00/64.00Kb | 0Kb       |
+| PrefilterDepth                  | 32/256 | 48/104  | 87.50%      | 0.50/64.00Kb | 0Kb       |
+| InstancePickingResolve          | 9/256  | 20/104  | 96.48%      | 0.00/64.00Kb | 0Kb       |
+| ClusterCompaction               | 23/256 | 34/104  | 91.02%      | 3.00/64.00Kb | 0Kb       |
+| ClusterCulling                  | 45/256 | 68/104  | 82.42%      | 3.00/64.00Kb | 0Kb       |
+| InstanceCulling                 | 40/256 | 80/104  | 84.38%      | 2.00/64.00Kb | 0Kb       |
+| LightCulling_CullLights         | 22/256 | 62/104  | 91.41%      | 0.50/64.00Kb | 0Kb       |
+| WorldUpdate                     | 19/256 | 32/104  | 92.58%      | 0.00/64.00Kb | 0Kb       |
 
 ## RDNA 4.0 (RX 9060)
 
@@ -129,15 +143,22 @@
 ### Compute shaders
 
 
-| Name                    | VGPR   | SGPR    | Occupancy   | LDS         | Scratch   |
-| ----------------------- | ------ | ------- | ----------- | ----------- | --------- |
-| DebugDrawResolve        | 18/256 | 32/106  | 92.97%      | 0.00/0.00Kb | 0Kb       |
-| Denoise                 | 41/256 | 44/106  | 83.98%      | 0.00/0.00Kb | 0Kb       |
-| MainPass                | 52/256 | 48/106  | 79.69%      | 0.00/0.00Kb | 0Kb       |
-| PrefilterDepth          | 18/256 | 36/106  | 92.97%      | 0.25/0.50Kb | 0Kb       |
-| InstancePickingResolve  | 9/256  | 20/106  | 96.48%      | 0.00/0.00Kb | 0Kb       |
-| BucketResolve           | 17/256 | 32/106  | 93.36%      | 0.00/0.00Kb | 0Kb       |
-| ClusterCulling          | 38/256 | 60/106  | 85.16%      | 0.00/0.00Kb | 0Kb       |
-| InstanceCulling         | 38/256 | 76/106  | 85.16%      | 0.78/1.00Kb | 0Kb       |
-| LightCulling_CullLights | 22/256 | 62/106  | 91.41%      | 0.11/0.50Kb | 0Kb       |
-| WorldUpdate             | 19/256 | 28/106  | 92.58%      | 0.00/0.00Kb | 0Kb       |
+| Name                            | VGPR   | SGPR    | Occupancy   | LDS         | Scratch   |
+| ------------------------------- | ------ | ------- | ----------- | ----------- | --------- |
+| DebugDrawResolve                | 18/256 | 32/106  | 92.97%      | 0.00/0.00Kb | 0Kb       |
+| FFX_ParallelSort_Count          | 12/256 | 16/106  | 95.31%      | 8.00/8.00Kb | 0Kb       |
+| FFX_ParallelSort_Reduce         | 10/256 | 20/106  | 96.09%      | 0.50/0.50Kb | 0Kb       |
+| FFX_ParallelSort_Scan           | 15/256 | 20/106  | 94.14%      | 2.50/2.50Kb | 0Kb       |
+| FFX_ParallelSort_ScanAdd        | 16/256 | 24/106  | 93.75%      | 2.50/2.50Kb | 0Kb       |
+| FFX_ParallelSort_Scatter        | 19/256 | 24/106  | 92.58%      | 1.56/2.00Kb | 0Kb       |
+| FFX_ParallelSort_ScatterPayload | 28/256 | 34/106  | 89.06%      | 1.56/2.00Kb | 0Kb       |
+| FFX_ParallelSort_SetupIndirect  | 34/256 | 33/106  | 86.72%      | 0.00/0.00Kb | 0Kb       |
+| Denoise                         | 41/256 | 44/106  | 83.98%      | 0.00/0.00Kb | 0Kb       |
+| MainPass                        | 52/256 | 48/106  | 79.69%      | 0.00/0.00Kb | 0Kb       |
+| PrefilterDepth                  | 18/256 | 36/106  | 92.97%      | 0.25/0.50Kb | 0Kb       |
+| InstancePickingResolve          | 9/256  | 20/106  | 96.48%      | 0.00/0.00Kb | 0Kb       |
+| ClusterCompaction               | 23/256 | 34/106  | 91.02%      | 2.52/3.00Kb | 0Kb       |
+| ClusterCulling                  | 42/256 | 67/106  | 83.59%      | 3.00/3.00Kb | 0Kb       |
+| InstanceCulling                 | 43/256 | 80/106  | 83.20%      | 1.52/2.00Kb | 0Kb       |
+| LightCulling_CullLights         | 22/256 | 62/106  | 91.41%      | 0.11/0.50Kb | 0Kb       |
+| WorldUpdate                     | 19/256 | 28/106  | 92.58%      | 0.00/0.00Kb | 0Kb       |

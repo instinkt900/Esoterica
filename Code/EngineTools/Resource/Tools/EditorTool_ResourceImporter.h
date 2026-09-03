@@ -35,10 +35,10 @@ namespace EE::Resource
 
         public:
 
-            DataPath                                    m_resourcePath;
+            DataPath                                        m_resourcePath;
             FileSystem::Path                                m_filePath;
             String                                          m_extension;
-            TVector<DataPath>                           m_dependentResources;
+            TVector<DataPath>                               m_dependentResources;
             TVector<Import::ImportableItem*>                m_importableItems;
             String                                          m_warnings;
             String                                          m_errors;

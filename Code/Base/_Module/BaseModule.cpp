@@ -126,7 +126,7 @@ namespace EE
                 return false;
             }
 
-            m_pResourceProvider = EE::New<Resource::NetworkResourceProvider>( *pResourceSettings );
+            m_pResourceProvider = EE::New<Resource::NetworkResourceProvider>( *pResourceSettings, m_taskSystem );
             #else
             EE_UNREACHABLE_CODE();
             #endif

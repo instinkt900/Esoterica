@@ -11,6 +11,7 @@ namespace EE::Network
     void Client::Update( TFunction<void( Message const& )> const& handlerFunc )
     {
         EE_ASSERT( Threading::IsMainThread() );
+        EE_ASSERT( handlerFunc != nullptr );
 
         // Update connection status and receive network messages
         //-------------------------------------------------------------------------
@@ -29,7 +30,7 @@ namespace EE::Network
             {
                 SendNetworkMessage( Message( Message::HeartbeatID ) );
             }
-            else if ( handlerFunc != nullptr )
+            else
             {
                 handlerFunc( *pMessage );
             }
@@ -45,6 +46,46 @@ namespace EE::Network
         if ( IsConnected() )
         {
            SendOutgoingMessages();
+        }
+    }
+
+    void Client::UpdateAndTransferMessageOwnership( TFunction<void( Message* )> const& handlerFunc )
+    {
+        EE_ASSERT( Threading::IsMainThread() );
+        EE_ASSERT( handlerFunc != nullptr );
+
+        // Update connection status and receive network messages
+        //-------------------------------------------------------------------------
+
+        UpdateConnectionAndReceiveMessages();
+
+        // Handle Incoming Messages
+        //-------------------------------------------------------------------------
+
+        Message* pMessage = nullptr;
+        while ( m_receivedMessages.try_dequeue( pMessage ) )
+        {
+            EE_ASSERT( pMessage != nullptr );
+
+            if ( pMessage->GetMessageID() == Message::HeartbeatID )
+            {
+                SendNetworkMessage( Message( Message::HeartbeatID ) );
+                EE::Delete( pMessage );
+            }
+            else
+            {
+                handlerFunc( pMessage );
+            }
+
+            EE_ASSERT( m_receivedMessages.size_approx() < 1000 );
+        }
+
+        // Send Outgoing Messages
+        //-------------------------------------------------------------------------
+
+        if ( IsConnected() )
+        {
+            SendOutgoingMessages();
         }
     }
 }

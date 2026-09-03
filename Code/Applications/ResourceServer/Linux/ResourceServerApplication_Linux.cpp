@@ -78,13 +78,14 @@ namespace EE
             return FatalError( errorMessage.c_str() );
         }
 
-        Render::RenderSettings renderSettings = {};
-        renderSettings.LoadSettings( m_typeRegistry, iniFile );
+        // m_renderSettings, not a local. RenderSystem::Initialize keeps its address and reads it
+        // every frame; see the note in the header.
+        m_renderSettings.LoadSettings( m_typeRegistry, iniFile );
 
         // The Win32 sibling derives the dimensions from m_windowRect. LinuxApplication keeps the
         // size and the position apart, and m_windowSize is already in pixels, which is the unit
         // the swapchain wants.
-        m_renderSystem.Initialize( renderSettings );
+        m_renderSystem.Initialize( m_renderSettings );
 
         m_renderWindow.SetNativeWindowHandle( Platform::GetMainWindowHandle() );
         m_renderWindow.ResizeSwapchain( m_renderSystem.GetContextRHI(), m_renderSystem.GetGraphicsQueue(), m_renderSystem.GetComputeQueue(), m_windowSize );

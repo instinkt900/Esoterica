@@ -4,8 +4,10 @@
 
 #include "Engine/Render/Shaders/Renderer/RendererTypes.esh"
 #include "Engine/Render/Shaders/Transform.esh"
+#include "Engine/Render/Shaders/MeshInstance.esh"
 
 #ifdef __cplusplus
+#include "Base/Math/Math.h"
 #include "Base/Math/Transform.h"
 #endif
 
@@ -38,6 +40,25 @@ struct HLSL_ALIGN_STRUCT MeshInstanceTransformUpdateCommand
 };
 
 HLSL_STATIC_ASSERT( sizeof( MeshInstanceTransformUpdateCommand ) == 64, "Expected exactly 64 bytes" );
+
+struct HLSL_ALIGN_STRUCT MeshInstanceRootUpdateCommand
+{
+    uint                    m_instanceID;
+    float3x4                m_transform;
+
+    // Compressed world bounds: 12-bit shared exponent + six 14-bit signed mantissas.
+    // The AABB center is stored relative to the transform origin.
+    CompressedAABB           m_packedAABB;
+
+    #ifdef __cplusplus
+    void EncodeWorldAABB( EE::Float3 worldAABBCenter, EE::Float3 worldAABBHalfExtents, EE::Float3 worldOrigin )
+    {
+        m_packedAABB = CompressAABB( worldAABBCenter, worldAABBHalfExtents, worldOrigin );
+    }
+    #endif
+};
+
+HLSL_STATIC_ASSERT( sizeof( MeshInstanceRootUpdateCommand ) == 64, "Expected exactly 64 bytes" );
 
 struct HLSL_ALIGN_STRUCT DirectionalLightUpdateCommand
 {

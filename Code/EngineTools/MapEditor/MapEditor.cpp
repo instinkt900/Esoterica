@@ -67,7 +67,7 @@ namespace EE::EntityModel
         // Get new map filename
         //-------------------------------------------------------------------------
 
-        FileDialog::Result const result = FileDialog::SaveResourceOrDataFile( m_pToolsContext, EntityMapResourceDescriptor::GetStaticTypeID(), m_pToolsContext->m_pFileRegistry->GetSourceDataDirectoryPath().c_str() );
+        FileDialog::Result const result = FileDialog::SaveResourceOrDataFile( m_pToolsContext, EntityMapResourceDescriptor::GetStaticTypeID(), m_pToolsContext->m_pDataFileSystem->GetSourceDataDirectoryPath().c_str() );
         if ( !result )
         {
             return;
@@ -429,32 +429,42 @@ namespace EE::EntityModel
                 m_gizmo.SetOption( ImGuiX::Gizmo::Options::AllowNonUniformScale, m_editorContext.DoesSpatialSelectionSupportNonUniformScale() );
             }
 
-            bool const checkGizmoHotkeys = ( m_isViewportFocused || m_isViewportHovered ) && !ImGui::IsKeyDown( ImGuiKey_MouseRight ) && m_editorContext.HasSpatialSelection();
-
             Transform const& selectionTransform = m_editorContext.GetSpatialSelectionTransform();
+            bool const checkGizmoHotkeys = !IsManipulatingCamera() && ( m_isViewportFocused || m_isViewportHovered ) && m_editorContext.HasSpatialSelection();
             auto const gizmoResult = m_gizmo.UpdateAndDraw( selectionTransform.GetTranslation(), selectionTransform.GetRotation(), *pViewport, checkGizmoHotkeys );
-            switch ( gizmoResult.m_state )
+
+            if ( IsManipulatingCamera() )
             {
-                case ImGuiX::GizmoState::StartedManipulating:
-                {
-                    m_editorContext.BeginManipulatingSpatialSelection( gizmoResult, ImGui::GetIO().KeyAlt );
-                }
-                break;
-
-                case ImGuiX::GizmoState::Manipulating:
-                {
-                    m_editorContext.ManipulateSpatialSelection( gizmoResult );
-                }
-                break;
-
-                case ImGuiX::GizmoState::StoppedManipulating:
+                if ( m_editorContext.IsManipulatingSpatialSelection() )
                 {
                     m_editorContext.EndManipulatingSpatialSelection( gizmoResult );
                 }
-                break;
+            }
+            else // Apply gizmo results
+            {
+                switch ( gizmoResult.m_state )
+                {
+                    case ImGuiX::GizmoState::StartedManipulating:
+                    {
+                        m_editorContext.BeginManipulatingSpatialSelection( gizmoResult, ImGui::GetIO().KeyAlt );
+                    }
+                    break;
 
-                default:
-                break;
+                    case ImGuiX::GizmoState::Manipulating:
+                    {
+                        m_editorContext.ManipulateSpatialSelection( gizmoResult );
+                    }
+                    break;
+
+                    case ImGuiX::GizmoState::StoppedManipulating:
+                    {
+                        m_editorContext.EndManipulatingSpatialSelection( gizmoResult );
+                    }
+                    break;
+
+                    default:
+                    break;
+                }
             }
         }
     }

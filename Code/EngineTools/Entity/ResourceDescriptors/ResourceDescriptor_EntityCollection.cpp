@@ -30,4 +30,15 @@ namespace EE::EntityModel
             VectorEmplaceBackUnique( outDependencies, referencedResourceID );
         }
     }
+
+    void EntityCollectionResourceDescriptor::GetAdditionalReferencedPaths( TVector<DataPath>& outReferencedPaths ) const
+    {
+        TVector<ResourceID> referencedResources;
+        m_collection.GetAllReferencedResources( referencedResources );
+
+        for ( auto const& resourceID : referencedResources )
+        {
+            VectorEmplaceBackUnique( outReferencedPaths, resourceID.GetDataPath() );
+        }
+    }
 }

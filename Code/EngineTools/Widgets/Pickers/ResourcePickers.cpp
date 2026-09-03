@@ -1,5 +1,5 @@
 #include "ResourcePickers.h"
-#include "EngineTools/FileSystem/FileRegistry.h"
+#include "EngineTools/FileSystem/DataFileSystem.h"
 #include "EngineTools/Resource/ResourceDescriptor.h"
 #include "EngineTools/Core/ToolsContext.h"
 #include "EngineTools/Core/CommonToolTypes.h"
@@ -79,7 +79,7 @@ namespace EE
             //-------------------------------------------------------------------------
 
             ImGui::BeginGroup();
-            ImGui::BeginDisabled( !m_toolsContext.m_pFileRegistry->IsDataFileCacheBuilt() );
+            ImGui::BeginDisabled( !m_toolsContext.m_pDataFileSystem->IsDataFileCacheBuilt() );
             ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( style.ItemSpacing.x, s_controlsRowGapY ) );
 
             {
@@ -472,7 +472,7 @@ namespace EE
 
             if ( isValidPath )
             {
-                isValidPath = m_toolsContext.m_pFileRegistry->DoesFileExist( path );
+                isValidPath = m_toolsContext.m_pDataFileSystem->DoesFileExist( path );
             }
         }
 
@@ -500,14 +500,14 @@ namespace EE
             EE_ASSERT( m_pDataFileInfo != nullptr );
 
             DataFileExtension const dataFileExt = DataFileExtension( m_requiredExtension.c_str() );
-            for ( auto const& pFileInfo : m_toolsContext.m_pFileRegistry->GetAllDataFileEntries( dataFileExt ) )
+            for ( auto const& pFileInfo : m_toolsContext.m_pDataFileSystem->GetAllDataFileEntries( dataFileExt ) )
             {
                 m_generatedOptions.emplace_back( pFileInfo->m_dataPath );
             }
         }
         else // Show all data files
         {
-            for ( auto const& pFileInfo : m_toolsContext.m_pFileRegistry->GetAllDataFileEntries() )
+            for ( auto const& pFileInfo : m_toolsContext.m_pDataFileSystem->GetAllDataFileEntries() )
             {
                 m_generatedOptions.emplace_back( pFileInfo->m_dataPath );
             }
@@ -622,7 +622,7 @@ namespace EE
 
             if ( isValidPath )
             {
-                isValidPath = m_toolsContext.m_pFileRegistry->DoesFileExist( path );
+                isValidPath = m_toolsContext.m_pDataFileSystem->DoesFileExist( path );
             }
         }
         else
@@ -652,14 +652,14 @@ namespace EE
 
                 if ( m_customResourceFilter == nullptr )
                 {
-                    for ( auto const& resourceID : m_toolsContext.m_pFileRegistry->GetAllResourcesOfType( m_resourceTypeID ) )
+                    for ( auto const& resourceID : m_toolsContext.m_pDataFileSystem->GetAllResourcesOfType( m_resourceTypeID ) )
                     {
                         m_generatedOptions.emplace_back( resourceID.GetDataPath() );
                     }
                 }
                 else // Apply custom filter
                 {
-                    for ( auto const& resourceID : m_toolsContext.m_pFileRegistry->GetAllResourcesOfTypeFiltered( m_resourceTypeID, m_customResourceFilter ) )
+                    for ( auto const& resourceID : m_toolsContext.m_pDataFileSystem->GetAllResourcesOfTypeFiltered( m_resourceTypeID, m_customResourceFilter ) )
                     {
                         m_generatedOptions.emplace_back( resourceID.GetDataPath() );
                     }
@@ -667,9 +667,9 @@ namespace EE
             }
             else // All resource options are valid
             {
-                for ( auto const& resourceListPair : m_toolsContext.m_pFileRegistry->GetAllResources() )
+                for ( auto const& resourceListPair : m_toolsContext.m_pDataFileSystem->GetAllResources() )
                 {
-                    for ( FileRegistry::FileInfo const* pResourceFileInfo : resourceListPair.second )
+                    for ( DataFileSystem::FileInfo const* pResourceFileInfo : resourceListPair.second )
                     {
                         EE_ASSERT( pResourceFileInfo != nullptr );
                         EE_ASSERT( pResourceFileInfo->m_dataPath.IsValid() );

@@ -4,6 +4,7 @@
 #include "Base/Types/Arrays.h"
 #include "Base/Types/HashMap.h"
 #include "Base/Types/LoadingStatus.h"
+#include "Base/FileSystem/DataPath.h"
 
 //-------------------------------------------------------------------------
 
@@ -130,6 +131,11 @@ namespace EE::TypeSystem
         {
             return IsPropertyValueEqual( pTypeInstance, m_pDefaultInstance, propertyID, arrayIdx );
         }
+
+        // Additional helpers
+        //-------------------------------------------------------------------------
+
+        virtual void GetReferencedPaths( IReflectedType const* pType, TVector<DataPath>& outReferencedPaths ) const = 0;
 
     public:
 

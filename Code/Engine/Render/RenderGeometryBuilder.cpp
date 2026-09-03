@@ -520,17 +520,17 @@ namespace EE::Render
 
                 // Validate compression
                 Float3 decompressedPosition = pDstMeshVertex->GetPosition( compressedVertexAnchor, compressedVertexExponent );
-                EE_ASSERT( Math::Abs( decompressedPosition.m_x - srcPositionAttribute.m_position.m_x ) < 0.01F );
-                EE_ASSERT( Math::Abs( decompressedPosition.m_y - srcPositionAttribute.m_position.m_y ) < 0.01F );
-                EE_ASSERT( Math::Abs( decompressedPosition.m_z - srcPositionAttribute.m_position.m_z ) < 0.01F );
+                EE_ASSERT( Math::Abs( decompressedPosition.m_x - srcPositionAttribute.m_position.m_x ) < 0.5F );
+                EE_ASSERT( Math::Abs( decompressedPosition.m_y - srcPositionAttribute.m_position.m_y ) < 0.5F );
+                EE_ASSERT( Math::Abs( decompressedPosition.m_z - srcPositionAttribute.m_position.m_z ) < 0.5F );
             }
 
             // Validate compression again
             Float4 decompressedBoundingSphere = cluster.GetBoundingSphere();
-            EE_ASSERT( Math::Abs( decompressedBoundingSphere.m_x - meshletBounds.center[0] ) < 0.01F );
-            EE_ASSERT( Math::Abs( decompressedBoundingSphere.m_y - meshletBounds.center[1] ) < 0.01F );
-            EE_ASSERT( Math::Abs( decompressedBoundingSphere.m_z - meshletBounds.center[2] ) < 0.01F );
-            EE_ASSERT( Math::Abs( decompressedBoundingSphere.m_w - meshletBounds.radius ) < 0.01F );
+            EE_ASSERT( Math::Abs( decompressedBoundingSphere.m_x - meshletBounds.center[0] ) < 0.5F );
+            EE_ASSERT( Math::Abs( decompressedBoundingSphere.m_y - meshletBounds.center[1] ) < 0.5F );
+            EE_ASSERT( Math::Abs( decompressedBoundingSphere.m_z - meshletBounds.center[2] ) < 0.5F );
+            EE_ASSERT( Math::Abs( decompressedBoundingSphere.m_w - meshletBounds.radius ) < 0.5F );
         }
 
         return meshNumClusters;

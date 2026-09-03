@@ -107,7 +107,8 @@ EE_END_SHADER_TYPES_NAMESPACE
         if ( !twoSided )
         {
             // "Triangle Scan Conversion using 2D Homogeneus Coordinates" by Marc Olano, Trey Greer
-            if ( determinant( float3x3( clipVertices[0].xyw, clipVertices[1].xyw, clipVertices[2].xyw ) ) >= 0 )
+            precise float backfaceDeterminant = determinant( float3x3( clipVertices[0].xyw, clipVertices[1].xyw, clipVertices[2].xyw ) );
+            if ( backfaceDeterminant >= 0 )
             {
                 return true;
             }
@@ -118,7 +119,9 @@ EE_END_SHADER_TYPES_NAMESPACE
         float2 screenVertices[3];
         [unroll] for ( uint vertexIndex = 0; vertexIndex < 3; ++vertexIndex )
         {
-            screenVertices[vertexIndex] = ( clipVertices[vertexIndex].xy / clipVertices[vertexIndex].w ) * 0.5 + 0.5.xx;
+            precise float2 screenVertex = ( clipVertices[vertexIndex].xy / clipVertices[vertexIndex].w ) * 0.5 + 0.5.xx;
+        
+            screenVertices[vertexIndex] = screenVertex;
             [flatten] if ( clipVertices[vertexIndex].w < 0.0 )
             {
                 numVerticesOutsideOfClipPlane++;

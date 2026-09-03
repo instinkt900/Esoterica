@@ -23,6 +23,7 @@ namespace EE::Animation
             int16_t                                         m_parameterNodeIdx = InvalidIndex;
             bool                                            m_ignoreInvalidOptions = false;
             bool                                            m_isWorldSpaceTarget = false;
+            StringID                                        m_alignmentBoneID;
         };
 
     private:
@@ -69,6 +70,7 @@ namespace EE::Animation
         Transform                                           m_targetTransform;
         TInlineVector<Option,10>                            m_selectionOptions;
         int32_t                                             m_selectedOptionIdx = InvalidIndex;
+        int32_t                                             m_alignmentBoneIdx = InvalidIndex;
 
         #if EE_DEVELOPMENT_TOOLS
         Transform                                           m_selectionWorldTransform;

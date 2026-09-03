@@ -694,7 +694,7 @@ namespace EE
 
                             if ( !worldDispatched )
                             {
-                                m_pForwardShadingRenderer->DispatchWorld( m_updateContext, pRenderViewport, pWorld );
+                                m_pForwardShadingRenderer->DispatchWorld( m_updateContext, pRenderViewport, pWorld, worldSemaphore );
                                 worldDispatched = true;
                             }
 

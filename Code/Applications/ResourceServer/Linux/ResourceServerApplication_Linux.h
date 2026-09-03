@@ -50,6 +50,12 @@ namespace EE
         ImGuiX::ImguiSystem                     m_imguiSystem;
 
         // Rendering
+        //
+        // m_renderSettings is a member and not a local in Initialize, because
+        // RenderSystem::Initialize stores its address - m_pRenderSettings, added upstream in
+        // 47e6293 - and then reads it every frame. Declared above m_renderSystem so it outlives it.
+        // The Win32 sibling passes a local and dangles; that is upstream's to fix, not ours.
+        Render::RenderSettings                  m_renderSettings;
         Render::RenderSystem                    m_renderSystem;
         Render::ImguiRenderer                   m_imguiRenderer;
         Render::Window                          m_renderWindow;

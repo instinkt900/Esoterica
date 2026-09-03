@@ -1,6 +1,5 @@
 #include "ResourceServerWorker.h"
 #include "ResourceServerContext.h"
-#include "ResourceServerRequest.h"
 #include "Base/Memory/Memory.h"
 #include "Base/Network/NetworkMessage.h"
 
@@ -8,30 +7,35 @@
 
 namespace EE::Resource
 {
-    void WorkerTask::AddRequest( Request* pRequest )
+    void WorkerTask::AddRequest( RequestBucket const* pRequestBucket )
     {
-        EE_ASSERT( pRequest->GetStatus() == RequestStatus::Pending );
-        EE_ASSERT( pRequest->m_log.empty() );
+        EE_ASSERT( MatchesRequest( pRequestBucket ) );
 
-        m_requests.emplace_back( pRequest );
-
-        switch ( m_state )
+        for ( auto pRequest : pRequestBucket->m_requests )
         {
-            case State::Pending:
-            {
-                pRequest->m_status = RequestStatus::Pending;
-            }
-            break;
+            EE_ASSERT( pRequest->GetStatus() == RequestStatus::Pending );
+            EE_ASSERT( pRequest->m_log.empty() );
 
-            case State::Requested:
-            {
-                pRequest->m_status = RequestStatus::Compiling;
-            }
-            break;
+            m_requests.emplace_back( pRequest );
 
-            default:
-            EE_UNREACHABLE_CODE();
-            break;
+            switch ( m_state )
+            {
+                case State::Pending:
+                {
+                    pRequest->m_status = RequestStatus::Pending;
+                }
+                break;
+
+                case State::Requested:
+                {
+                    pRequest->m_status = RequestStatus::Compiling;
+                }
+                break;
+
+                default:
+                EE_UNREACHABLE_CODE();
+                break;
+            }
         }
     }
 
@@ -132,37 +136,24 @@ namespace EE::Resource
         }
     }
 
-    WorkerTask* ResourceServerWorker::CreateTask( ResourceID const& resourceID, bool isPackagingRequest, bool forceCompilation )
+    void ResourceServerWorker::CreateTask( RequestBucket const* pRequestBucket )
     {
-        return m_tasks.emplace_back( EE::New<WorkerTask>( resourceID, isPackagingRequest, forceCompilation ) );
+        EE_ASSERT( pRequestBucket != nullptr );
+        EE_ASSERT( pRequestBucket->m_resourceID.IsValid() );
+        auto pTask = m_tasks.emplace_back( EE::New<WorkerTask>( pRequestBucket->m_requests.front() ) );
+        pTask->AddRequest( pRequestBucket );
     }
 
-    WorkerTask* ResourceServerWorker::TryFindTaskMatchingRequest( Request const* pRequest ) const
+    WorkerTask* ResourceServerWorker::TryFindTaskMatchingRequest( RequestBucket const* pRequestBucket ) const
     {
-        EE_ASSERT( pRequest != nullptr );
-
-        bool const isForcedCompilation = pRequest->m_origin == RequestOrigin::ManualCompileForced;
-        bool const isPackagingRequest = pRequest->IsPackagingRequest();
+        EE_ASSERT( pRequestBucket != nullptr );
 
         for ( auto pTask : m_tasks )
         {
-            if ( pTask->m_resourceID != pRequest->m_resourceID )
+            if ( pTask->MatchesRequest( pRequestBucket ) )
             {
-                continue;
+                return pTask;
             }
-
-            if ( pTask->m_isPackagingRequest != isPackagingRequest )
-            {
-                continue;
-            }
-
-            // If the task is not forced and the new request is forced then we cannot re-use this task
-            if ( !pTask->m_isForcedCompilation && isForcedCompilation )
-            {
-                continue;
-            }
-
-            return pTask;
         }
 
         return nullptr;
@@ -312,6 +303,9 @@ namespace EE::Resource
 
         // Resend all registered tasks
         //-------------------------------------------------------------------------
+
+        // Reverse the task order to try to compile the remaining tasks before hitting the one that's crashing
+        eastl::reverse( m_tasks.begin(), m_tasks.end() );
 
         for ( auto pTask : m_tasks )
         {

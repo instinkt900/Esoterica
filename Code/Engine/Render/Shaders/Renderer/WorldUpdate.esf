@@ -16,7 +16,7 @@ ESF_RESOURCE_TABLE struct WorldUpdateResourceTable
     
     StructuredBuffer<MeshInstanceInitializeCommand>             m_initializeBuffer_MeshInstance;
     
-    StructuredBuffer<MeshInstanceTransformUpdateCommand>        m_updateBuffer_MeshInstanceRoot;
+    StructuredBuffer<MeshInstanceRootUpdateCommand>             m_updateBuffer_MeshInstanceRoot;
     StructuredBuffer<MeshInstanceTransformUpdateCommand>        m_updateBuffer_MeshInstance;
     StructuredBuffer<SkinningTransformUpdateCommand>            m_updateBuffer_SkinningTransform;
     StructuredBuffer<DirectionalLightUpdateCommand>             m_updateBuffer_DirectionalLight;
@@ -68,10 +68,18 @@ void CS_main( uint groupID : SV_GroupID, uint groupThreadID : SV_GroupThreadID, 
     
     if ( isTransformUpdateMode && dispatchThreadID.x < RootCBV.m_numUpdateCommands_MeshInstanceRoot )
     {
-        MeshInstanceTransformUpdateCommand updateCommand = resourceTable.m_updateBuffer_MeshInstanceRoot[dispatchThreadID.x];
-        
+        MeshInstanceRootUpdateCommand updateCommand = resourceTable.m_updateBuffer_MeshInstanceRoot[dispatchThreadID.x];
+
+        const uint rootAddress = updateCommand.m_instanceID * sizeof( MeshInstanceRoot );
+
+        const MeshInstanceRoot meshInstanceRoot = resourceTable.m_meshInstanceRootBuffer.Load<MeshInstanceRoot>( rootAddress );
+
         // HACK: potentially fragile, we assume that MeshInstanceRoot always has a float4x3 transform as its first member
-        resourceTable.m_meshInstanceRootBuffer.Store<float3x4>( updateCommand.m_instanceID * sizeof( MeshInstanceRoot ), updateCommand.m_transform );
+        resourceTable.m_meshInstanceRootBuffer.Store<float3x4>( rootAddress, updateCommand.m_transform );
+
+
+        const uint worldAABBDataOffset = meshInstanceRoot.GetWorldAABBDataOffset();
+        resourceTable.m_meshInstanceRootBuffer.Store<uint3>( rootAddress + worldAABBDataOffset * 4, updateCommand.m_packedAABB );
     }
     
     if ( isTransformUpdateMode && dispatchThreadID.x < RootCBV.m_numUpdateCommands_MeshInstance )

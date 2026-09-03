@@ -26,7 +26,7 @@ namespace EE::Render
 
     //-------------------------------------------------------------------------
 
-    void MeshInstanceProxy::WriteRootTransform( Transform const& worldTransform, Float3 worldNonUniformScale )
+    void MeshInstanceProxy::WriteRootTransform( Transform const& worldTransform, Float3 worldNonUniformScale, Float3 worldAABBCenter, Float3 worldAABBHalfExtents )
     {
         EE_ASSERT( m_pTransformUpdateCounter != nullptr );
         EE_ASSERT( IsValid() );
@@ -34,10 +34,12 @@ namespace EE::Render
         Vector scale = worldTransform.GetScaleVector() * worldNonUniformScale;
         Matrix transformMatrix = Matrix( worldTransform.GetRotation(), worldTransform.GetTranslation().GetWithW1(), scale );
 
-        ShaderTypes::MeshInstanceTransformUpdateCommand updateCommand = {};
+        ShaderTypes::MeshInstanceRootUpdateCommand updateCommand = {};
         updateCommand.m_instanceID = uint32_t( m_instanceHandle.m_offset );
 
         WriteMatrix4x3( transformMatrix, updateCommand.m_transform );
+
+        updateCommand.EncodeWorldAABB( worldAABBCenter, worldAABBHalfExtents, worldTransform.GetTranslation().ToFloat3() );
 
         uint64_t transformUpdateSequence = *m_pTransformUpdateSequence;
         if ( m_dstTransformUpdateIndex == ~0 || m_dstTransformUpdateSequence != transformUpdateSequence )
@@ -46,7 +48,7 @@ namespace EE::Render
             m_dstTransformUpdateSequence = transformUpdateSequence;
         }
 
-        *( m_pDstTransformUpdateCommands + m_dstTransformUpdateIndex ) = updateCommand;
+        *( m_pDstRootUpdateCommands + m_dstTransformUpdateIndex ) = updateCommand;
     }
 
     void MeshInstanceProxy::WriteLocalTransforms( TArrayView<Matrix43 const> localTransforms )

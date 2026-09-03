@@ -194,5 +194,10 @@ namespace EE::Animation
         // Only emitted when a time remaining condition is met
         EE_REFLECT();
         TVector<TimedStateEvent>        m_timedEvents;
+
+        // This will use the actual time in the state for timed event conditions as opposed to the node's current time vs duration.
+        // This is not safe to use for anything that is expected to match between a server and a client
+        EE_REFLECT( Category = "Advanced" );
+        bool                            m_useActualElapsedTimeInStateForTimedEvents = false;
     };
 }

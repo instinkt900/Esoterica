@@ -15,8 +15,8 @@ namespace EE::Render
         m_tableSize = tableSize;
         m_payloadStride = payloadStride;
 
-        m_keyBuffer.Initialize( pContextRHI );
-        m_payloadBuffer.Initialize( pContextRHI );
+        m_keyBuffer.Initialize( pContextRHI, false );
+        m_payloadBuffer.Initialize( pContextRHI, false );
     }
 
     void DeviceSpatialHash::Shutdown( RHI::Context* pContextRHI )

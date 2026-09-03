@@ -5,6 +5,7 @@
 #include "Base/Resource/ResourceRequest.h"
 #include "Base/Time/Timers.h"
 #include "Base/Network/Clients/NetworkClient_WebSockets.h"
+#include "Base/Threading/TaskSystem.h"
 
 //-------------------------------------------------------------------------
 
@@ -49,7 +50,9 @@ namespace EE::Resource
 
     public:
 
-        NetworkResourceProvider( ResourceSettings const& settings ) : ResourceProvider( settings ) {}
+        NetworkResourceProvider( ResourceSettings const& settings, TaskSystem& taskSystem );
+        ~NetworkResourceProvider();
+
         virtual bool IsReady() const override final;
         virtual bool IsConnecting() const override final;
 
@@ -64,17 +67,29 @@ namespace EE::Resource
 
         virtual TVector<ResourceID> const& GetExternallyUpdatedResources() const override { return m_externallyUpdatedResources; }
 
+        void DeserializeReceivedMessages();
+
     private:
 
         Network::Client_WS                                  m_networkClient;
+        TaskSystem&                                         m_taskSystem;
+        Threading::Mutex                                    m_requestModificationMutex;
+
+        // We need a separate queue cause deserialization of resource ID is pretty expensive and we dont want to do this on the main thread
+        Threading::TLockFreeQueue<Network::Message*>        m_unserializedMessages;
+        AsyncTask                                           m_deserializationTask;
+        TVector<NetworkResourceResponse::Result>            m_deserializedServerResults;
+        TVector<NetworkResourceResponse::Result>            m_deserializedServerHeartbeats;
+        TVector<ResourceID>                                 m_deserializedExternalResourceUpdates;
+
+        // Unprocessed results
         TVector<NetworkResourceResponse::Result>            m_serverResults;
         TVector<NetworkResourceResponse::Result>            m_serverHeartbeats;
+        TVector<ResourceID>                                 m_externallyUpdatedResources;
 
+        // Requests
         TVector<ResourceRequest*>                           m_pendingRequests; // Requests we need to still send
         TVector<SentRequest>                                m_sentRequests; // Request that were sent but we're still waiting for a response
-
-        TVector<ResourceID>                                 m_externallyUpdatedResources;
-        Threading::Mutex                                    m_requestModificationMutex;
     };
 }
 #endif

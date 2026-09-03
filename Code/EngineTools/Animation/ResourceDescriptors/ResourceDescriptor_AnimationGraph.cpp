@@ -44,4 +44,9 @@ namespace EE::Animation
             outDependencies.emplace_back( referencedResourceID );
         }
     }
+
+    void GraphResourceDescriptor::GetAdditionalReferencedPaths( TVector<DataPath>& outReferencedPaths ) const
+    {
+        m_graphDefinition.GetReferencedPaths( outReferencedPaths );
+    }
 }

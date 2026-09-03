@@ -71,13 +71,13 @@ namespace EE::Render
         //-------------------------------------------------------------------------
 
         static StringID const s_InstanceCullingShaderID( "InstanceCulling" );
+        static StringID const s_ClusterCompactionShaderID( "ClusterCompaction" );
         static StringID const s_ClusterCullingShaderID( "ClusterCulling" );
-        static StringID const s_BucketResolveShaderID( "BucketResolve" );
         static StringID const s_LightCulling_CullLightsShaderID( "LightCulling_CullLights" );
 
         m_pInstanceCullingShader = m_pRenderSystem->FindComputeShader( s_InstanceCullingShaderID );
+        m_pClusterCompactionShader = m_pRenderSystem->FindComputeShader( s_ClusterCompactionShaderID );
         m_pClusterCullingShader = m_pRenderSystem->FindComputeShader( s_ClusterCullingShaderID );
-        m_pBucketResolveShader = m_pRenderSystem->FindComputeShader( s_BucketResolveShaderID );
         m_pLightCulling_CullLightsShader = m_pRenderSystem->FindComputeShader( s_LightCulling_CullLightsShaderID );
 
         #if EE_DEVELOPMENT_TOOLS
@@ -88,8 +88,9 @@ namespace EE::Render
 
         m_materialShaderPipelineBuckets = ForwardShadingPass::InitializeMaterialShaderBuckets( m_pRenderSystem );
 
-        m_ClusterCulling_ClusterBuffer.Initialize( m_pRenderSystem->GetContextRHI() );
-        m_ClusterCulling_ArgumentBuffer.Initialize( m_pRenderSystem->GetContextRHI() );
+        m_ClusterCulling_ArgumentBuffer.Initialize( m_pRenderSystem->GetContextRHI(), false );
+        m_ClusterCompaction_ArgumentBuffer.Initialize( m_pRenderSystem->GetContextRHI(), false );
+        m_ClusterRecordCountersBuffer.Initialize( m_pRenderSystem->GetContextRHI(), true );
 
         m_LightCulling_SpatialHash.Initialize( m_pRenderSystem->GetContextRHI(), "LightCulling", m_pRenderGlobalSettings->m_spatialHashTableSize, 0 );
 
@@ -126,13 +127,13 @@ namespace EE::Render
 
         m_renderPass_CascadedShadows.clear();
 
-        m_ClusterCulling_ClusterBuffer.Shutdown( m_pRenderSystem->GetContextRHI() );
         m_ClusterCulling_ArgumentBuffer.Shutdown( m_pRenderSystem->GetContextRHI() );
+        m_ClusterCompaction_ArgumentBuffer.Shutdown( m_pRenderSystem->GetContextRHI() );
+        m_ClusterRecordCountersBuffer.Shutdown( m_pRenderSystem->GetContextRHI() );
+
+        RHI::DestroyBuffer( m_pRenderSystem->GetContextRHI(), eastl::move( m_pClusterCulling_CounterBuffer ) );
 
         m_LightCulling_SpatialHash.Shutdown( m_pRenderSystem->GetContextRHI() );
-
-        RHI::DestroyBuffer( m_pRenderSystem->GetContextRHI(), eastl::move( m_pInstanceCulling_CounterBuffer ) );
-        RHI::DestroyBuffer( m_pRenderSystem->GetContextRHI(), eastl::move( m_pClusterCulling_CounterBuffer ) );
     }
 
     void ForwardShadingRenderer::UpdateDeviceResources( UpdateContext const& ctx )
@@ -162,7 +163,6 @@ namespace EE::Render
         bool const enableSSAO = m_pRenderGlobalSettings->m_enableSSAO;
         bool const enableSSAOLowResolution = m_pRenderGlobalSettings->m_enableSSAOLowResolution;
         bool const enableDepthDownsample = ( enableSSAO && enableSSAOLowResolution ) || false;
-        bool const useAsyncCompute = enableAsyncCompute && ( enableSSAO || false );
 
         //-------------------------------------------------------------------------
 
@@ -240,6 +240,8 @@ namespace EE::Render
         pRenderViewport->m_numRenderViews = pRenderViewport->m_numGlobalEnvironmentMapRenderViews + pRenderViewport->m_numCascadedShadowRenderViews + pRenderViewport->m_numForwardShadingRenderViews;
         pRenderViewport->m_numRenderBuckets = pRenderViewport->m_numRenderViews * pRenderViewport->m_numRenderViewBucketsPerView;
 
+        EE_ASSERT( pRenderViewport->m_numRenderViews <= EE_MAX_CULLING_VIEWS );
+
         EE_ASSERT( currentRenderViewOffset == pRenderViewport->m_numRenderViews );
 
         // Global Parameters Buffer
@@ -308,6 +310,44 @@ namespace EE::Render
             pRenderViewport->m_cascadedShadowBuffers[frameIndex] = RHI::CreateBuffer( pContextRHI, cascadedShadowBufferParameters );
         }
 
+        // Update render views for all passes
+        //-------------------------------------------------------------------------
+        {
+            TArrayView<ShaderTypes::RenderView> renderViews_WriteCombined = TArrayView<ShaderTypes::RenderView>( static_cast<ShaderTypes::RenderView*>( pRenderViewport->m_renderViewBuffers[frameIndex]->m_pMappedAddress_WriteCombined ), pRenderViewport->m_numRenderViews );
+            TArrayView<ShaderTypes::RenderView> globalEnvironmentMapRenderViews_WriteCombined = renderViews_WriteCombined.subspan( pRenderViewport->m_globalEnvironmentMapRenderViewsOffset, pRenderViewport->m_numGlobalEnvironmentMapRenderViews );
+            m_renderPass_GlobalEnvironmentMap.UpdateRenderViews( globalEnvironmentMapRenderViews_WriteCombined );
+
+            TArrayView<ShaderTypes::RenderView> forwardShadingRenderViews_WriteCombined = renderViews_WriteCombined.subspan( pRenderViewport->m_forwardShadingRenderViewsOffset, pRenderViewport->m_numForwardShadingRenderViews );
+            m_renderPass_ForwardShading.UpdateRenderViews( pRenderViewport, forwardShadingRenderViews_WriteCombined );
+        }
+
+        {
+            TArrayView<ShaderTypes::RenderView> renderViews_WriteCombined = TArrayView<ShaderTypes::RenderView>( static_cast<ShaderTypes::RenderView*>( pRenderViewport->m_renderViewBuffers[frameIndex]->m_pMappedAddress_WriteCombined ), pRenderViewport->m_numRenderViews );
+            TArrayView<ShaderTypes::RenderView> cascadedShadowMapRenderViews_WriteCombined = renderViews_WriteCombined.subspan( pRenderViewport->m_cascadedShadowRenderViewsOffset, pRenderViewport->m_numCascadedShadowRenderViews );
+            TArrayView<ShaderTypes::CascadedShadow> cascadedShadows_WriteCombined = TArrayView<ShaderTypes::CascadedShadow>( static_cast<ShaderTypes::CascadedShadow*>( pRenderViewport->m_cascadedShadowBuffers[frameIndex]->m_pMappedAddress_WriteCombined ), pRenderViewport->m_numCascadedShadowRenderViews );
+
+            size_t cascadedShadowPassIndex = 0;
+            for ( DirectionalLightComponent const* pDirectionalLightComponent : pRenderWorldSystem->m_directionalLightComponents )
+            {
+                if ( pDirectionalLightComponent->GetShadowed() )
+                {
+                    Float3 lightDirection = -pDirectionalLightComponent->GetLightDirection();
+
+                    m_renderPass_CascadedShadows[cascadedShadowPassIndex].UpdateRenderViews
+                    (
+                        pRenderViewport,
+                        lightDirection,
+                        &cascadedShadows_WriteCombined[cascadedShadowPassIndex],
+                        cascadedShadowMapRenderViews_WriteCombined.subspan( cascadedShadowPassIndex * CascadedShadowPass::NumShadowCascades, CascadedShadowPass::NumShadowCascades )
+                    );
+
+                    cascadedShadowPassIndex++;
+                }
+            }
+
+            EE_ASSERT( cascadedShadowPassIndex == pRenderWorldSystem->m_numShadowCastingDirectionalLights );
+        }
+
         // Initialize render buckets
         //-------------------------------------------------------------------------
         TArrayView<ShaderTypes::RenderBucket> renderBucketMemory_WriteCombined = TArrayView<ShaderTypes::RenderBucket>( static_cast<ShaderTypes::RenderBucket*>( pRenderViewport->m_renderBucketBuffers[frameIndex]->m_pMappedAddress_WriteCombined ), pRenderViewport->m_numRenderBuckets );
@@ -316,8 +356,6 @@ namespace EE::Render
         ForEachRenderBucket( pRenderWorldSystem->m_numShadowCastingDirectionalLights, [renderBucketMemory_WriteCombined, &renderBucketIndex] ( MaterialShaderRenderBucket& renderBucket )
         {
             ShaderTypes::RenderBucket deviceRenderBucket = {};
-            deviceRenderBucket.m_clusterVisibleCounterBuffer = RHI::GetBufferHandle( renderBucket.m_clusterVisibleCounterBuffer, RHI::DescriptorTypeFlags::RWBuffer );
-            deviceRenderBucket.m_clusterVisibleBuffer = RHI::GetBufferHandle( renderBucket.m_clusterVisibleBuffer.m_pBuffer, RHI::DescriptorTypeFlags::RWBuffer );
             deviceRenderBucket.m_drawCounterBuffer = RHI::GetBufferHandle( renderBucket.m_pDrawCounterBuffer, RHI::DescriptorTypeFlags::RWBuffer );
             deviceRenderBucket.m_drawArgumentBuffer = RHI::GetBufferHandle( renderBucket.m_drawArgumentBuffer.m_pBuffer, RHI::DescriptorTypeFlags::RWBuffer );
 
@@ -359,10 +397,15 @@ namespace EE::Render
         globalParameters.m_meshBuffer = m_pRenderSystem->GetMeshBufferHandle();
         globalParameters.m_clusterBuffer = m_pRenderSystem->GetClusterBufferHandle();
 
-        globalParameters.m_InstanceCulling_CounterBuffer = RHI::GetBufferHandle( m_pInstanceCulling_CounterBuffer, RHI::DescriptorTypeFlags::RWBuffer );
-        globalParameters.m_ClusterCulling_ClusterBuffer = RHI::GetBufferHandle( m_ClusterCulling_ClusterBuffer.m_pBuffer, RHI::DescriptorTypeFlags::RWBuffer );
-        globalParameters.m_ClusterCulling_CounterBuffer = RHI::GetBufferHandle( m_pClusterCulling_CounterBuffer, RHI::DescriptorTypeFlags::RWBuffer );
         globalParameters.m_ClusterCulling_ArgumentBuffer = RHI::GetBufferHandle( m_ClusterCulling_ArgumentBuffer.m_pBuffer, RHI::DescriptorTypeFlags::RWBuffer );
+        globalParameters.m_ClusterCulling_CounterBuffer = RHI::GetBufferHandle( m_pClusterCulling_CounterBuffer, RHI::DescriptorTypeFlags::RWBuffer );
+
+        globalParameters.m_ClusterRecordBuffer = RHI::GetBufferHandle( pRenderWorldSystem->m_deviceRenderWorld.GetClusterRecordBuffer(), RHI::DescriptorTypeFlags::RWBuffer );
+        globalParameters.m_ClusterRecordCountersBuffer = RHI::GetBufferHandle( m_ClusterRecordCountersBuffer.m_pBuffer, RHI::DescriptorTypeFlags::RWBuffer );
+        globalParameters.m_ClusterRecordOffsetsBuffer = RHI::GetBufferHandle( pRenderWorldSystem->m_deviceRenderWorld.GetClusterRecordOffsetsBuffer(), RHI::DescriptorTypeFlags::Buffer );
+
+        globalParameters.m_InstanceCulling_VisibilityBuffer = RHI::GetBufferHandle( pRenderWorldSystem->m_deviceRenderWorld.GetInstanceCullingVisibilityBuffer(), RHI::DescriptorTypeFlags::RWBuffer );
+        globalParameters.m_ClusterCompaction_ArgumentBuffer = RHI::GetBufferHandle( m_ClusterCompaction_ArgumentBuffer.m_pBuffer, RHI::DescriptorTypeFlags::RWBuffer );
 
         globalParameters.m_meshInstanceRootBuffer = pRenderWorldSystem->m_deviceRenderWorld.GetMeshInstanceRootBufferHandle();
         globalParameters.m_cascadedShadowBuffer = RHI::GetBufferHandle( pRenderViewport->m_cascadedShadowBuffers[frameIndex], RHI::DescriptorTypeFlags::Buffer );
@@ -518,17 +561,21 @@ namespace EE::Render
         // Update all render passes
         //-------------------------------------------------------------------------
 
+        // Buckets are sized with the per-shader UNION capacity (across all view layers).
+        // Culling groups span shader whole record stream, and a view records can be spread across every group, so a bucket can receive a draw argument from any of the shader groups.
+
         m_renderPass_GlobalEnvironmentMap.UpdateDeviceResources
         (
             m_pRenderSystem, m_materialShaderPipelineBuckets,
-            materialShaderClusterCapacity.GetViewLayerClusterCapacity( ViewLayer::GlobalEnvironmentMap )
+            materialShaderClusterCapacity.GetShaderClusterCapacity(),
+            pRenderWorldSystem->m_deviceRenderWorld.GetNumMeshInstancePages()
         );
 
         for ( size_t cascadedShadowPassIndex = 0; cascadedShadowPassIndex < numShadowCastingDirectionalLights; ++cascadedShadowPassIndex )
         {
-            m_renderPass_CascadedShadows[cascadedShadowPassIndex].UpdateDeviceResources( m_pRenderSystem, materialShaderClusterCapacity.GetViewLayerClusterCapacity( ViewLayer::ShadowMap ) );
+            m_renderPass_CascadedShadows[cascadedShadowPassIndex].UpdateDeviceResources( m_pRenderSystem, materialShaderClusterCapacity.GetShaderClusterCapacity(), pRenderWorldSystem->m_deviceRenderWorld.GetNumMeshInstancePages() );
         }
-        m_renderPass_ForwardShading.UpdateDeviceResources( m_pRenderSystem, m_materialShaderPipelineBuckets, materialShaderClusterCapacity.GetViewLayerClusterCapacity( ViewLayer::ForwardShading ) );
+        m_renderPass_ForwardShading.UpdateDeviceResources( m_pRenderSystem, m_materialShaderPipelineBuckets, materialShaderClusterCapacity.GetShaderClusterCapacity(), pRenderWorldSystem->m_deviceRenderWorld.GetNumMeshInstancePages() );
 
         #if EE_DEVELOPMENT_TOOLS
         m_debugDrawPass.UpdateDeviceResources( m_pRenderSystem );
@@ -539,7 +586,7 @@ namespace EE::Render
 
         auto UpdateBuffer_ClusterCullingArgument = [this, pContextRHI] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
         {
-            m_pRenderSystem->QueueResourceDelete( pOldBuffer );
+            m_pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
 
             RHI::BufferParameters clusterCulling_ArgumentBufferParameters = {};
             clusterCulling_ArgumentBufferParameters.m_alignment = RHI::IndirectCommandAlignment;
@@ -553,59 +600,112 @@ namespace EE::Render
 
         m_ClusterCulling_ArgumentBuffer.UpdateDeviceResources
         (
-            ( ( materialShaderClusterCapacity.GetGlobalClusterCapacity() + 63 ) / 64 ) * sizeof( ShaderTypes::ClusterCullingArgument ),
+            pRenderWorldSystem->m_deviceRenderWorld.GetNumMeshInstancePages() * 64 * sizeof( ShaderTypes::ClusterCullingArgument ),
             UpdateBuffer_ClusterCullingArgument
         );
 
         //-------------------------------------------------------------------------
 
-        auto UpdateBuffer_ClusterCulling = [this, pContextRHI] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
+        pRenderWorldSystem->m_deviceRenderWorld.UpdateDeviceResources_CullingBuffers( m_pRenderSystem, materialShaderClusterCapacity, uint32_t( m_materialShaderPipelineBuckets.size() ) );
+
+        //-------------------------------------------------------------------------
+
+        auto UpdateBuffer_ClusterCompactionArgument = [this, pContextRHI] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
         {
             m_pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
 
-            RHI::BufferParameters clusterCulling_ClusterBufferParameters = {};
-            clusterCulling_ClusterBufferParameters.m_bufferSize = newBufferSize;
-            clusterCulling_ClusterBufferParameters.m_format = RHI::DataFormat::RG32_UInt;
-            clusterCulling_ClusterBufferParameters.m_descriptorTypes.SetMultipleFlags( RHI::DescriptorTypeFlags::Buffer, RHI::DescriptorTypeFlags::RWBuffer );
-            clusterCulling_ClusterBufferParameters.m_debugName = "Renderer_ForwardShading ClusterCulling Cluster Buffer";
+            RHI::BufferParameters clusterCompaction_ArgumentBufferParameters = {};
+            clusterCompaction_ArgumentBufferParameters.m_alignment = RHI::IndirectCommandAlignment;
+            clusterCompaction_ArgumentBufferParameters.m_descriptorTypes = TBitFlags<RHI::DescriptorTypeFlags>( RHI::DescriptorTypeFlags::IndirectArgumentBuffer, RHI::DescriptorTypeFlags::RWBuffer );
+            clusterCompaction_ArgumentBufferParameters.m_bufferSize = newBufferSize;
+            clusterCompaction_ArgumentBufferParameters.m_bufferStride = sizeof( ShaderTypes::ClusterCompactionArgument );
+            clusterCompaction_ArgumentBufferParameters.m_debugName = "Renderer_ForwardShading ClusterCompaction Argument Buffer";
 
-            return RHI::CreateBuffer( pContextRHI, clusterCulling_ClusterBufferParameters );
+            return RHI::CreateBuffer( pContextRHI, clusterCompaction_ArgumentBufferParameters );
         };
 
-        m_ClusterCulling_ClusterBuffer.UpdateDeviceResources
+        m_ClusterCompaction_ArgumentBuffer.UpdateDeviceResources
         (
-            materialShaderClusterCapacity.GetGlobalClusterCapacity() * sizeof( uint2 ),
-            UpdateBuffer_ClusterCulling
+            pRenderWorldSystem->m_deviceRenderWorld.GetNumMeshInstancePages() * sizeof( ShaderTypes::ClusterCompactionArgument ),
+            UpdateBuffer_ClusterCompactionArgument
         );
 
         //-------------------------------------------------------------------------
 
+        uint32_t const numMaterialShaderKeys = uint32_t( m_materialShaderPipelineBuckets.size() );
+
+        size_t const numShaderEntries = Math::Max( numMaterialShaderKeys, 1U );
+        size_t const recordCountersBufferSize = numShaderEntries * sizeof( uint32_t );
+
+        auto UpdateBuffer_ClusterRecordCounters = [this, pContextRHI] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
+        {
+            m_pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
+
+            RHI::BufferParameters recordCountersBufferParameters = {};
+            recordCountersBufferParameters.m_bufferSize = newBufferSize;
+            recordCountersBufferParameters.m_bufferStride = sizeof( uint32_t );
+            recordCountersBufferParameters.m_format = RHI::DataFormat::R32_UInt;
+            recordCountersBufferParameters.m_descriptorTypes = RHI::DescriptorTypeFlags::RWBuffer;
+            recordCountersBufferParameters.m_debugName = "Renderer_ForwardShading Cluster Record Counters Buffer";
+
+            return RHI::CreateBuffer( pContextRHI, recordCountersBufferParameters );
+        };
+
+        m_ClusterRecordCountersBuffer.UpdateDeviceResources( recordCountersBufferSize, UpdateBuffer_ClusterRecordCounters );
+
         if ( !m_pClusterCulling_CounterBuffer )
         {
-            RHI::BufferParameters counterBufferParameters = {};
-            counterBufferParameters.m_bufferSize = sizeof( uint32_t );
-            counterBufferParameters.m_bufferStride = sizeof( uint32_t );
-            counterBufferParameters.m_format = RHI::DataFormat::R32_UInt;
-            counterBufferParameters.m_descriptorTypes = RHI::DescriptorTypeFlags::RWBuffer;
+            RHI::BufferParameters cullingArgumentCounterBufferParameters = {};
+            cullingArgumentCounterBufferParameters.m_bufferSize = sizeof( uint32_t );
+            cullingArgumentCounterBufferParameters.m_bufferStride = sizeof( uint32_t );
+            cullingArgumentCounterBufferParameters.m_format = RHI::DataFormat::R32_UInt;
+            cullingArgumentCounterBufferParameters.m_descriptorTypes = RHI::DescriptorTypeFlags::RWBuffer;
+            cullingArgumentCounterBufferParameters.m_debugName = "Renderer_ForwardShading ClusterCulling Counter Buffer";
 
-            counterBufferParameters.m_debugName = "Renderer_ForwardShading ClusterCulling Counter Buffer";
-            m_pClusterCulling_CounterBuffer = RHI::CreateBuffer( pContextRHI, counterBufferParameters );
-
-            counterBufferParameters.m_debugName = "Renderer_ForwardShading InstanceCulling Counter Buffer";
-            m_pInstanceCulling_CounterBuffer = RHI::CreateBuffer( pContextRHI, counterBufferParameters );
+            m_pClusterCulling_CounterBuffer = RHI::CreateBuffer( pContextRHI, cullingArgumentCounterBufferParameters );
         }
     }
 
-    void ForwardShadingRenderer::DispatchWorld( UpdateContext const& updateContext, RenderViewport const* pRenderViewport, EntityWorld* pWorld )
+    uint64_t ForwardShadingRenderer::DispatchWorld( UpdateContext const& updateContext, RenderViewport const* pRenderViewport, EntityWorld* pWorld, uint64_t waitSemaphore )
     {
         EE_PROFILE_FUNCTION_RENDER();
+
+        //-------------------------------------------------------------------------
+
+        bool const enableAsyncCompute = m_pRenderGlobalSettings->m_enableAsyncCompute;
+
+        bool const enableSMAA = m_pRenderGlobalSettings->m_enableSMAA;
+
+        bool const enableSSAO = m_pRenderGlobalSettings->m_enableSSAO;
+        bool const enableSSAOLowResolution = m_pRenderGlobalSettings->m_enableSSAOLowResolution;
+        bool const enableDepthDownsample = ( enableSSAO && enableSSAOLowResolution ) || false;
 
         uint32_t const frameIndex = m_pRenderSystem->GetFrameIndex();
         RHI::CommandBuffer* pCommandBuffer = pRenderViewport->m_pWindow->GetActiveCommandBuffer( frameIndex );
 
+        if ( enableAsyncCompute )
+        {
+            pCommandBuffer = pRenderViewport->m_pWindow->AcquireComputeCommandBuffer( m_pRenderSystem->GetContextRHI(), frameIndex );
+        }
+
         RenderWorldSystem* pRenderWorldSystem = pWorld->GetWorldSystem<RenderWorldSystem>();
         pRenderWorldSystem->m_deviceRenderWorld.DispatchWorldUpdate( m_pRenderSystem->GetMeshBufferHandle(), pCommandBuffer, frameIndex );
         pRenderWorldSystem->m_deviceRenderWorld.WaitForCopyTasks( m_pRenderSystem );
+
+        if ( enableAsyncCompute )
+        {
+            // Wait for the PREVIOUS frame's shading to finish, allows to overlap with workload after previous frame shading
+            RHI::QueueDeviceWait( m_pRenderSystem->GetComputeQueue(), m_pRenderSystem->GetGraphicsQueue(), m_signalSemaphores_ShadingPass[( frameIndex + RHI::MaxPendingFrames - 1 ) % RHI::MaxPendingFrames] );
+
+            // Wait for the previous world rendering to be completed when we have multiple viewports
+            RHI::QueueDeviceWait( m_pRenderSystem->GetComputeQueue(), m_pRenderSystem->GetGraphicsQueue(), waitSemaphore );
+
+            m_signalSemaphores_WorldUpdate[frameIndex] = SubmitComputeCommandBuffer( eastl::move( pCommandBuffer ) );
+
+            return m_signalSemaphores_WorldUpdate[frameIndex];
+        }
+
+        return 0;
     }
 
     uint64_t ForwardShadingRenderer::DrawWorldToViewport( UpdateContext const& ctx, RenderViewport const* pRenderViewport, EntityWorld const* pWorld, uint64_t waitSemaphore )
@@ -617,7 +717,6 @@ namespace EE::Render
         EE_PROFILE_FUNCTION_RENDER();
 
         RenderWorldSystem const* pRenderWorldSystem = pWorld->GetWorldSystem<RenderWorldSystem>();
-        MaterialShaderClusterCapacity const& materialShaderClusterCapacity = pRenderWorldSystem->m_materialShaderClusterCapacity;
 
         //-------------------------------------------------------------------------
 
@@ -633,16 +732,6 @@ namespace EE::Render
         bool const enableSSAOLowResolution = m_pRenderGlobalSettings->m_enableSSAOLowResolution;
         bool const enableDepthDownsample = ( enableSSAO && enableSSAOLowResolution ) || false;
 
-        bool const useAsyncCompute = enableAsyncCompute && ( enableSSAO || false );
-
-        //-------------------------------------------------------------------------
-
-        TArrayView<ShaderTypes::RenderView> renderViews_WriteCombined = TArrayView<ShaderTypes::RenderView>( static_cast<ShaderTypes::RenderView*>( pRenderViewport->m_renderViewBuffers[frameIndex]->m_pMappedAddress_WriteCombined ), pRenderViewport->m_numRenderViews );
-
-        TArrayView<ShaderTypes::RenderView> globalEnvironmentMapRenderViews_WriteCombined = renderViews_WriteCombined.subspan( pRenderViewport->m_globalEnvironmentMapRenderViewsOffset, pRenderViewport->m_numGlobalEnvironmentMapRenderViews );
-        TArrayView<ShaderTypes::RenderView> cascadedShadowMapRenderViews_WriteCombined = renderViews_WriteCombined.subspan( pRenderViewport->m_cascadedShadowRenderViewsOffset, pRenderViewport->m_numCascadedShadowRenderViews );
-        TArrayView<ShaderTypes::RenderView> forwardShadingRenderViews_WriteCombined = renderViews_WriteCombined.subspan( pRenderViewport->m_forwardShadingRenderViewsOffset, pRenderViewport->m_numForwardShadingRenderViews );
-
         //-------------------------------------------------------------------------
 
         RHI::BufferHandle   renderViewBufferHandle = RHI::GetBufferHandle( pRenderViewport->m_renderViewBuffers[frameIndex], RHI::DescriptorTypeFlags::Buffer );
@@ -652,13 +741,152 @@ namespace EE::Render
 
         Memory::WriteCombinedBarrier();
 
+        RHI::CommandBuffer* pCommandBuffer_GeometryCulling = pRenderViewport->m_pWindow->GetActiveCommandBuffer( frameIndex );
+        uint64_t signalSemaphore_GeometryCulling = 0;
+
+        if ( enableAsyncCompute )
+        {
+            pCommandBuffer_GeometryCulling = pRenderViewport->m_pWindow->AcquireComputeCommandBuffer( m_pRenderSystem->GetContextRHI(), frameIndex );
+        }
+
+        // Instance culling
+        //-------------------------------------------------------------------------
+
+        EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
+
+        {
+            EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer_GeometryCulling, "Clear Buffers" );
+
+            #if EE_DEVELOPMENT_TOOLS
+            m_debugDrawPass.ClearBuffers( pCommandBuffer_GeometryCulling, frameIndex );
+            #endif
+
+            RHI::CmdClearBuffer( pCommandBuffer_GeometryCulling, m_pClusterCulling_CounterBuffer, 0 );
+            RHI::CmdClearBuffer( pCommandBuffer_GeometryCulling, m_ClusterRecordCountersBuffer.m_pBuffer, 0 );
+
+            // The cluster culling argument buffer has to start the frame zeroed. Vulkan has no
+            // indirect dispatch count, so CmdExecuteIndirect spends the count on the CPU and
+            // records one dispatch per possible command; a command past the GPU-written count
+            // reads its slot anyway. Zeroed, that slot is a (0,0,0) dispatch and a legal no-op -
+            // left stale, it is whatever the last frame wrote, and a garbage group count hangs
+            // the GPU. Direct3D 12 never needed this because its count stops the walk.
+            //
+            // Only this buffer. ClusterCompaction.esf appends through an InterlockedAdd, so the
+            // slots past the count are the stale ones, and maxNumCommands is numPages * 64. The
+            // compaction argument buffer is not appended to - InstanceCulling.esf writes slot
+            // groupID unconditionally for every page, a zero-instance page writing a (0,1,1)
+            // no-op, and its CmdExecuteIndirect passes no count buffer at all.
+            RHI::CmdClearBuffer( pCommandBuffer_GeometryCulling, m_ClusterCulling_ArgumentBuffer.m_pBuffer, 0 );
+
+            ForEachRenderBucket( pRenderWorldSystem->m_numShadowCastingDirectionalLights, [pCommandBuffer_GeometryCulling] ( MaterialShaderRenderBucket& renderBucket )
+            {
+                RHI::CmdClearBuffer( pCommandBuffer_GeometryCulling, renderBucket.m_pDrawCounterBuffer, 0 );
+            } );
+
+            RHI::CmdBarrier( pCommandBuffer_GeometryCulling, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::AllShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::ShaderResource );
+        }
+
+        // Common root constants
+        //-------------------------------------------------------------------------
+
+        ShaderTypes::CommonRootConstants commonRootConstants = {};
+        commonRootConstants.m_numRenderViewBucketsPerView = pRenderViewport->m_numRenderViewBucketsPerView;
+        commonRootConstants.m_numRenderViews = pRenderViewport->m_numRenderViews;
+        commonRootConstants.m_numRenderBuckets = pRenderViewport->m_numRenderBuckets;
+
+        // Instance culling - overlap with previous frame post processing
+        //-------------------------------------------------------------------------
+
+        {
+            EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer_GeometryCulling, "Instance Culling" );
+
+            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
+
+            ShaderTypes::InstanceCullingRootConstants instanceCullingRootConstants = {};
+            instanceCullingRootConstants.m_commonRootConstants = commonRootConstants;
+
+            RHI::CmdSetPipeline( pCommandBuffer_GeometryCulling, m_pInstanceCullingShader->m_pPipeline );
+            RHI::CmdSetRootConstants( pCommandBuffer_GeometryCulling, 0, &instanceCullingRootConstants, sizeof( instanceCullingRootConstants ) );
+            RHI::CmdSetRootParameter( pCommandBuffer_GeometryCulling, 1, pGlobalParametersBuffer, 0 );
+            RHI::CmdDispatchCompute( pCommandBuffer_GeometryCulling, pRenderWorldSystem->m_deviceRenderWorld.GetNumMeshInstancePages(), 1, 1 );
+        }
+
+        RHI::CmdBarrier( pCommandBuffer_GeometryCulling, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ComputeShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::UnorderedAccess );
+
+        // Cluster compaction
+        //-------------------------------------------------------------------------
+
+        {
+            EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer_GeometryCulling, "Cluster Compaction" );
+
+            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
+
+            RHI::CmdBarrier( pCommandBuffer_GeometryCulling, m_ClusterCompaction_ArgumentBuffer.m_pBuffer, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ExecuteIndirect, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::IndirectArgument );
+
+            RHI::CmdSetPipeline( pCommandBuffer_GeometryCulling, m_pClusterCompactionShader->m_pPipeline );
+            RHI::CmdSetRootConstants( pCommandBuffer_GeometryCulling, 0, nullptr, sizeof( ShaderTypes::ClusterCompactionRootConstants ) );
+
+            // No count buffer - the max command count is fixed to one compaction dispatch per mesh instance page.
+            // Every instance culling group must unconditionally write its compaction argument, including pages with zero visible instances.
+            RHI::CmdExecuteIndirect
+            (
+                pCommandBuffer_GeometryCulling, m_pClusterCompactionShader->m_pCommandSignature,
+                pRenderWorldSystem->m_deviceRenderWorld.GetNumMeshInstancePages(),
+                m_ClusterCompaction_ArgumentBuffer.m_pBuffer, 0,
+                nullptr, 0
+            );
+        }
+
+        RHI::CmdBarrier( pCommandBuffer_GeometryCulling, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ComputeShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::UnorderedAccess );
+
+        RHI::CmdBarrier( pCommandBuffer_GeometryCulling, pRenderWorldSystem->m_deviceRenderWorld.GetClusterRecordBuffer(), RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ComputeShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::ShaderResource );
+
+        // Cluster culling
+        //-------------------------------------------------------------------------
+
+        {
+            EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer_GeometryCulling, "Cluster Culling" );
+
+            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
+
+            RHI::CmdBarrier( pCommandBuffer_GeometryCulling, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ComputeShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::UnorderedAccess );
+
+            RHI::CmdBarrier( pCommandBuffer_GeometryCulling, m_pClusterCulling_CounterBuffer, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ExecuteIndirect, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::IndirectArgument );
+            RHI::CmdBarrier( pCommandBuffer_GeometryCulling, m_ClusterCulling_ArgumentBuffer.m_pBuffer, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ExecuteIndirect, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::IndirectArgument );
+
+            RHI::CmdSetPipeline( pCommandBuffer_GeometryCulling, m_pClusterCullingShader->m_pPipeline );
+            RHI::CmdSetRootConstants( pCommandBuffer_GeometryCulling, 0, nullptr, sizeof( ShaderTypes::ClusterCullingRootConstants ) );
+            RHI::CmdExecuteIndirect
+            (
+                pCommandBuffer_GeometryCulling, m_pClusterCullingShader->m_pCommandSignature,
+                pRenderWorldSystem->m_deviceRenderWorld.GetNumMeshInstancePages() * 64,
+                m_ClusterCulling_ArgumentBuffer.m_pBuffer, 0,
+                m_pClusterCulling_CounterBuffer, 0
+            );
+
+            RHI::CmdBarrier( pCommandBuffer_GeometryCulling, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ComputeShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::UnorderedAccess );
+        }
+
+        if ( enableAsyncCompute )
+        {
+            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
+
+            // Wait for the PREVIOUS frame's shading to finish, allows to overlap with workload after previous frame shading
+            RHI::QueueDeviceWait( m_pRenderSystem->GetComputeQueue(), m_pRenderSystem->GetGraphicsQueue(), m_signalSemaphores_ShadingPass[( frameIndex + RHI::MaxPendingFrames - 1 ) % RHI::MaxPendingFrames] );
+
+            // Wait for the previous world rendering to be completed when we have multiple viewports
+            RHI::QueueDeviceWait( m_pRenderSystem->GetComputeQueue(), m_pRenderSystem->GetGraphicsQueue(), waitSemaphore );
+
+            signalSemaphore_GeometryCulling = SubmitComputeCommandBuffer( eastl::move( pCommandBuffer_GeometryCulling ) );
+        }
+
         // Spatial hash light culling - overlap with depth prepass
         //-------------------------------------------------------------------------
 
         RHI::CommandBuffer* pCommandBuffer_LightCulling = pRenderViewport->m_pWindow->GetActiveCommandBuffer( frameIndex );
         uint64_t signalSemaphore_LightCulling = 0;
 
-        if ( useAsyncCompute )
+        if ( enableAsyncCompute )
         {
             pCommandBuffer_LightCulling = pRenderViewport->m_pWindow->AcquireComputeCommandBuffer( m_pRenderSystem->GetContextRHI(), frameIndex );
         }
@@ -704,50 +932,23 @@ namespace EE::Render
             RHI::CmdBarrier( pCommandBuffer_LightCulling, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::AllShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::UnorderedAccess );
         }
 
-        if ( useAsyncCompute )
+        if ( enableAsyncCompute )
         {
             EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
-
-            // Wait for the PREVIOUS frame's shading to finish, allows to overlap with workload after previous frame shading
-            RHI::QueueDeviceWait( m_pRenderSystem->GetComputeQueue(), m_pRenderSystem->GetGraphicsQueue(), m_signalSemaphores_ShadingPass[( frameIndex + RHI::MaxPendingFrames - 1 ) % RHI::MaxPendingFrames] );
-
-            // Wait for the previous world rendering to be completed when we have multiple viewports
-            RHI::QueueDeviceWait( m_pRenderSystem->GetComputeQueue(), m_pRenderSystem->GetGraphicsQueue(), waitSemaphore );
 
             signalSemaphore_LightCulling = SubmitComputeCommandBuffer( eastl::move( pCommandBuffer_LightCulling ) );
         }
 
-        // Start frame by clearing all intermediate buffers
+
+        // Wait for all cluster and culling dispatches
         //-------------------------------------------------------------------------
 
         RHI::CommandBuffer* pCommandBuffer_DepthPass = pRenderViewport->m_pWindow->GetActiveCommandBuffer( frameIndex );
 
-        EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
-
         {
-            EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer_DepthPass, "Clear Buffers" );
+            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
 
-            RHI::CmdClearBuffer( pCommandBuffer_DepthPass, m_pInstanceCulling_CounterBuffer, 0 );
-            RHI::CmdClearBuffer( pCommandBuffer_DepthPass, m_pClusterCulling_CounterBuffer, 0 );
-
-            // The cluster culling argument buffer has to start the frame zeroed. Vulkan has no
-            // indirect dispatch count, so CmdExecuteIndirect spends the count on the CPU and
-            // records one dispatch per possible command; a command past the GPU-written count
-            // reads its slot anyway. Zeroed, that slot is a (0,0,0) dispatch and a legal no-op -
-            // left stale, it is whatever the last frame wrote, and a garbage group count hangs
-            // the GPU. Direct3D 12 never needed this because its count stops the walk.
-            RHI::CmdClearBuffer( pCommandBuffer_DepthPass, m_ClusterCulling_ArgumentBuffer.m_pBuffer, 0 );
-
-            #if EE_DEVELOPMENT_TOOLS
-            m_debugDrawPass.ClearBuffers( pCommandBuffer_DepthPass, frameIndex );
-            #endif
-
-            ForEachRenderBucket( pRenderWorldSystem->m_numShadowCastingDirectionalLights, [pCommandBuffer_DepthPass] ( MaterialShaderRenderBucket& renderBucket )
-            {
-                RHI::CmdClearBuffer( pCommandBuffer_DepthPass, renderBucket.m_clusterVisibleCounterBuffer, 0 );
-                RHI::CmdClearBuffer( pCommandBuffer_DepthPass, renderBucket.m_pDrawCounterBuffer, 0 );
-            } );
-
+            // Clear picking buffers
             #if EE_DEVELOPMENT_TOOLS
             if ( pRenderViewport->IsPickingEnabled() )
             {
@@ -756,78 +957,13 @@ namespace EE::Render
                 pRenderViewport->m_instancePickingResultsBuffer.Clear( pCommandBuffer_DepthPass, frameIndex );
             }
             #endif
-        }
-
-        RHI::CmdBarrier( pCommandBuffer_DepthPass, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::AllShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::ShaderResource );
-
-        // Common root constants
-        //-------------------------------------------------------------------------
-        ShaderTypes::CommonRootConstants commonRootConstants = {};
-        commonRootConstants.m_numRenderViewBucketsPerView = pRenderViewport->m_numRenderViewBucketsPerView;
-        commonRootConstants.m_numRenderViews = pRenderViewport->m_numRenderViews;
-        commonRootConstants.m_numRenderBuckets = pRenderViewport->m_numRenderBuckets;
-
-        // Instance culling
-        //-------------------------------------------------------------------------
-
-        {
-            EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer_DepthPass, "Instance Culling" );
-
-            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
-
-            ShaderTypes::InstanceCullingRootConstants instanceCullingRootConstants = {};
-            instanceCullingRootConstants.m_commonRootConstants = commonRootConstants;
-
-            RHI::CmdSetPipeline( pCommandBuffer_DepthPass, m_pInstanceCullingShader->m_pPipeline );
-            RHI::CmdSetRootConstants( pCommandBuffer_DepthPass, 0, &instanceCullingRootConstants, sizeof( instanceCullingRootConstants ) );
-            RHI::CmdSetRootParameter( pCommandBuffer_DepthPass, 1, pGlobalParametersBuffer, 0 );
-            RHI::CmdDispatchCompute( pCommandBuffer_DepthPass, pRenderWorldSystem->m_deviceRenderWorld.GetNumMeshInstancePages(), 1, 1 );
-        }
-
-        RHI::CmdBarrier( pCommandBuffer_DepthPass, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ComputeShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::UnorderedAccess );
-
-        // Cluster culling
-        //-------------------------------------------------------------------------
-
-        {
-            EE_RHI_COMMAND_BUFFER_PROFILE_SCOPE( pCommandBuffer_DepthPass, "Cluster Culling" );
-
-            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
-
-            RHI::CmdBarrier( pCommandBuffer_DepthPass, m_pClusterCulling_CounterBuffer, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ExecuteIndirect, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::IndirectArgument );
-            RHI::CmdBarrier( pCommandBuffer_DepthPass, m_ClusterCulling_ArgumentBuffer.m_pBuffer, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ExecuteIndirect, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::IndirectArgument );
-
-            RHI::CmdSetPipeline( pCommandBuffer_DepthPass, m_pClusterCullingShader->m_pPipeline );
-            RHI::CmdSetRootConstants( pCommandBuffer_DepthPass, 0, nullptr, sizeof( ShaderTypes::ClusterCullingRootConstants ) );
-            RHI::CmdExecuteIndirect
-            (
-                pCommandBuffer_DepthPass, m_pClusterCullingShader->m_pCommandSignature,
-                ( materialShaderClusterCapacity.GetGlobalClusterCapacity() + 63 ) / 64,
-                m_ClusterCulling_ArgumentBuffer.m_pBuffer, 0,
-                m_pClusterCulling_CounterBuffer, 0
-            );
-
-            RHI::CmdBarrier( pCommandBuffer_DepthPass, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ComputeShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::UnorderedAccess );
-
-            ShaderTypes::BucketResolveRootConstants bucketResolveRootConstants = {};
-            bucketResolveRootConstants.m_commonRootConstants = commonRootConstants;
-
-            RHI::CmdSetPipeline( pCommandBuffer_DepthPass, m_pBucketResolveShader->m_pPipeline );
-            RHI::CmdSetRootConstants( pCommandBuffer_DepthPass, 0, &bucketResolveRootConstants, sizeof( bucketResolveRootConstants ) );
-            RHI::CmdSetRootParameter( pCommandBuffer_DepthPass, 1, pGlobalParametersBuffer, 0 );
-            RHI::CmdDispatchCompute( pCommandBuffer_DepthPass, ( pRenderViewport->m_numRenderBuckets + 63 ) / 64, 1, 1 );
-        }
-
-        // Wait for all cluster and culling dispatches
-        //-------------------------------------------------------------------------
-        {
-            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
 
             ForEachRenderBucket( pRenderWorldSystem->m_numShadowCastingDirectionalLights, [pCommandBuffer_DepthPass] ( MaterialShaderRenderBucket& renderBucket )
             {
                 RHI::CmdBarrier( pCommandBuffer_DepthPass, renderBucket.m_pDrawCounterBuffer, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ExecuteIndirect, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::IndirectArgument );
                 RHI::CmdBarrier( pCommandBuffer_DepthPass, renderBucket.m_drawArgumentBuffer.m_pBuffer, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::ExecuteIndirect, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::IndirectArgument );
             } );
+            RHI::CmdBarrier( pCommandBuffer_DepthPass, RHI::PipelineStage::ComputeShader, RHI::PipelineStage::AllShader, RHI::ResourceAccess::UnorderedAccess, RHI::ResourceAccess::ShaderResource );
         }
 
         // Global environment map pass
@@ -839,14 +975,12 @@ namespace EE::Render
             m_renderPass_GlobalEnvironmentMap.DrawAndFilterGlobalEnvironmentMap
             (
                 m_materialShaderPipelineBuckets,
-                materialShaderClusterCapacity.GetViewLayerClusterCapacity( ViewLayer::GlobalEnvironmentMap ),
                 pGlobalParametersBuffer,
                 pCommandBuffer_DepthPass,
                 pRenderWorldSystem->m_pRadianceTexture,
                 pRenderWorldSystem->m_pIrradianceTexture,
                 renderViewBufferHandle,
-                pRenderViewport->m_globalEnvironmentMapRenderViewsOffset,
-                globalEnvironmentMapRenderViews_WriteCombined
+                pRenderViewport->m_globalEnvironmentMapRenderViewsOffset
             );
 
             // TODO: Implement the concept of device generated resources in the engine.
@@ -861,11 +995,9 @@ namespace EE::Render
         m_renderPass_ForwardShading.DepthOnlyPass
         (
             m_materialShaderPipelineBuckets,
-            materialShaderClusterCapacity.GetViewLayerClusterCapacity( ViewLayer::ForwardShading ),
             pRenderViewport,
             m_resourceStates,
-            pCommandBuffer_DepthPass,
-            forwardShadingRenderViews_WriteCombined
+            pCommandBuffer_DepthPass
         );
 
         if ( enableDepthDownsample )
@@ -874,7 +1006,7 @@ namespace EE::Render
         }
 
         uint64_t signalSemaphore_DepthPass = 0;
-        if ( useAsyncCompute )
+        if ( enableAsyncCompute )
         {
             if ( enableSSAO )
             {
@@ -896,6 +1028,8 @@ namespace EE::Render
                 m_resourceStates.FlushBarriers( pCommandBuffer_DepthPass );
             }
 
+            RHI::QueueDeviceWait( m_pRenderSystem->GetGraphicsQueue(), m_pRenderSystem->GetComputeQueue(), m_signalSemaphores_WorldUpdate[frameIndex] );
+            RHI::QueueDeviceWait( m_pRenderSystem->GetGraphicsQueue(), m_pRenderSystem->GetComputeQueue(), signalSemaphore_GeometryCulling );
             signalSemaphore_DepthPass = SubmitGraphicsCommandBuffer( eastl::move( pCommandBuffer_DepthPass ) );
         }
 
@@ -909,7 +1043,7 @@ namespace EE::Render
         {
             pCommandBuffer_GTAO = pCommandBuffer_DepthPass;
 
-            if ( useAsyncCompute )
+            if ( enableAsyncCompute )
             {
                 pCommandBuffer_GTAO = pRenderViewport->m_pWindow->AcquireComputeCommandBuffer( m_pRenderSystem->GetContextRHI(), frameIndex );
             }
@@ -919,10 +1053,10 @@ namespace EE::Render
 
                 m_renderPass_GTAO.PrefilterDepth( pRenderViewport, m_resourceStates, pCommandBuffer_GTAO, frameIndex );
                 m_renderPass_GTAO.ComputeNoisyResult( pRenderViewport, m_resourceStates, pCommandBuffer_GTAO, renderViewBufferHandle, pRenderViewport->m_forwardShadingRenderViewsOffset, frameIndex );
-                m_renderPass_GTAO.Denoise( pRenderViewport, m_resourceStates, pCommandBuffer_GTAO, useAsyncCompute, frameIndex );
+                m_renderPass_GTAO.Denoise( pRenderViewport, m_resourceStates, pCommandBuffer_GTAO, enableAsyncCompute, frameIndex );
             }
 
-            if ( useAsyncCompute )
+            if ( enableAsyncCompute )
             {
                 EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
                 if ( enableSSAOLowResolution )
@@ -946,19 +1080,15 @@ namespace EE::Render
         RHI::CommandBuffer* pCommandBuffer_CascadedShadows = pCommandBuffer_DepthPass;
         uint64_t signalSemaphore_CascadedShadows = 0;
 
-        if ( useAsyncCompute )
+        if ( enableAsyncCompute )
         {
             pCommandBuffer_CascadedShadows = pRenderViewport->m_pWindow->AcquireGraphicsCommandBuffer( m_pRenderSystem->GetContextRHI(), frameIndex );
         }
-
-        TArrayView<ShaderTypes::CascadedShadow> cascadedShadows_WriteCombined = TArrayView<ShaderTypes::CascadedShadow>( static_cast<ShaderTypes::CascadedShadow*>( pRenderViewport->m_cascadedShadowBuffers[frameIndex]->m_pMappedAddress_WriteCombined ), pRenderViewport->m_numCascadedShadowRenderViews );
 
         size_t numCascadedShadowPasses = 0;
 
         for ( DirectionalLightComponent const* pDirectionalLightComponent : pRenderWorldSystem->m_directionalLightComponents )
         {
-            Float3 lightDirection = -pDirectionalLightComponent->GetLightDirection();
-
             if ( pDirectionalLightComponent->GetShadowed() )
             {
                 CascadedShadowPass& cascadedShadowPass = m_renderPass_CascadedShadows[numCascadedShadowPasses];
@@ -966,13 +1096,9 @@ namespace EE::Render
                 cascadedShadowPass.DrawShadowCascades
                 (
                     m_materialShaderPipelineBuckets,
-                    materialShaderClusterCapacity.GetViewLayerClusterCapacity( ViewLayer::ShadowMap ),
                     pRenderViewport,
-                    lightDirection,
                     m_resourceStates,
-                    pCommandBuffer_CascadedShadows,
-                    &cascadedShadows_WriteCombined[numCascadedShadowPasses],
-                    cascadedShadowMapRenderViews_WriteCombined.subspan( numCascadedShadowPasses * CascadedShadowPass::NumShadowCascades, CascadedShadowPass::NumShadowCascades )
+                    pCommandBuffer_CascadedShadows
                 );
 
                 numCascadedShadowPasses++;
@@ -981,7 +1107,7 @@ namespace EE::Render
 
         EE_ASSERT( numCascadedShadowPasses == pRenderWorldSystem->m_numShadowCastingDirectionalLights );
 
-        if ( useAsyncCompute )
+        if ( enableAsyncCompute )
         {
             signalSemaphore_CascadedShadows = SubmitGraphicsCommandBuffer( eastl::move( pCommandBuffer_CascadedShadows ) );
         }
@@ -990,7 +1116,7 @@ namespace EE::Render
         //-------------------------------------------------------------------------
 
         RHI::CommandBuffer* pCommandBuffer_ShadingPass = pCommandBuffer_DepthPass;
-        if ( useAsyncCompute )
+        if ( enableAsyncCompute )
         {
             pCommandBuffer_ShadingPass = pRenderViewport->m_pWindow->AcquireGraphicsCommandBuffer( m_pRenderSystem->GetContextRHI(), frameIndex );
         }
@@ -1019,7 +1145,6 @@ namespace EE::Render
         m_renderPass_ForwardShading.ShadingPass
         (
             m_materialShaderPipelineBuckets,
-            materialShaderClusterCapacity.GetViewLayerClusterCapacity( ViewLayer::ForwardShading ),
             pRenderViewport,
             m_resourceStates,
             pCommandBuffer_ShadingPass
@@ -1040,8 +1165,33 @@ namespace EE::Render
         }
         #endif
 
+        if ( enableAsyncCompute )
+        {
+            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
+
+            RHI::CmdSetRenderTargets( pCommandBuffer_ShadingPass, {}, nullptr );
+
+            RHI::QueueDeviceWait( m_pRenderSystem->GetGraphicsQueue(), m_pRenderSystem->GetComputeQueue(), signalSemaphore_LightCulling );
+            RHI::QueueDeviceWait( m_pRenderSystem->GetGraphicsQueue(), m_pRenderSystem->GetComputeQueue(), signalSemaphore_GTAO );
+
+            m_signalSemaphores_ShadingPass[frameIndex] = SubmitGraphicsCommandBuffer( eastl::move( pCommandBuffer_ShadingPass ) );
+        }
+
         // Post processing
         //-------------------------------------------------------------------------
+
+        RHI::CommandBuffer* pCommandBuffer_PostProcessing = pCommandBuffer_ShadingPass;
+
+        if ( enableAsyncCompute )
+        {
+            EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
+
+            pCommandBuffer_PostProcessing = pRenderViewport->m_pWindow->AcquireGraphicsCommandBuffer( m_pRenderSystem->GetContextRHI(), frameIndex );
+
+            Float2 const viewportSize = pRenderViewport->GetSize();
+            RHI::CmdSetViewport( pCommandBuffer_PostProcessing, 0.0F, 0.0F, viewportSize.m_x, viewportSize.m_y, 0.0F, 1.0F );
+            RHI::CmdSetScissor( pCommandBuffer_PostProcessing, 0, 0, uint32_t( viewportSize.m_x ), uint32_t( viewportSize.m_y ) );
+        }
 
         if ( enableSMAA )
         {
@@ -1049,7 +1199,7 @@ namespace EE::Render
             (
                 pRenderViewport,
                 m_resourceStates,
-                pCommandBuffer_ShadingPass,
+                pCommandBuffer_PostProcessing,
                 m_pRenderSystem->GetSMAAAreaTexture(),
                 m_pRenderSystem->GetSMAASearchTexture()
             );
@@ -1061,14 +1211,14 @@ namespace EE::Render
 
         EE_ASSERT( !m_resourceStates.HasPendingBarriers() );
         m_resourceStates.Writeable( pRenderViewport->m_finalTexture, RHI::PipelineStage::Draw, RHI::ResourceAccess::RenderTarget, RHI::TextureState::RenderTarget );
-        m_resourceStates.FlushBarriers( pCommandBuffer_ShadingPass );
+        m_resourceStates.FlushBarriers( pCommandBuffer_PostProcessing );
 
-        RHI::CmdSetRenderTargets( pCommandBuffer_ShadingPass, { &pRenderViewport->m_finalTexture.m_pTexture, 1 }, nullptr, &postProcessLoadAction );
+        RHI::CmdSetRenderTargets( pCommandBuffer_PostProcessing, { &pRenderViewport->m_finalTexture.m_pTexture, 1 }, nullptr, &postProcessLoadAction );
 
         m_renderPass_PostProcess.DrawToViewport
         (
             m_resourceStates,
-            pCommandBuffer_ShadingPass,
+            pCommandBuffer_PostProcessing,
             m_pRenderSystem->GetTonemapLUT(),
             enableSMAA ? pRenderViewport->m_SMAA_ResultTexture : pRenderViewport->m_ForwardShading_ColorTexture,
             pRenderViewport->m_ForwardShading_DepthTexture
@@ -1087,7 +1237,7 @@ namespace EE::Render
             renderViewBufferHandle,
             pRenderViewport->m_forwardShadingRenderViewsOffset,
             m_resourceStates,
-            pCommandBuffer_ShadingPass,
+            pCommandBuffer_PostProcessing,
             frameIndex
         );
 
@@ -1100,15 +1250,12 @@ namespace EE::Render
         // End frame
         //-------------------------------------------------------------------------
 
-        RHI::CmdSetRenderTargets( pCommandBuffer_ShadingPass, {}, nullptr );
-        m_resourceStates.FlushBarriers( pCommandBuffer_ShadingPass );
+        RHI::CmdSetRenderTargets( pCommandBuffer_PostProcessing, {}, nullptr );
+        m_resourceStates.FlushBarriers( pCommandBuffer_PostProcessing );
 
-        if ( useAsyncCompute )
+        if ( enableAsyncCompute )
         {
-            RHI::QueueDeviceWait( m_pRenderSystem->GetGraphicsQueue(), m_pRenderSystem->GetComputeQueue(), signalSemaphore_LightCulling );
-            RHI::QueueDeviceWait( m_pRenderSystem->GetGraphicsQueue(), m_pRenderSystem->GetComputeQueue(), signalSemaphore_GTAO );
-
-            m_signalSemaphores_ShadingPass[frameIndex] = SubmitGraphicsCommandBuffer( eastl::move( pCommandBuffer_ShadingPass ) );
+            SubmitGraphicsCommandBuffer( eastl::move( pCommandBuffer_PostProcessing ) );
 
             pRenderViewport->m_pWindow->AcquireGraphicsCommandBuffer( m_pRenderSystem->GetContextRHI(), frameIndex );
 

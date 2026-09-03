@@ -5,7 +5,6 @@
 #include "Base/Threading/Threading.h"
 #include "Base/Render/RHI.h"
 #include "Base/Render/RenderWindow.h"
-#include "Base/Render/Settings/Settings_Render.h"
 #include "Base/Profiling.h"
 
 #include "EASTL/sort.h"
@@ -21,6 +20,8 @@ namespace EE::Render
 
     void RenderSystem::Initialize( RenderSettings const& settings )
     {
+        m_pRenderSettings = &settings;
+
         RHI::ContextParameters contextParameters = {};
         contextParameters.m_pApplicationName = "EsotericaGame";
         contextParameters.m_pEngineName = "EsotericaEngine";
@@ -98,6 +99,21 @@ namespace EE::Render
             commandBufferParameters.m_debugName.sprintf( "RenderSystem Common Command Buffer %i", frameIndex );
 
             m_frameCommandBuffers[frameIndex] = RHI::CreateCommandBuffer( m_pContextRHI, commandBufferParameters );
+        }
+
+        for ( uint32_t frameIndex = 0; frameIndex < RHI::MaxPendingFrames; ++frameIndex )
+        {
+            RHI::CommandPoolParameters commandPoolParameters = {};
+            commandPoolParameters.m_pQueue = m_pComputeQueue;
+            commandPoolParameters.m_debugName.sprintf( "RenderSystem Common Compute Command Pool %i", frameIndex );
+
+            m_frameComputeCommandPools[frameIndex] = RHI::CreateCommandPool( m_pContextRHI, commandPoolParameters );
+
+            RHI::CommandBufferParameters commandBufferParameters = {};
+            commandBufferParameters.m_pCommandPool = m_frameComputeCommandPools[frameIndex];
+            commandBufferParameters.m_debugName.sprintf( "RenderSystem Common Compute Command Buffer %i", frameIndex );
+
+            m_frameComputeCommandBuffers[frameIndex] = RHI::CreateCommandBuffer( m_pContextRHI, commandBufferParameters );
         }
 
         for ( uint32_t asyncTransferIndex = 0; asyncTransferIndex < MaxPendingTransfers; ++asyncTransferIndex )
@@ -203,6 +219,8 @@ namespace EE::Render
         {
             RHI::DestroyCommandPool( m_pContextRHI, eastl::move( m_frameCommandPools[frameIndex] ) );
             RHI::DestroyCommandBuffer( m_pContextRHI, eastl::move( m_frameCommandBuffers[frameIndex] ) );
+            RHI::DestroyCommandPool( m_pContextRHI, eastl::move( m_frameComputeCommandPools[frameIndex] ) );
+            RHI::DestroyCommandBuffer( m_pContextRHI, eastl::move( m_frameComputeCommandBuffers[frameIndex] ) );
         }
 
         for ( uint32_t asyncTransferIndex = 0; asyncTransferIndex < MaxPendingTransfers; ++asyncTransferIndex )
@@ -338,10 +356,12 @@ namespace EE::Render
 
         //-------------------------------------------------------------------------
 
-        RHI::CommandPool* pFrameCommandPool = m_frameCommandPools[m_frameIndex];
+        bool const submitResourceUpdatesOnComputeQueue = m_pRenderSettings->m_enableAsyncCompute;
+
+        RHI::CommandPool* pFrameCommandPool = submitResourceUpdatesOnComputeQueue ? m_frameComputeCommandPools[m_frameIndex] : m_frameCommandPools[m_frameIndex];
         RHI::ResetCommandPool( m_pContextRHI, pFrameCommandPool );
 
-        RHI::CommandBuffer* pFrameCommandBuffer = m_frameCommandBuffers[m_frameIndex];
+        RHI::CommandBuffer* pFrameCommandBuffer = submitResourceUpdatesOnComputeQueue ? m_frameComputeCommandBuffers[m_frameIndex] : m_frameCommandBuffers[m_frameIndex];
         RHI::BeginCommandBuffer( pFrameCommandBuffer );
 
         {
@@ -482,7 +502,9 @@ namespace EE::Render
 
         //-------------------------------------------------------------------------
 
-        RHI::CommandBuffer* pCommonCommandBuffer = m_frameCommandBuffers[m_frameIndex];
+        bool const submitResourceUpdatesOnComputeQueue = m_pRenderSettings->m_enableAsyncCompute;
+
+        RHI::CommandBuffer* pCommonCommandBuffer = submitResourceUpdatesOnComputeQueue ? m_frameComputeCommandBuffers[m_frameIndex] : m_frameCommandBuffers[m_frameIndex];
 
         if ( m_hasCopyBarriers[m_frameIndex] )
         {
@@ -495,12 +517,23 @@ namespace EE::Render
 
         //-------------------------------------------------------------------------
 
-        // Submit queue
-        m_resourceUpdateSemaphores[m_frameIndex] = RHI::QueueSubmit( m_pGraphicsQueue, { &pCommonCommandBuffer, 1 } );
-
-        if ( wait )
+        if ( submitResourceUpdatesOnComputeQueue )
         {
-            WaitGraphicsQueueIdle();
+            m_resourceUpdateSemaphores[m_frameIndex] = RHI::QueueSubmit( m_pComputeQueue, { &pCommonCommandBuffer, 1 } );
+
+            if ( wait )
+            {
+                WaitComputeQueueIdle();
+            }
+        }
+        else
+        {
+            m_resourceUpdateSemaphores[m_frameIndex] = RHI::QueueSubmit( m_pGraphicsQueue, { &pCommonCommandBuffer, 1 } );
+
+            if ( wait )
+            {
+                WaitGraphicsQueueIdle();
+            }
         }
 
         #if EE_DEVELOPMENT_TOOLS
@@ -1093,10 +1126,7 @@ namespace EE::Render
         {
             if ( !m_pMeshBuffer || m_pMeshBuffer->m_size < meshBufferSize )
             {
-                if ( m_pMeshBuffer )
-                {
-                    QueueResourceDelete( eastl::move( m_pMeshBuffer ) );
-                }
+                QueueResourceDelete( eastl::move( m_pMeshBuffer ) );
 
                 RHI::BufferParameters bufferParameters = {};
                 bufferParameters.m_bufferSize = meshBufferSize;
@@ -1124,10 +1154,7 @@ namespace EE::Render
         {
             if ( !m_pMeshClusterBuffer || m_pMeshClusterBuffer->m_size < clusterBufferSize )
             {
-                if ( m_pMeshClusterBuffer )
-                {
-                    QueueResourceDelete( eastl::move( m_pMeshClusterBuffer ) );
-                }
+                QueueResourceDelete( eastl::move( m_pMeshClusterBuffer ) );
 
                 RHI::BufferParameters bufferParameters = {};
                 bufferParameters.m_bufferSize = clusterBufferSize;

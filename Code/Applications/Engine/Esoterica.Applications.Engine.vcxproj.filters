@@ -20,7 +20,5 @@
   </ItemGroup>
   <ItemGroup>
     <Image Include="Win32\Engine.ico" />
-    <Image Include="SplashScreen.bmp" />
-    <Image Include="Win32\SplashScreen.bmp" />
   </ItemGroup>
 </Project>

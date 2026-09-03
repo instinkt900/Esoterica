@@ -41,7 +41,7 @@ namespace EE::Render
         void UpdateViewportDeviceResources( UpdateContext const& updateContext, RenderViewport* pRenderViewport, EntityWorld* pWorld );
         void UpdateWorldDeviceResources( UpdateContext const& updateContext, EntityWorld* pWorld );
 
-        void DispatchWorld( UpdateContext const& updateContext, RenderViewport const* pRenderViewport, EntityWorld* pWorld );
+        uint64_t DispatchWorld( UpdateContext const& updateContext, RenderViewport const* pRenderViewport, EntityWorld* pWorld, uint64_t waitSemaphore );
         uint64_t DrawWorldToViewport( UpdateContext const& updateContext, RenderViewport const* pRenderViewport, EntityWorld const* pWorld, uint64_t waitSemaphore );
 
     private:
@@ -71,15 +71,16 @@ namespace EE::Render
         TVector<ForwardShadingMaterialShaderPipelineBucket>                 m_materialShaderPipelineBuckets;
 
         ComputeShader const*                                                m_pInstanceCullingShader = nullptr;
+        ComputeShader const*                                                m_pClusterCompactionShader = nullptr;
         ComputeShader const*                                                m_pClusterCullingShader = nullptr;
         ComputeShader const*                                                m_pLightCulling_CullLightsShader = nullptr;
-        ComputeShader const*                                                m_pBucketResolveShader = nullptr;
 
-        RHI::Buffer*                                                        m_pInstanceCulling_CounterBuffer = nullptr;
-        DeviceResizeBuffer                                                  m_ClusterCulling_ClusterBuffer = {};
-
-        RHI::Buffer*                                                        m_pClusterCulling_CounterBuffer = {};
         DeviceResizeBuffer                                                  m_ClusterCulling_ArgumentBuffer = {};
+        RHI::Buffer*                                                        m_pClusterCulling_CounterBuffer = nullptr;
+
+        DeviceResizeBuffer                                                  m_ClusterCompaction_ArgumentBuffer = {};
+
+        DeviceResizeBuffer                                                  m_ClusterRecordCountersBuffer = {};
 
         DeviceSpatialHash                                                   m_LightCulling_SpatialHash;
 
@@ -93,6 +94,7 @@ namespace EE::Render
 
         DeviceResourceStates                                                m_resourceStates;
 
+        TArray<uint64_t, RHI::MaxPendingFrames>                             m_signalSemaphores_WorldUpdate = {};
         TArray<uint64_t, RHI::MaxPendingFrames>                             m_signalSemaphores_ShadingPass = {};
 
         #if EE_DEVELOPMENT_TOOLS

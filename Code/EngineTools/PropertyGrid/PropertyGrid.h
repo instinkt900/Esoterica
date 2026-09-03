@@ -18,7 +18,7 @@
 namespace EE
 {
     class ToolsContext;
-    class FileRegistry;
+    class DataFileSystem;
 
     namespace PG 
     {

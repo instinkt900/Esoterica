@@ -15,6 +15,17 @@ namespace EE::Animation
         }
 
         context.SetNodePtrFromIndex( m_parameterNodeIdx, pNode->m_pParameterNode );
+
+        if ( m_alignmentBoneID.IsValid() )
+        {
+            pNode->m_alignmentBoneIdx = context.m_pSkeleton->GetBoneIndex( m_alignmentBoneID );
+            if ( pNode->m_alignmentBoneIdx == InvalidIndex )
+            {
+                #if EE_DEVELOPMENT_TOOLS
+                context.LogWarning( "Cant find specified alignment bone ID ('%s') for target selector node", m_alignmentBoneID.c_str() );
+                #endif
+            }
+        }
     }
 
     int32_t TargetSelectorNode::SelectOption( GraphContext& context, SyncTrackTime const& initialTime )
@@ -40,22 +51,30 @@ namespace EE::Animation
             AnimationClip const* pClip = m_optionNodes[i]->IsValid() ? m_optionNodes[i]->GetAnimation() : nullptr;
             if ( pClip != nullptr && pClip->GetRootMotion().IsValid() )
             {
+                Percentage const startTime = hasInitialTime ? pClip->GetSyncTrack().GetPercentageThrough( initialTime ) : Percentage( 0.0f );
+
+                Transform endTransform;
+                if ( m_alignmentBoneIdx != InvalidIndex )
+                {
+                    TInlineVector<BoneChainElement, 20> const modelSpaceChain = pClip->GetModelSpaceTransform( pClip->GetFrameTime( startTime ), m_alignmentBoneIdx );
+                    endTransform = modelSpaceChain.back().m_modelSpaceTransform;
+                }
+                else // Align using the root transform
+                {
+                    if ( hasInitialTime )
+                    {
+                        endTransform = pClip->GetRootMotion().GetDelta( startTime, Percentage( 1.0f ) );
+                    }
+                    else
+                    {
+                        endTransform = pClip->GetRootMotion().GetTotalDelta();
+                    }
+                }
+
                 Option& opt = m_selectionOptions.emplace_back();
                 opt.m_optionIdx = i;
-
-                if ( hasInitialTime )
-                {
-                    Percentage const startTime = pClip->GetSyncTrack().GetPercentageThrough( initialTime );
-                    Transform const endTransform = pClip->GetRootMotion().GetDelta( startTime, Percentage( 1.0f ) );
-                    opt.m_endOrientation = endTransform.GetRotation();
-                    opt.m_endPoint = endTransform.GetTranslation();
-                }
-                else
-                {
-                    Transform const& endTransform = pClip->GetRootMotion().GetTotalDelta();
-                    opt.m_endOrientation = endTransform.GetRotation();
-                    opt.m_endPoint = endTransform.GetTranslation();
-                }
+                opt.m_endOrientation = endTransform.GetRotation();
+                opt.m_endPoint = endTransform.GetTranslation();
 
                 maxDistance = Math::Max( maxDistance, opt.m_endPoint.GetLength3() );
             }

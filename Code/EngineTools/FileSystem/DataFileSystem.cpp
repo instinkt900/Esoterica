@@ -1,4 +1,4 @@
-#include "FileRegistry.h"
+#include "DataFileSystem.h"
 #include "EngineTools/Resource/ResourceDescriptor.h"
 #include "Engine/Entity/EntityDescriptors.h"
 #include "Base/FileSystem/FileSystemUtils.h"
@@ -10,12 +10,12 @@
 
 namespace EE
 {
-    FileRegistry::FileInfo::~FileInfo()
+    DataFileSystem::FileInfo::~FileInfo()
     {
         EE::Delete( m_pDataFile );
     }
 
-    FileRegistry::FileInfo& FileRegistry::FileInfo::operator=( FileInfo&& rhs )
+    DataFileSystem::FileInfo& DataFileSystem::FileInfo::operator=( FileInfo&& rhs )
     {
         m_dataPath = rhs.m_dataPath;
         m_filePath = rhs.m_filePath;
@@ -29,7 +29,7 @@ namespace EE
         return *this;
     }
 
-    FileRegistry::FileInfo& FileRegistry::FileInfo::operator=( FileInfo const& rhs )
+    DataFileSystem::FileInfo& DataFileSystem::FileInfo::operator=( FileInfo const& rhs )
     {
         m_dataPath = rhs.m_dataPath;
         m_filePath = rhs.m_filePath;
@@ -40,7 +40,7 @@ namespace EE
         return *this;
     }
 
-    void FileRegistry::FileInfo::LoadDataFile( TypeSystem::TypeRegistry const& typeRegistry, Log& log )
+    void DataFileSystem::FileInfo::LoadDataFile( TypeSystem::TypeRegistry const& typeRegistry, Log& log )
     {
         EE_ASSERT( IsResourceDescriptorFile() || IsDataFile() );
         EE_ASSERT( m_pDataFile == nullptr );
@@ -50,7 +50,7 @@ namespace EE
         m_pDataFile = result.m_pDataFile;
     }
 
-    void FileRegistry::FileInfo::ReloadDataFile( TypeSystem::TypeRegistry const& typeRegistry, Log& log )
+    void DataFileSystem::FileInfo::ReloadDataFile( TypeSystem::TypeRegistry const& typeRegistry, Log& log )
     {
         EE::Delete( m_pDataFile );
         LoadDataFile( typeRegistry, log );
@@ -58,7 +58,7 @@ namespace EE
 
     //-------------------------------------------------------------------------
 
-    void FileRegistry::DirectoryInfo::ChangePath( FileSystem::Path const& rawResourceDirectoryPath, FileSystem::Path const& newPath )
+    void DataFileSystem::DirectoryInfo::ChangePath( FileSystem::Path const& rawResourceDirectoryPath, FileSystem::Path const& newPath )
     {
         FileSystem::Path const oldPath = m_filePath;
         m_name = newPath.GetDirectoryName();
@@ -84,7 +84,7 @@ namespace EE
         }
     }
 
-    void FileRegistry::DirectoryInfo::Clear()
+    void DataFileSystem::DirectoryInfo::Clear()
     {
         for ( auto& dir : m_directories )
         {
@@ -104,7 +104,7 @@ namespace EE
         m_files.clear();
     }
 
-    void FileRegistry::DirectoryInfo::GetAllFiles( TVector<FileInfo const*>& files, bool recurseIntoChildDirectories ) const
+    void DataFileSystem::DirectoryInfo::GetAllFiles( TVector<FileInfo const*>& files, bool recurseIntoChildDirectories ) const
     {
         for ( auto pFile : m_files )
         {
@@ -120,7 +120,7 @@ namespace EE
         }
     }
 
-    void FileRegistry::DirectoryInfo::GetAllResourceOrDataFiles( TVector<FileInfo const*>& files, bool recurseIntoChildDirectories ) const
+    void DataFileSystem::DirectoryInfo::GetAllResourceOrDataFiles( TVector<FileInfo const*>& files, bool recurseIntoChildDirectories ) const
     {
         for ( auto pFile : m_files )
         {
@@ -143,29 +143,29 @@ namespace EE
 
     //-------------------------------------------------------------------------
 
-    FileRegistry::~FileRegistry()
+    DataFileSystem::~DataFileSystem()
     {
         EE_ASSERT( m_state == DatabaseState::Empty );
         EE_ASSERT( m_sourceDataDirectoryInfo.IsEmpty() && m_resourcesPerType.empty() && m_filesPerPath.empty() );
     }
 
-    float FileRegistry::GetProgress() const
+    float DataFileSystem::GetCacheBuildProgress() const
     {
+        EE_ASSERT( IsBuildingCaches() );
+
         if ( m_totalItemsToProcess == 0 )
         {
-            return 1.0f;
+            return 0.0f;
         }
-        else
-        {
-            float const progress = float( m_numItemsProcessed ) / m_totalItemsToProcess;
-            EE_ASSERT( Math::IsFinite( progress ) );
-            return progress;
-        }
+
+        float const progress = float( m_numItemsProcessed ) / m_totalItemsToProcess;
+        EE_ASSERT( Math::IsFinite( progress ) );
+        return progress;
     }
 
     //-------------------------------------------------------------------------
 
-    void FileRegistry::Initialize( TypeSystem::TypeRegistry const* pTypeRegistry, TaskSystem* pTaskSystem, FileSystem::Path const& rawResourceDirPath, FileSystem::Path const& compiledResourceDirPath )
+    void DataFileSystem::Initialize( TypeSystem::TypeRegistry const* pTypeRegistry, TaskSystem* pTaskSystem, FileSystem::Path const& rawResourceDirPath, FileSystem::Path const& compiledResourceDirPath )
     {
         EE_ASSERT( m_pTypeRegistry == nullptr && pTypeRegistry != nullptr );
         EE_ASSERT( m_pTaskSystem == nullptr && pTaskSystem != nullptr );
@@ -204,7 +204,7 @@ namespace EE
         m_fileSystemWatcher.StartWatching( m_sourceDataDirPath );
     }
 
-    void FileRegistry::Shutdown()
+    void DataFileSystem::Shutdown()
     {
         CancelDatabaseBuild();
 
@@ -230,7 +230,7 @@ namespace EE
         m_pTypeRegistry = nullptr;
     }
 
-    bool FileRegistry::Update()
+    bool DataFileSystem::Update()
     {
         // Wait for rebuild to complete
         //-------------------------------------------------------------------------
@@ -265,7 +265,7 @@ namespace EE
                     m_dataFilesToLoad.clear();
                     m_state = DatabaseState::Ready;
                 }
-                else // Error
+                else
                 {
                     EE_UNREACHABLE_CODE();
                 }
@@ -274,11 +274,15 @@ namespace EE
 
         // Update file watcher
         //-------------------------------------------------------------------------
+        // Do not update or run the file system watcher when we have any async task running that is either reading or writing the caches
 
-        if ( m_fileSystemWatcher.Update() )
+        if ( m_pAsyncTask == nullptr )
         {
-            ProcessFileSystemChanges();
-            return true;
+            if ( m_fileSystemWatcher.Update() )
+            {
+                ProcessFileSystemChanges();
+                return true;
+            }
         }
 
         //-------------------------------------------------------------------------
@@ -288,14 +292,14 @@ namespace EE
 
     //-------------------------------------------------------------------------
 
-    void FileRegistry::RequestRebuild()
+    void DataFileSystem::RequestRebuild()
     {
         CancelDatabaseBuild();
         ClearDatabase();
         StartFilesystemCacheBuild();
     }
 
-    void FileRegistry::ClearDatabase()
+    void DataFileSystem::ClearDatabase()
     {
         m_resourcesPerType.clear();
         m_filesPerPath.clear();
@@ -305,7 +309,7 @@ namespace EE
         m_state = DatabaseState::Empty;
     }
 
-    void FileRegistry::CancelDatabaseBuild()
+    void DataFileSystem::CancelDatabaseBuild()
     {
         if ( m_pAsyncTask != nullptr )
         {
@@ -315,16 +319,16 @@ namespace EE
             ClearDatabase();
             m_cancelActiveTask = false;
             m_numItemsProcessed = 0;
-            m_totalItemsToProcess = 1;
+            m_totalItemsToProcess = 0;
         }
     }
 
-    void FileRegistry::HandleMassiveFileSystemChangeDetected()
+    void DataFileSystem::HandleMassiveFileSystemChangeDetected()
     {
         RequestRebuild();
     }
 
-    void FileRegistry::StartFilesystemCacheBuild()
+    void DataFileSystem::StartFilesystemCacheBuild()
     {
         EE_ASSERT( m_state == DatabaseState::Empty );
         EE_ASSERT( m_pAsyncTask == nullptr );
@@ -334,6 +338,8 @@ namespace EE
 
         auto BuildFileSystemCache = [this] ( TaskSetPartition range, uint32_t threadnum )
         {
+            Threading::ScopeLock const sl( m_mutex );
+
             // Reset the resource type category and add an entry for for every known resource type
             //-------------------------------------------------------------------------
 
@@ -412,14 +418,14 @@ namespace EE
         //-------------------------------------------------------------------------
 
         m_numItemsProcessed = 0;
-        m_totalItemsToProcess = 0;
+        m_totalItemsToProcess = 1;
 
         m_state = DatabaseState::BuildingFileSystemCache;
         m_pAsyncTask = EE::New<AsyncTask>( BuildFileSystemCache );
         m_pTaskSystem->ScheduleTask( m_pAsyncTask );
     }
 
-    void FileRegistry::StartDataFileCacheBuild()
+    void DataFileSystem::StartDataFileCacheBuild()
     {
         EE_ASSERT( m_state == DatabaseState::BuildingFileSystemCache );
         EE_ASSERT( m_pAsyncTask == nullptr );
@@ -429,6 +435,8 @@ namespace EE
 
         auto BuildDescriptorCache = [this] ( TaskSetPartition range, uint32_t threadnum )
         {
+            Threading::ScopeLock const sl( m_mutex );
+
             Log tempLog;
 
             for ( uint32_t i = range.start; i < range.end; i++ )
@@ -451,7 +459,7 @@ namespace EE
 
     //-------------------------------------------------------------------------
 
-    FileRegistry::FileInfo const* FileRegistry::GetFileEntry( DataPath const& dataPath ) const
+    DataFileSystem::FileInfo const* DataFileSystem::GetFileEntry( DataPath const& dataPath ) const
     {
         auto fileEntryIter = m_filesPerPath.find( dataPath );;
         if ( fileEntryIter != m_filesPerPath.end() )
@@ -462,7 +470,7 @@ namespace EE
         return  nullptr;
     }
 
-    TVector<FileRegistry::FileInfo const*> FileRegistry::GetAllResourceFileEntries( ResourceTypeID resourceTypeID, bool includeDerivedTypes ) const
+    TVector<DataFileSystem::FileInfo const*> DataFileSystem::GetAllResourceFileEntries( ResourceTypeID resourceTypeID, bool includeDerivedTypes ) const
     {
         EE_ASSERT( m_pTypeRegistry->IsRegisteredResourceType( resourceTypeID ) );
 
@@ -494,7 +502,7 @@ namespace EE
         return results;
     }
 
-    TVector<FileRegistry::FileInfo const*> FileRegistry::GetAllResourceFileEntriesFiltered( ResourceTypeID resourceTypeID, TFunction<bool( Resource::ResourceDescriptor const* )> const& filter, bool includeDerivedTypes /*= false */ ) const
+    TVector<DataFileSystem::FileInfo const*> DataFileSystem::GetAllResourceFileEntriesFiltered( ResourceTypeID resourceTypeID, TFunction<bool( Resource::ResourceDescriptor const* )> const& filter, bool includeDerivedTypes /*= false */ ) const
     {
         EE_ASSERT( m_pTypeRegistry->IsRegisteredResourceType( resourceTypeID ) );
 
@@ -542,7 +550,7 @@ namespace EE
         return results;
     }
 
-    TVector<FileRegistry::FileInfo const*> FileRegistry::GetAllDataFileEntries( DataFileExtension extension ) const
+    TVector<DataFileSystem::FileInfo const*> DataFileSystem::GetAllDataFileEntries( DataFileExtension extension ) const
     {
         EE_ASSERT( m_pTypeRegistry->IsRegisteredDataFileType( extension ) );
 
@@ -559,7 +567,7 @@ namespace EE
         return results;
     }
 
-    TVector<FileRegistry::FileInfo const*> FileRegistry::GetAllDataFileEntries() const
+    TVector<DataFileSystem::FileInfo const*> DataFileSystem::GetAllDataFileEntries() const
     {
         TVector<FileInfo const*> results;
 
@@ -574,7 +582,7 @@ namespace EE
         return results;
     }
 
-    bool FileRegistry::DoesFileExist( DataPath const& path ) const
+    bool DataFileSystem::DoesFileExist( DataPath const& path ) const
     {
         EE_ASSERT( path.IsValid() );
 
@@ -589,7 +597,7 @@ namespace EE
         }
     }
 
-    TVector<ResourceID> FileRegistry::GetAllResourcesOfType( ResourceTypeID resourceTypeID, bool includeDerivedTypes ) const
+    TVector<ResourceID> DataFileSystem::GetAllResourcesOfType( ResourceTypeID resourceTypeID, bool includeDerivedTypes ) const
     {
         EE_ASSERT( m_pTypeRegistry->IsRegisteredResourceType( resourceTypeID ) );
 
@@ -621,7 +629,7 @@ namespace EE
         return results;
     }
 
-    TVector<EE::ResourceID> FileRegistry::GetAllResourcesOfTypeFiltered( ResourceTypeID resourceTypeID, TFunction<bool( Resource::ResourceDescriptor const* )> const& filter, bool includeDerivedTypes ) const
+    TVector<EE::ResourceID> DataFileSystem::GetAllResourcesOfTypeFiltered( ResourceTypeID resourceTypeID, TFunction<bool( Resource::ResourceDescriptor const* )> const& filter, bool includeDerivedTypes ) const
     {
         EE_ASSERT( m_pTypeRegistry->IsRegisteredResourceType( resourceTypeID ) );
 
@@ -669,57 +677,199 @@ namespace EE
         return results;
     }
 
-    TVector<DataPath> FileRegistry::GetAllDependentResources( DataPath sourceFile ) const
+    void DataFileSystem::GetAllResourcesThatDependOnFile( DataPath const& sourceFile, TVector<DataPath>& outCompileDependents, TVector<ResourceID>* pOutInstallDependents ) const
     {
-        TVector<DataPath> dependentResources;
+        EE_ASSERT( IsDataFileCacheBuilt() );
+        EE_ASSERT( m_pAsyncTask == nullptr );
+
+        outCompileDependents.clear();
+
+        bool const shouldReturnInstallDependencies = pOutInstallDependents != nullptr;
+        if ( shouldReturnInstallDependencies )
+        {
+            pOutInstallDependents->clear();
+        }
 
         if ( !sourceFile.IsValid() )
         {
-            return dependentResources;
+            return;
         }
 
+        // Search all descriptors for dependencies
         //-------------------------------------------------------------------------
 
-        TVector<Resource::CompileDependency> compileDependencies;
-        for ( auto const& fileEntryPair : m_filesPerPath )
+        uint32_t const numThreads = m_pTaskSystem->GetNumWorkers() + 1;
+
+        TVector<TInlineVector<DataPath, 100>> compileDependenciesPerThread;
+        compileDependenciesPerThread.resize( numThreads );
+
+        TVector<TInlineVector<ResourceID, 100>> installDependenciesPerThread;
+        installDependenciesPerThread.resize( numThreads );
+
+        auto SearchForDependencies = [this, &sourceFile, &compileDependenciesPerThread, &installDependenciesPerThread, shouldReturnInstallDependencies ] ( TaskSetPartition range, uint32_t threadNum )
         {
-            // Check each descriptor if it depends on the specified source file 
-            auto pDescriptor = TryCast<Resource::ResourceDescriptor>( fileEntryPair.second->m_pDataFile );
-            if ( pDescriptor != nullptr )
+            TVector<Resource::CompileDependency> compileDependencies;
+            TVector<ResourceID> installDependencies;
+
+            auto iter = m_filesPerPath.begin();
+            for ( uint32_t i = 0; i < range.start; i++ )
             {
-                compileDependencies.clear();
+                iter++;
+            }
 
-                // Get all dependencies for main resource
-                //-------------------------------------------------------------------------
+            for ( uint32_t i = range.start; i < range.end; i++  )
+            {
+                auto const& fileEntryPair = *iter;
+                iter++;
 
-                pDescriptor->GetCompileDependencies( *m_pTypeRegistry, m_sourceDataDirPath, "", compileDependencies );
-                if ( VectorContains( compileDependencies, sourceFile ) )
+                // Check each descriptor if it depends on the specified source file 
+                auto pDescriptor = TryCast<Resource::ResourceDescriptor>( fileEntryPair.second->m_pDataFile );
+                if ( pDescriptor != nullptr )
                 {
-                    dependentResources.emplace_back( fileEntryPair.first );
-                }
+                    compileDependencies.clear();
+                    installDependencies.clear();
 
-                // Get all dependencies for sub-resources
-                //-------------------------------------------------------------------------
+                    // Get all compile dependencies for main resource
+                    //-------------------------------------------------------------------------
 
-                TVector<String> subResources;
-                pDescriptor->GetAllSubResources( subResources );
-                for ( String const& subResourceID : subResources )
-                {
-                    pDescriptor->GetCompileDependencies( *m_pTypeRegistry, m_sourceDataDirPath, subResourceID, compileDependencies );
+                    pDescriptor->GetCompileDependencies( *m_pTypeRegistry, m_sourceDataDirPath, "", compileDependencies );
                     if ( VectorContains( compileDependencies, sourceFile ) )
                     {
-                        dependentResources.emplace_back( fileEntryPair.first );
+                         compileDependenciesPerThread[threadNum].emplace_back( fileEntryPair.second->m_dataPath );
+                    }
+
+                    // Get all install dependencies
+                    //-------------------------------------------------------------------------
+
+                    if ( shouldReturnInstallDependencies )
+                    {
+                        pDescriptor->GetInstallDependencies( *m_pTypeRegistry, m_sourceDataDirPath, "", installDependencies );
+                        if ( VectorContains( installDependencies, sourceFile ) )
+                        {
+                            installDependenciesPerThread[threadNum].emplace_back( fileEntryPair.second->m_dataPath );
+                        }
+                    }
+
+                    // Get all compile/install dependencies for sub-resources
+                    //-------------------------------------------------------------------------
+
+                    TVector<String> subResources;
+                    pDescriptor->GetAllSubResources( subResources );
+
+                    for ( String const& subResourceName : subResources )
+                    {
+                        compileDependencies.clear();
+                        installDependencies.clear();
+
+                        DataPath subresourcePath = fileEntryPair.second->m_dataPath;
+                        subresourcePath.SetSubFilename( subResourceName );
+
+                        pDescriptor->GetCompileDependencies( *m_pTypeRegistry, m_sourceDataDirPath, subResourceName, compileDependencies );
+                        if ( VectorContains( compileDependencies, sourceFile ) )
+                        {
+                            compileDependenciesPerThread[threadNum].emplace_back( subresourcePath );
+                        }
+
+                        if ( shouldReturnInstallDependencies )
+                        {
+                            pDescriptor->GetInstallDependencies( *m_pTypeRegistry, m_sourceDataDirPath, subResourceName, installDependencies );
+                            if ( VectorContains( installDependencies, sourceFile ) )
+                            {
+                                installDependenciesPerThread[threadNum].emplace_back( subresourcePath );
+                            }
+                        }
                     }
                 }
             }
+        };
+
+        // Blocking async search
+        //-------------------------------------------------------------------------
+
+        Threading::ScopeLock const sl( m_mutex );
+        m_pAsyncTask = EE::New<AsyncTask>( (uint32_t) m_filesPerPath.size(), SearchForDependencies );
+        m_pTaskSystem->ScheduleTask( m_pAsyncTask );
+        m_pTaskSystem->WaitForTask( m_pAsyncTask );
+        EE::Delete( m_pAsyncTask );
+
+        for ( uint32_t i = 0; i < numThreads; i++ )
+        {
+            outCompileDependents.insert( outCompileDependents.end(), compileDependenciesPerThread[i].begin(), compileDependenciesPerThread[i].end());
+
+            if ( shouldReturnInstallDependencies )
+            {
+                pOutInstallDependents->insert( pOutInstallDependents->end(), installDependenciesPerThread[i].begin(), installDependenciesPerThread[i].end() );
+            }
+        }
+    }
+
+    void DataFileSystem::GetAllFilesThatReferenceFile( DataPath const& sourceFile, TVector<DataFileSystem::FileInfo const*>& outReferencers ) const
+    {
+        EE_ASSERT( IsDataFileCacheBuilt() );
+        EE_ASSERT( m_pAsyncTask == nullptr );
+
+        outReferencers.clear();
+
+        if ( !sourceFile.IsValid() )
+        {
+            return;
         }
 
-        return dependentResources;
+        // Search all descriptors for dependencies
+        //-------------------------------------------------------------------------
+
+        uint32_t const numThreads = m_pTaskSystem->GetNumWorkers() + 1;
+        TVector<TInlineVector<DataFileSystem::FileInfo const*, 100>> referencersPerThread;
+        referencersPerThread.resize( numThreads );
+
+        auto SearchForReferences = [this, &sourceFile, &referencersPerThread] ( TaskSetPartition range, uint32_t threadNum )
+        {
+            auto iter = m_filesPerPath.begin();
+            for ( uint32_t i = 0; i < range.start; i++ )
+            {
+                iter++;
+            }
+
+            TVector<DataPath> referencedPaths;
+            TypeSystem::TypeID const dataPathTypeID = GetCoreTypeID( TypeSystem::CoreTypeID::DataPath );
+            TypeSystem::TypeID const typedDataPathTypeID = GetCoreTypeID( TypeSystem::CoreTypeID::TDataFilePath );
+
+            for ( uint32_t i = range.start; i < range.end; i++ )
+            {
+                auto const& fileEntryPair = *iter;
+                iter++;
+
+                // Check each data file if it references the specified source file
+                if ( fileEntryPair.second->m_pDataFile != nullptr )
+                {
+                    referencedPaths.clear();
+                    fileEntryPair.second->m_pDataFile->GetReferencedPaths( referencedPaths );
+                    if ( VectorContains( referencedPaths, sourceFile ) )
+                    {
+                        referencersPerThread[threadNum].emplace_back( fileEntryPair.second );
+                    }
+                }
+            }
+        };
+
+        // Blocking async search
+        //-------------------------------------------------------------------------
+
+        Threading::ScopeLock const sl( m_mutex );
+        m_pAsyncTask = EE::New<AsyncTask>( (uint32_t) m_filesPerPath.size(), SearchForReferences );
+        m_pTaskSystem->ScheduleTask( m_pAsyncTask );
+        m_pTaskSystem->WaitForTask( m_pAsyncTask );
+        EE::Delete( m_pAsyncTask );
+
+        for ( uint32_t i = 0; i < numThreads; i++ )
+        {
+            outReferencers.insert( outReferencers.end(), referencersPerThread[i].begin(), referencersPerThread[i].end() );
+        }
     }
 
     //-------------------------------------------------------------------------
 
-    FileRegistry::DirectoryInfo* FileRegistry::FindDirectory( FileSystem::Path const& dirPathToFind )
+    DataFileSystem::DirectoryInfo* DataFileSystem::FindDirectory( FileSystem::Path const& dirPathToFind )
     {
         EE_ASSERT( dirPathToFind.IsDirectoryPath() );
 
@@ -753,7 +903,7 @@ namespace EE
         return pCurrentDir;
     }
 
-    FileRegistry::DirectoryInfo* FileRegistry::FindOrCreateDirectory( FileSystem::Path const& dirPathToFind )
+    DataFileSystem::DirectoryInfo* DataFileSystem::FindOrCreateDirectory( FileSystem::Path const& dirPathToFind )
     {
         EE_ASSERT( dirPathToFind.IsDirectoryPath() );
 
@@ -793,7 +943,7 @@ namespace EE
         return pCurrentDir;
     }
 
-    bool FileRegistry::HasFileRecord( FileSystem::Path const& path ) const
+    bool DataFileSystem::HasFileRecord( FileSystem::Path const& path ) const
     {
         DirectoryInfo const* pDirectory = FindDirectory( path.GetParentDirectory() );
         EE_ASSERT( pDirectory != nullptr );
@@ -810,7 +960,7 @@ namespace EE
         return false;
     }
 
-    FileRegistry::FileInfo* FileRegistry::AddFileRecord( FileSystem::Path const& path, bool shouldLoadDataFile )
+    DataFileSystem::FileInfo* DataFileSystem::AddFileRecord( FileSystem::Path const& path, bool shouldLoadDataFile )
     {
         auto const dataPath = DataPath( path, m_sourceDataDirPath );
         EE_ASSERT( dataPath.IsFilePath() );
@@ -874,7 +1024,7 @@ namespace EE
         return pNewEntry;
     }
 
-    void FileRegistry::RemoveFileRecord( FileSystem::Path const& path, bool fireDeletedEvent )
+    void DataFileSystem::RemoveFileRecord( FileSystem::Path const& path, bool fireDeletedEvent )
     {
         DirectoryInfo* pDirectory = FindDirectory( path.GetParentDirectory() );
         EE_ASSERT( pDirectory != nullptr );
@@ -929,8 +1079,12 @@ namespace EE
     // Watcher Events
     //-------------------------------------------------------------------------
 
-    void FileRegistry::ProcessFileSystemChanges()
+    void DataFileSystem::ProcessFileSystemChanges()
     {
+        EE_ASSERT( m_pAsyncTask == nullptr );
+
+        Threading::ScopeLock const sl( m_mutex );
+
         auto const& fsEvents = m_fileSystemWatcher.GetFileSystemChangeEvents();
         for ( auto const& fsEvent : fsEvents )
         {

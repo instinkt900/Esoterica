@@ -42,7 +42,7 @@ upstream code that you read along the way. See Conventions rule 3.
 | [TouchedFiles.md](TouchedFiles.md) | Registry of every upstream file this port modifies |
 | [Progress.md](Progress.md) | Running log of completed and in-flight work |
 | [Blocked.md](Blocked.md) | What is written but not verified, indexed by the machine that unblocks it |
-| [Phases/](Phases/) | Per-phase task specifications. [Phase 8](Phases/Phase8-Completion.md) is the remaining-work list |
+| [Phases/](Phases/) | Per-phase task specifications. [Phase 8](Phases/Phase8-Completion.md) is the remaining-work list, [Phase 9](Phases/Phase9-UpstreamMerge.md) the first upstream merge |
 | `ForkReview.md` | *(not written yet)* How far this fork has diverged, and whether any of it could go upstream. [P8.7](Phases/Phase8-Completion.md#p87---fork-review) |
 
 ## Phases
@@ -61,10 +61,15 @@ in parallel, the phase doc says so.
 | [6 - Windowing and Input](Phases/Phase6-WindowingInput.md) | `Engine` app renders a map on Linux | 3-4 weeks |
 | [7 - Editor and Tools](Phases/Phase7-EditorTools.md) | Full editor on Linux | 3-4 weeks |
 | [8 - Completion and Fork Review](Phases/Phase8-Completion.md) | The Windows build runs, the engine simulates, the debt is swept, and the fork is assessed | unknown; P8.1 is why |
+| [9 - The First Upstream Merge](Phases/Phase9-UpstreamMerge.md) | `upstream/main` is absorbed, and the merge discipline is tested rather than assumed | days; P9.4 is why |
 
 **Phase 8 was added on 2026-09-02**, after Phase 7's editor shakedown. The original plan ended at
 Phase 7 and was right that the port would work by then; what it had no place for was the work
 left over **after** the thing works. See [Why this phase exists](Phases/Phase8-Completion.md#why-this-phase-exists).
+
+**Phase 9 was added on 2026-09-03**, when upstream pushed a 281-file commit. It is not porting
+work. It is the first bill for the [prime directive](#prime-directive), and it runs independently
+of Phase 8 - neither blocks the other.
 
 ## Why this is smaller than it looks
 
@@ -133,6 +138,7 @@ porting. The whole tree builds in Debug and Release, and nothing in it fails to 
 | 6 - Windowing and input | Written. SDL3, `LinuxApplication`, the imgui platform backend, keyboard, mouse and gamepad, the surface and the swapchain. The engine opens a window and renders a map |
 | 7 - Editor and tools | **Done.** Both applications build, link and run; the server serves over the network; the editor shakedown of 2026-09-02 met criteria 5, 6, 8, 9 and 10. Four items remain and they are in [Blocked.md](Blocked.md) |
 | 8 - Completion and fork review | **In flight.** Nothing has been built on Windows, nothing has been seen to *simulate*, and the fork has never been measured against upstream |
+| 9 - The first upstream merge | **In flight.** A trial merge of upstream `47e6293` produced **three single-hunk conflicts across 281 changed files**, and upstream touched no `RHI/`, `Vulkan/` or `Linux/` file at all. The text conflicts are cheap; upstream replaced the culling pipeline this port was verified against, and that is [P9.4](Phases/Phase9-UpstreamMerge.md#p94---the-new-culling-pipeline-on-vulkan) |
 
 ### There is almost no unported code left
 

@@ -1,0 +1,191 @@
+#include "Engine/Render/Shaders/Renderer/RendererTypes.esh"
+#include "Engine/Render/Shaders/EngineShader.esh"
+
+ESF_PARAMETER string ShaderType = "Compute";
+
+EE_DECLARE_INDIRECT_ROOT_CONSTANTS( ClusterCompactionRootConstants, b0, space0 );
+EE_DECLARE_INDIRECT_ROOT_CBV( GlobalParameters, b1, space0 );
+
+// Reached only by an indirect dispatch, so the root arguments are read out of the argument
+// buffer. See EE_DECLARE_INDIRECT_ROOT_CONSTANTS in RHI.esh; the bodies below do not change.
+#ifdef __spirv__
+#define RootConstants EE_g_RootConstants
+#define RootCBV       EE_g_RootCBV
+#endif
+
+groupshared InstanceVisibilityRecord    gsPageEntries[64]; // Instance entries of the page this group compacts - at most 64 visible instances, 64 unique shader keys
+groupshared uint                        gsNumUniqueKeys;
+groupshared uint                        gsUniqueKeys[128];
+groupshared uint                        gsKeyBase[128];
+groupshared uint                        gsChunkRecordBase;
+
+[RootSignature( ClusterCompactionRootSignature )]
+[numthreads( 128, 1, 1 )]
+void CS_main( uint groupID : SV_GroupID, uint groupThreadID : SV_GroupThreadID, uint3 dispatchThreadID : SV_DispatchThreadID EE_INDIRECT_DISPATCH_ENTRY_ARGS )
+{
+    EE_INDIRECT_DISPATCH_ENTRY_INIT
+
+    RWStructuredBuffer<InstanceVisibilityRecord>    instanceVisibilityBuffer        = GetRWBuffer( RootCBV.m_InstanceCulling_VisibilityBuffer );
+    RWBuffer<uint4>                                 clusterRecordBuffer             = GetRWBuffer( RootCBV.m_ClusterRecordBuffer );
+    RWBuffer<uint>                                  clusterRecordCountersBuffer     = GetRWBuffer( RootCBV.m_ClusterRecordCountersBuffer );
+    StructuredBuffer<uint>                          clusterRecordOffsetsBuffer      = GetBuffer( RootCBV.m_ClusterRecordOffsetsBuffer );
+    RWBuffer<uint>                                  cullingCounterBuffer            = GetRWBuffer( RootCBV.m_ClusterCulling_CounterBuffer );
+    RWStructuredBuffer<ClusterCullingArgument>      cullingArgumentBuffer           = GetRWBuffer( RootCBV.m_ClusterCulling_ArgumentBuffer );
+
+    //-------------------------------------------------------------------------
+    
+    const uint pageIndex           = RootConstants.m_pageIndex;
+    const uint entryCount          = RootConstants.m_pageEntryCount;
+
+    if ( groupThreadID == 0 )
+    {
+        gsNumUniqueKeys = 0;
+    }
+
+    const uint pageEntryBase = pageIndex * 64;
+    for ( uint entryIndex = groupThreadID; entryIndex < entryCount; entryIndex += 128 )
+    {
+        gsPageEntries[entryIndex] = instanceVisibilityBuffer[pageEntryBase + entryIndex];
+    }
+    
+    GroupMemoryBarrierWithGroupSync();
+
+    // Compact the page unique shader keys
+    //-------------------------------------------------------------------------
+
+    const uint entryKey = ( groupThreadID < 64 && groupThreadID < entryCount ) ? gsPageEntries[groupThreadID].m_shaderIndex : ~0U;
+    
+    gsUniqueKeys[groupThreadID] = entryKey;
+    gsKeyBase[groupThreadID] = 0;
+
+    GroupMemoryBarrierWithGroupSync();
+
+    const uint4     keyMatch        = WaveMatch( entryKey );
+    const uint      firstLaneOfKey  =
+        ( keyMatch.x != 0 ) ? firstbitlow( keyMatch.x ) :
+        ( keyMatch.y != 0 ) ? ( 32 + firstbitlow( keyMatch.y ) ) :
+        ( keyMatch.z != 0 ) ? ( 64 + firstbitlow( keyMatch.z ) ) :
+        ( 96 + firstbitlow( keyMatch.w ) );
+
+    if ( WaveGetLaneIndex() == firstLaneOfKey )
+    {
+        uint keySlot = 0;
+        InterlockedAdd( gsNumUniqueKeys, 1, keySlot );
+
+        gsUniqueKeys[keySlot] = entryKey;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+    // Merge duplicate key slots across waves
+    //-------------------------------------------------------------------------
+
+    uint markDuplicate = 0;
+    if ( groupThreadID < gsNumUniqueKeys )
+    {
+        const uint key = gsUniqueKeys[groupThreadID];
+
+        for ( uint keyIndex2 = 0; keyIndex2 < groupThreadID; ++keyIndex2 )
+        {
+            if ( gsUniqueKeys[keyIndex2] == key )
+            {
+                markDuplicate = 1;
+                break;
+            }
+        }
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+    if ( groupThreadID < gsNumUniqueKeys && markDuplicate )
+    {
+        gsUniqueKeys[groupThreadID] = ~0U;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+    // Reserve one contiguous stream chunk per unique shader and write one culling argument per chunk
+    if ( groupThreadID < gsNumUniqueKeys && gsUniqueKeys[groupThreadID] != ~0U )
+    {
+        const uint shaderIndex = gsUniqueKeys[groupThreadID];
+
+        uint totalClusters = 0;
+        for ( uint entryIndex = 0; entryIndex < entryCount; ++entryIndex )
+        {
+            if ( gsPageEntries[entryIndex].m_shaderIndex == shaderIndex )
+            {
+                totalClusters += gsPageEntries[entryIndex].m_numClusters;
+            }
+        }
+
+        const uint recordBase = clusterRecordOffsetsBuffer[shaderIndex];
+
+        uint chunkSlot = 0;
+        InterlockedAdd( clusterRecordCountersBuffer[shaderIndex], totalClusters, chunkSlot );
+
+        const uint chunkRecordBase = recordBase + chunkSlot;
+        gsKeyBase[groupThreadID] = chunkRecordBase;
+
+        uint cullingArgumentIndex = 0;
+        InterlockedAdd( cullingCounterBuffer[0], 1, cullingArgumentIndex );
+
+        ClusterCullingArgument cullingArgument = ( ClusterCullingArgument )0;
+        cullingArgument.m_rootConstants.m_commonRootConstants = RootConstants.m_commonRootConstants;
+        cullingArgument.m_rootConstants.m_clusterRangeStart  = chunkRecordBase;
+        cullingArgument.m_rootConstants.m_clusterRangeEnd    = chunkRecordBase + totalClusters;
+        cullingArgument.m_rootConstants.m_shaderIndex        = shaderIndex;
+        cullingArgument.m_rootCBV                            = RootCBV.m_deviceAddress;
+        cullingArgument.m_dispatchArguments                  = uint3( ( totalClusters + 127 ) / 128, 1, 1 );
+
+        cullingArgumentBuffer[cullingArgumentIndex] = cullingArgument;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+    // Expand cluster records
+    for ( uint entryIndex = 0; entryIndex < entryCount; ++entryIndex )
+    {
+        const InstanceVisibilityRecord entry = gsPageEntries[entryIndex];
+        const uint instanceIndex    = entry.m_instanceIndex;
+        const uint clusterOffset    = entry.m_clusterOffset;
+        const uint viewMaskLow      = uint( entry.m_viewMask );
+        const uint viewMaskHigh     = uint( entry.m_viewMask >> 32 );
+        const uint numClusters      = entry.m_numClusters;
+        const uint shaderIndex      = entry.m_shaderIndex;
+
+        if ( groupThreadID == 0 )
+        {
+            uint keySlotIndex = ~0U;
+            for ( uint keyIndex = 0; keyIndex < gsNumUniqueKeys; ++keyIndex )
+            {
+                if ( gsUniqueKeys[keyIndex] == shaderIndex )
+                {
+                    keySlotIndex = keyIndex;
+                    break;
+                }
+            }
+
+            uint prefixClusters = 0;
+            for ( uint prefixEntryIndex = 0; prefixEntryIndex < entryIndex; ++prefixEntryIndex )
+            {
+                if ( gsPageEntries[prefixEntryIndex].m_shaderIndex == shaderIndex )
+                {
+                    prefixClusters += gsPageEntries[prefixEntryIndex].m_numClusters;
+                }
+            }
+
+            gsChunkRecordBase = gsKeyBase[keySlotIndex] + prefixClusters;
+        }
+
+        GroupMemoryBarrierWithGroupSync();
+
+        const uint chunkRecordBase = gsChunkRecordBase;
+
+        EE_GROUP_THREAD_MAP( numClusters, 128,
+        {
+            clusterRecordBuffer[chunkRecordBase + workIndex] = uint4( instanceIndex, clusterOffset + workIndex, viewMaskLow, viewMaskHigh );
+        } )
+
+        GroupMemoryBarrierWithGroupSync();
+    }
+}

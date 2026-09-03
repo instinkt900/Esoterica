@@ -8,6 +8,88 @@
 
 EE_BEGIN_SHADER_TYPES_NAMESPACE
 
+    #ifdef __cplusplus
+    // Compressed world AABB - 12 bytes: 12-bit shared exponent + six 14-bit two's complement mantissas.
+    // The center is stored relative to the transform origin.
+    struct CompressedAABB
+    {
+        uint32_t m_data[3];
+
+        inline uint32_t& operator[]( uint32_t index ) { return m_data[index]; }
+        inline uint32_t const& operator[]( uint32_t index ) const { return m_data[index]; }
+    };
+
+    // Packs a world AABB into the compressed layout, see DecompressAABB for the decode
+    inline CompressedAABB CompressAABB( EE::Float3 center, EE::Float3 halfExtents, EE::Float3 origin )
+    {
+        float const values[6] =
+        {
+            center[0] - origin[0],
+            center[1] - origin[1],
+            center[2] - origin[2],
+            halfExtents[0],
+            halfExtents[1],
+            halfExtents[2],
+        };
+
+        float maxAbs = 0.0F;
+        for ( uint32_t i = 0; i < 6; ++i )
+        {
+            maxAbs = Math::Max( maxAbs, Math::Abs( values[i] ) );
+        }
+
+        int32_t exponent = -2048;
+        if ( maxAbs > 0.0F )
+        {
+            int32_t e = 0;
+            frexpf( maxAbs, &e );
+            exponent = Math::Clamp( e - 13, -2048, 2047 );
+        }
+
+        float const scale = ldexpf( 1.0F, -exponent );
+
+        int32_t mantissas[6];
+        for ( uint32_t i = 0; i < 6; ++i )
+        {
+            mantissas[i] = Math::Clamp( ( int32_t ) roundf( values[i] * scale ), -8192, 8191 );
+        }
+
+        CompressedAABB result = {};
+        result[0] = uint32_t( exponent + 2048 ) | ( uint32_t( mantissas[0] ) & 0x3FFF ) << 12 | ( uint32_t( mantissas[1] ) & 0x3F ) << 26;
+        result[1] = ( uint32_t( mantissas[1] ) >> 6 & 0xFF ) | ( uint32_t( mantissas[2] ) & 0x3FFF ) << 8 | ( uint32_t( mantissas[3] ) & 0x3FF ) << 22;
+        result[2] = ( uint32_t( mantissas[3] ) >> 10 & 0xF ) | ( uint32_t( mantissas[4] ) & 0x3FFF ) << 4 | ( uint32_t( mantissas[5] ) & 0x3FFF ) << 18;
+        return result;
+    }
+    #endif
+
+    #ifndef __cplusplus
+    typedef uint3 CompressedAABB;
+
+    // Decompresses a packed world AABB, see CompressAABB for the format
+    void DecompressAABB( CompressedAABB packedAABB, float3 transformOrigin, out float3 center, out float3 halfExtents )
+    {
+        const int exponent = int( packedAABB.x & 0xFFF ) - 2048;
+
+        // 14-bit two's complement sign extension
+        const uint raw0 = ( packedAABB.x >> 12 ) & 0x3FFF;
+        const uint raw1 = ( ( packedAABB.x >> 26 ) & 0x3F ) | ( ( packedAABB.y & 0xFF ) << 6 );
+        const uint raw2 = ( packedAABB.y >> 8 ) & 0x3FFF;
+        const uint raw3 = ( ( packedAABB.y >> 22 ) & 0x3FF ) | ( ( packedAABB.z & 0xF ) << 10 );
+        const uint raw4 = ( packedAABB.z >> 4 ) & 0x3FFF;
+        const uint raw5 = ( packedAABB.z >> 18 ) & 0x3FFF;
+
+        const int m0 = int( ( raw0 ^ 0x2000 ) - 0x2000 );
+        const int m1 = int( ( raw1 ^ 0x2000 ) - 0x2000 );
+        const int m2 = int( ( raw2 ^ 0x2000 ) - 0x2000 );
+        const int m3 = int( ( raw3 ^ 0x2000 ) - 0x2000 );
+        const int m4 = int( ( raw4 ^ 0x2000 ) - 0x2000 );
+        const int m5 = int( ( raw5 ^ 0x2000 ) - 0x2000 );
+
+        center      = ldexp( float3( m0, m1, m2 ), exponent ) + transformOrigin;
+        halfExtents = ldexp( float3( m3, m4, m5 ), exponent );
+    }
+    #endif
+
     struct HLSL_ALIGN_STRUCT MeshInstanceRoot
     {
         float3x4                        m_rootTransform;
@@ -26,6 +108,17 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
         uint                            m_numInstances;
 
         #ifdef __cplusplus
+        void WriteWorldAABB( TArrayView<uint32_t> buffer, EE::Float3 center, EE::Float3 halfExtents, EE::Float3 origin )
+        {
+            uint32_t const dataOffset = sizeof( MeshInstanceRoot ) / 4 + ( m_numInstances + 31 ) / 32 + m_numLODs;
+
+            CompressedAABB const packedAABB = CompressAABB( center, halfExtents, origin );
+
+            buffer[dataOffset + 0] = packedAABB[0];
+            buffer[dataOffset + 1] = packedAABB[1];
+            buffer[dataOffset + 2] = packedAABB[2];
+        }
+
         void WriteInstanceHidden( TArrayView<uint32_t> buffer, uint32_t instanceIndex, bool value )
         {
             EE_ASSERT( instanceIndex < m_numInstances );
@@ -84,6 +177,25 @@ EE_BEGIN_SHADER_TYPES_NAMESPACE
             dataOffset += lodIndex;
         
             return buffer.Load<float>( baseAddress + dataOffset * 4 );
+        }
+    
+        uint GetWorldAABBDataOffset()
+        {
+            uint dataOffset = sizeof( MeshInstanceRoot ) / 4;
+            dataOffset += ( m_numInstances + 31 ) / 32;
+            dataOffset += m_numLODs;
+            return dataOffset;
+        }
+    
+        void LoadWorldAABB( ByteAddressBuffer buffer, uint baseAddress, out float3 center, out float3 halfExtents )
+        {
+            const uint dataOffset = GetWorldAABBDataOffset();
+
+            const CompressedAABB packedAABB = buffer.Load3( baseAddress + dataOffset * 4 );
+
+            const float3 transformOrigin = float3( m_rootTransform[0].w, m_rootTransform[1].w, m_rootTransform[2].w );
+
+            DecompressAABB( packedAABB, transformOrigin, center, halfExtents );
         }
     
         uint GetLocalInstanceIndex( uint instanceIndex )
@@ -168,14 +280,16 @@ EE_END_SHADER_TYPES_NAMESPACE
     
         StaticMeshVertex vertex = clusterVertexBuffer.Load<StaticMeshVertex>( vertexAddress );
         
-        float3 vertexPosition   = vertex.GetPosition( clusterAnchor, clusterExponent );
-        float3 vertexNormal     = vertex.GetNormal();
+        precise float3  vertexPosition  = vertex.GetPosition( clusterAnchor, clusterExponent );
+        float3          vertexNormal    = vertex.GetNormal();
     
         if ( flipWinding ) { vertexNormal = -vertexNormal; }
     
+        precise float3  worldPosition   = mul( worldTransform, float4( vertexPosition, 1.0 ) ).xyz;
+    
         TransformedVertex result;
         result.m_vertex         = vertex;
-        result.m_worldPosition  = mul( worldTransform, float4( vertexPosition, 1.0 ) ).xyz;
+        result.m_worldPosition  = worldPosition;
         result.m_worldNormal    = mul( Adjugate( worldTransform ), vertexNormal );
 
         return result;
@@ -189,11 +303,11 @@ EE_END_SHADER_TYPES_NAMESPACE
     
         StaticMeshVertex vertex = clusterVertexBuffer.Load<StaticMeshVertex>( vertexAddress );
         
-        float3 vertexPosition   = mul( meshInstance.m_localTransform, float4( vertex.GetPosition( clusterAnchor, clusterExponent ), 1.0 ) );
-        float3 vertexNormal     = mul( Adjugate( meshInstance.m_localTransform ), vertex.GetNormal() );
+        precise float3  vertexPosition  = mul( meshInstance.m_localTransform, float4( vertex.GetPosition( clusterAnchor, clusterExponent ), 1.0 ) );
+        float3          vertexNormal    = mul( Adjugate( meshInstance.m_localTransform ), vertex.GetNormal() );
         
-        float3 localPosition    = 0.0.xxx;
-        float3 localNormal      = 0.0.xxx;
+        precise float3  localPosition   = 0.0.xxx;
+        float3          localNormal     = 0.0.xxx;
         
         if ( meshInstanceRoot.m_boneOffset != ~0U )
         {
@@ -228,9 +342,11 @@ EE_END_SHADER_TYPES_NAMESPACE
     
         if ( flipWinding ) { localNormal = -localNormal; }
         
+        precise float3 worldPosition = mul( meshInstanceRoot.m_rootTransform, float4( localPosition, 1.0 ) ).xyz;
+    
         TransformedVertex result;
         result.m_vertex         = vertex;
-        result.m_worldPosition  = mul( meshInstanceRoot.m_rootTransform, float4( localPosition, 1.0 ) ).xyz;
+        result.m_worldPosition  = worldPosition;
         result.m_worldNormal    = normalize( mul( Adjugate( meshInstanceRoot.m_rootTransform ), localNormal ) );
 
         return result;

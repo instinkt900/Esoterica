@@ -2,7 +2,7 @@
 #include "UndoStack.h"
 #include "ToolsContext.h"
 #include "EngineTools/PropertyGrid/PropertyGrid.h"
-#include "EngineTools/FileSystem/FileRegistry.h"
+#include "EngineTools/FileSystem/DataFileSystem.h"
 #include "EngineTools/Resource/ResourceDescriptor.h"
 #include "Engine/Viewport/Viewport.h"
 #include "Base/Utils/GlobalRegistryBase.h"
@@ -320,6 +320,8 @@ namespace EE
         // Camera
         //-------------------------------------------------------------------------
 
+        bool IsManipulatingCamera() const;
+
         void ResetCameraView();
 
         void FocusCameraView( Entity* pTarget );
@@ -384,20 +386,20 @@ namespace EE
         // Resource Helpers
         //-------------------------------------------------------------------------
 
-        inline FileSystem::Path const& GetRawResourceDirectoryPath() const { return m_pToolsContext->m_pFileRegistry->GetSourceDataDirectoryPath(); }
+        inline FileSystem::Path const& GetRawResourceDirectoryPath() const { return m_pToolsContext->m_pDataFileSystem->GetSourceDataDirectoryPath(); }
 
-        inline FileSystem::Path const& GetCompiledResourceDirectoryPath() const { return m_pToolsContext->m_pFileRegistry->GetCompiledResourceDirectoryPath(); }
+        inline FileSystem::Path const& GetCompiledResourceDirectoryPath() const { return m_pToolsContext->m_pDataFileSystem->GetCompiledResourceDirectoryPath(); }
 
         inline FileSystem::Path GetFileSystemPath( DataPath const& path ) const
         {
             EE_ASSERT( path.IsValid() );
-            return path.GetFileSystemPath( m_pToolsContext->m_pFileRegistry->GetSourceDataDirectoryPath() );
+            return path.GetFileSystemPath( m_pToolsContext->m_pDataFileSystem->GetSourceDataDirectoryPath() );
         }
 
         inline FileSystem::Path GetFileSystemPath( ResourceID const& resourceID ) const
         {
             EE_ASSERT( resourceID.IsValid() );
-            return resourceID.GetFileSystemPath( m_pToolsContext->m_pFileRegistry->GetSourceDataDirectoryPath() );
+            return resourceID.GetFileSystemPath( m_pToolsContext->m_pDataFileSystem->GetSourceDataDirectoryPath() );
         }
 
         // Use this function to load a resource required for this tool (hot-reload aware)

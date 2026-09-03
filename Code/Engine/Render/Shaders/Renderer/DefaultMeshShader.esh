@@ -51,11 +51,12 @@ void MS_main
     StructuredBuffer<MeshCluster>       clusterBuffer               = GetBuffer( RootCBV.m_clusterBuffer );
     StructuredBuffer<SkinningTransform> skinningTransformBuffer     = GetBuffer( RootCBV.m_skinningTransformBuffer ); 
 
-    Buffer<uint2>                       clusterVisibleBuffer        = GetBuffer( RootConstants.m_clusterVisibleBuffer );
-        
-    const uint2                         clusterVisible              = clusterVisibleBuffer[RootConstants.m_clusterOffset + groupID];
-    const uint                          instanceIndex               = clusterVisible.x;
-    const uint                          clusterIndex                = clusterVisible.y;
+    Buffer<uint4>                       clusterRecordBuffer        = GetBuffer( RWBufferToBuffer( RootCBV.m_ClusterRecordBuffer ) );
+
+    const uint                          localClusterIndex           = SelectPosFromLSBRank128( uint4( RootConstants.m_clusterMask0, RootConstants.m_clusterMask1, RootConstants.m_clusterMask2, RootConstants.m_clusterMask3 ), groupID + 1 );
+    const uint4                         clusterRecord               = clusterRecordBuffer[RootConstants.m_clusterRecordBase + localClusterIndex];
+    const uint                          instanceIndex               = clusterRecord.x;
+    const uint                          clusterIndex                = clusterRecord.y;
     
     const MeshCluster                   cluster                     = clusterBuffer[clusterIndex];
     const MeshInstance                  meshInstance                = meshInstanceBuffer[instanceIndex];
@@ -120,11 +121,12 @@ void MS_main
             cluster.GetAnchor(), cluster.m_sharedExponent
         );
         
-        transformedVertex.m_worldPosition += worldPositionOffset;
+        precise float3 worldPosition = transformedVertex.m_worldPosition + worldPositionOffset;
+        precise float4 clipPosition  = mul( renderView.m_viewProjectionMatrix, float4( transformedVertex.m_worldPosition, 1.0 ) );
         
         VertexOutput output;
-        output.m_clipPosition   = mul( renderView.m_viewProjectionMatrix, float4( transformedVertex.m_worldPosition, 1.0 ) );
-        output.m_worldPosition  = transformedVertex.m_worldPosition;
+        output.m_clipPosition   = clipPosition;
+        output.m_worldPosition  = worldPosition;
         output.m_worldNormal    = transformedVertex.m_worldNormal;
         output.m_uv             = float4( transformedVertex.m_vertex.m_uv0, transformedVertex.m_vertex.m_uv1 );
         output.m_color          = UnpackColor( transformedVertex.m_vertex.m_packedColor );

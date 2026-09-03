@@ -1,7 +1,7 @@
 #include "AnimationClipBrowser.h"
 #include "EngineTools/Core/ToolsContext.h"
 #include "EngineTools/Animation/ResourceDescriptors/ResourceDescriptor_AnimationClip.h"
-#include "EngineTools/FileSystem/FileRegistry.h"
+#include "EngineTools/FileSystem/DataFileSystem.h"
 #include "EngineTools/Core/CommonToolTypes.h"
 
 //-------------------------------------------------------------------------
@@ -54,7 +54,7 @@ namespace EE::Animation
         m_filteredClips.clear();
         m_selectedClipID.Clear();
 
-        if ( !m_skeleton.IsValid() || !m_pToolsContext->m_pFileRegistry->IsDataFileCacheBuilt() )
+        if ( !m_skeleton.IsValid() || !m_pToolsContext->m_pDataFileSystem->IsDataFileCacheBuilt() )
         {
             return;
         }
@@ -67,7 +67,7 @@ namespace EE::Animation
             return pClipDescriptor->m_skeleton.GetResourceID() == m_skeleton;
         };
 
-        m_clips = m_pToolsContext->m_pFileRegistry->GetAllResourcesOfTypeFiltered( AnimationClip::GetStaticResourceTypeID(), SkeletonFilter );
+        m_clips = m_pToolsContext->m_pDataFileSystem->GetAllResourcesOfTypeFiltered( AnimationClip::GetStaticResourceTypeID(), SkeletonFilter );
         UpdateFilter();
 
         m_refreshTimer.Reset();
@@ -80,7 +80,7 @@ namespace EE::Animation
 
         if ( m_skeleton.IsValid() )
         {
-            if ( m_refreshTimer.GetElapsedTimeSeconds() > 1.0f && m_pToolsContext->m_pFileRegistry->IsDataFileCacheBuilt() )
+            if ( m_refreshTimer.GetElapsedTimeSeconds() > 1.0f && m_pToolsContext->m_pDataFileSystem->IsDataFileCacheBuilt() )
             {
                 RebuildCache();
             }

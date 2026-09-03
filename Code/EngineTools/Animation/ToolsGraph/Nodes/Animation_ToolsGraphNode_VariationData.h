@@ -61,7 +61,7 @@ namespace EE::Animation
         Data* GetDefaultVariationData() { return m_defaultVariationData.Get(); }
 
         // Get the default data
-        Data const* GetDefaultVariationData() const {  m_defaultVariationData.Get(); }
+        Data const* GetDefaultVariationData() const { return m_defaultVariationData.Get(); }
 
         // Get the default data casted to a specific type
         template<typename T>

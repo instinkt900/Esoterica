@@ -169,7 +169,6 @@ namespace EE::Resource
         //-------------------------------------------------------------------------
 
         void UpdateWorkers();
-        void ScheduleWorkerTask( Request* pRequest );
 
         // Recompilation Blocking
         //-------------------------------------------------------------------------
@@ -196,13 +195,13 @@ namespace EE::Resource
         bool                                                        m_cleanupRequested = false;
 
         // Compilation Requests
-        TVector<Request*>                                           m_pendingRequests;
+        TVector<RequestBucket*>                                     m_pendingRequests;
         TVector<Request*>                                           m_requests;
         TEvent<>                                                    m_requestsUpdatedEvent;
+        bool                                                        m_requestsUpdated = false;
 
         // Workers
         TVector<ResourceServerWorker>                               m_workers;
-        int32_t                                                     m_workerEnqueueIndex = 0;
 
         // Packaging
         TVector<ResourceID>                                         m_allMaps;

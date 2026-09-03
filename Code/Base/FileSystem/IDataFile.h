@@ -73,6 +73,11 @@ namespace EE
         // Get the friendly name for this data file type
         virtual char const* GetFriendlyName() const = 0;
 
+        #if EE_DEVELOPMENT_TOOLS
+        // Get all path referenced by this data file. Note: appends results to the passed in vector!
+        void GetReferencedPaths( TVector<DataPath>& outReferencedPaths ) const;
+        #endif
+
     protected:
 
         // Override this to enable custom data support
@@ -91,6 +96,9 @@ namespace EE
 
         // Called straight after loading a file allowing us to perform any basic cleanup/sanitization
         virtual void PostLoad( TypeSystem::TypeRegistry const& typeRegistry ) {}
+
+        // Override this if your data file is storing references to paths in some custom structure. Note: appends results to the passed in vector!
+        virtual void GetAdditionalReferencedPaths( TVector<DataPath>& outReferencedPaths ) const {}
         #endif
     };
 }

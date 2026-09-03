@@ -1,4 +1,5 @@
 #pragma once
+#include "ResourceServerRequest.h"
 #include "EngineTools/ThirdParty/subprocess/subprocess.h"
 #include "EngineTools/Resource/ResourceCompilerNetworkMessages.h"
 #include "Base/Resource/ResourceProviders/ResourceNetworkMessages.h"
@@ -15,7 +16,7 @@ namespace EE::Resource
 
     //-------------------------------------------------------------------------
 
-    struct WorkerTask
+    struct WorkerTask : public RequestBucket
     {
         friend class ResourceServerWorker;
 
@@ -29,24 +30,18 @@ namespace EE::Resource
         };
 
         WorkerTask() = default;
-        WorkerTask( ResourceID const& resourceID, bool isPackagingRequest, bool forceCompilation ) : m_resourceID( resourceID ), m_isPackagingRequest( isPackagingRequest ), m_isForcedCompilation( forceCompilation ) { EE_ASSERT( m_resourceID.IsValid() ); }
 
-        void AddRequest( Request* pRequest );
+        WorkerTask( Request const* pRequest ) : RequestBucket( pRequest ) {}
+
+        void AddRequest( RequestBucket const* pRequestBucket );
 
     public:
 
         UUID                                                m_ID = UUID::GenerateID();
-        ResourceID const                                    m_resourceID;
         String                                              m_log;
         Timer<PlatformClock>                                m_timeSinceLastHeartbeat;
         int8_t                                              m_retryAttempts = 0;
         State                                               m_state = State::Pending;
-        bool const                                          m_isPackagingRequest = false;
-        bool const                                          m_isForcedCompilation = false;
-
-    private:
-
-        TVector<Request*>                                   m_requests;
     };
 
     //-------------------------------------------------------------------------
@@ -83,8 +78,8 @@ namespace EE::Resource
 
         inline bool IsBusy() const { return !m_tasks.empty(); }
         inline int32_t GetNumTasks() const { return (int32_t) m_tasks.size(); }
-        WorkerTask* CreateTask( ResourceID const& resourceID, bool isPackagingRequest, bool forceCompilation );
-        WorkerTask* TryFindTaskMatchingRequest( Request const* pRequest ) const;
+        void CreateTask( RequestBucket const* pRequestBucket );
+        WorkerTask* TryFindTaskMatchingRequest( RequestBucket const* pRequestBucket ) const;
 
         void HandleHeartbeatMessage( NetworkResourceCompilerRequest&& msg );
         void HandleCompletionMessage( NetworkResourceCompilerResponse&& msg );

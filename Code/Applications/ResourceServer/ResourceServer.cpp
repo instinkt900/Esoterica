@@ -68,6 +68,10 @@ namespace EE::Resource
         // Requests
         //-------------------------------------------------------------------------
 
+        for ( auto pRequestBucket : m_pendingRequests )
+        {
+            EE::Delete( pRequestBucket );
+        }
         m_pendingRequests.clear();
 
         for ( auto pRequest : m_requests )
@@ -109,6 +113,12 @@ namespace EE::Resource
         CleanupCompletedRequests();
 
         m_context.m_networkServer.SendOutgoingMessages();
+
+        if ( m_requestsUpdated )
+        {
+            m_requestsUpdatedEvent.Execute();
+            m_requestsUpdated = false;
+        }
     }
 
     bool ResourceServer::IsBusy() const
@@ -361,30 +371,56 @@ namespace EE::Resource
 
     Request* ResourceServer::TryAddPendingRequest( uint64_t clientID, RequestOrigin origin, ResourceID const& resourceID, String const& extraInfo )
     {
-        // For any automatic requests, ensure that we dont register multiple of these simultaneously
-        if ( origin == RequestOrigin::FileWatcher )
+        auto pRequest = EE::New<Request>( m_context, clientID, origin, resourceID, extraInfo );
+
+        if ( pRequest->m_status == RequestStatus::Failed )
         {
-            for ( Request const* pExistingRequest : m_pendingRequests )
+            m_requests.emplace_back( pRequest );
+            m_requestsUpdated = true;
+            return pRequest;
+        }
+
+        //-------------------------------------------------------------------------
+
+        int32_t const bucketIdx = VectorFindIndex( m_pendingRequests, pRequest, [] ( RequestBucket* const& pBucket, Request const* pRequest ) { return pBucket->MatchesRequest( pRequest ); } );
+        bool const isNewBucket = ( bucketIdx == InvalidIndex );
+        RequestBucket* pRequestBucket = isNewBucket ? EE::New<RequestBucket>( pRequest ) : m_pendingRequests[bucketIdx];
+        EE_ASSERT( pRequestBucket != nullptr );
+
+        // For any automatic requests, ensure that we dont register multiple of these simultaneously
+        if ( origin == RequestOrigin::FileWatcher && !isNewBucket )
+        {
+            if ( pRequestBucket->HasFileWatcherRequest() )
             {
-                if ( pExistingRequest->m_resourceID == resourceID && pExistingRequest->m_origin == origin )
-                {
-                    return nullptr;
-                }
+                EE::Delete( pRequest );
+                return nullptr;
             }
         }
 
-        return m_pendingRequests.emplace_back( EE::New<Request>( m_context, clientID, origin, resourceID, extraInfo ) );
+        // Add to overall request list
+        m_requests.emplace_back( pRequest );
+        m_requestsUpdated = true;
+
+        // Schedule the request
+        pRequestBucket->m_requests.emplace_back( pRequest );
+
+        if ( isNewBucket )
+        {
+            m_pendingRequests.emplace_back( pRequestBucket );
+        }
+
+        return pRequest;
     }
 
     void ResourceServer::ProcessPendingRequests()
     {
         EE_PROFILE_FUNCTION();
 
-        auto FindTaskForRequest = [this] ( Request const* pRequest ) -> WorkerTask*
+        auto FindTaskForRequest = [this] ( RequestBucket const* pRequestBucket ) -> WorkerTask*
         {
             for ( ResourceServerWorker& worker : m_workers )
             {
-                if ( WorkerTask* pTask = worker.TryFindTaskMatchingRequest( pRequest ) )
+                if ( WorkerTask* pTask = worker.TryFindTaskMatchingRequest( pRequestBucket ) )
                 {
                     return pTask;
                 }
@@ -395,51 +431,81 @@ namespace EE::Resource
 
         //-------------------------------------------------------------------------
 
-        bool requestsUpdated = false;
+        TInlineVector<uint32_t, 64> freeWorkers;
 
-        for ( uint32_t i = 0; i < m_pendingRequests.size(); i++ )
+        size_t const numWorkers = m_workers.size();
+        for ( uint32_t i = 0; i < numWorkers; i++ )
         {
-            Request* pRequest = m_pendingRequests[i];
-
-            // Add to overall request list
-            m_requests.emplace_back( pRequest );
-            requestsUpdated = true;
-
-            // Dont schedule invalid requests
-            if ( pRequest->m_status == RequestStatus::Failed )
+            if ( !m_workers[i].IsBusy() )
             {
-                continue;
-            }
-
-            //-------------------------------------------------------------------------
-
-            // Do we already have a task for this request?
-            if ( WorkerTask* pTask = FindTaskForRequest( pRequest ) )
-            {
-                pTask->AddRequest( pRequest );
-            }
-            else // Schedule a new task
-            {
-                ScheduleWorkerTask( pRequest );
+                freeWorkers.emplace_back( i );
             }
         }
 
-        if ( requestsUpdated )
+        // If all the workers are busy, check to see if we can link any requests to ones already in flight
+        if ( freeWorkers.empty() )
         {
-            m_requestsUpdatedEvent.Execute();
+            for( int32_t i = int32_t( m_pendingRequests.size() ) - 1; i >= 0; i-- )
+            {
+                // Do we already have a task for this request?
+                RequestBucket* pRequestBucket = m_pendingRequests[i];
+                if ( WorkerTask* pExistingTask = FindTaskForRequest( pRequestBucket ) )
+                {
+                    pExistingTask->AddRequest( pRequestBucket );
+                    EE::Delete( pRequestBucket );
+                    m_pendingRequests.erase( m_pendingRequests.begin() + i );
+                }
+            }
         }
+        else // Schedule tasks for the free workers
+        {
+            constexpr static size_t const requestScheduleBatchSize = 5;
 
-        m_pendingRequests.clear();
-    }
+            while ( !freeWorkers.empty() && !m_pendingRequests.empty() )
+            {
+                // Get free worker
+                //-------------------------------------------------------------------------
 
-    void ResourceServer::ScheduleWorkerTask( Request* pRequest )
-    {
-        // Currently a dumb sequential scheduling...
-        // TODO: better load balancing!!!
-        bool const isForcedCompilation = pRequest->m_origin == RequestOrigin::ManualCompileForced;
-        auto pTask = m_workers[m_workerEnqueueIndex].CreateTask( pRequest->m_resourceID, pRequest->IsPackagingRequest(), isForcedCompilation );
-        m_workerEnqueueIndex = ( m_workerEnqueueIndex + 1 ) % int32_t( m_workers.size() );
-        pTask->AddRequest( pRequest );
+                ResourceServerWorker& worker = m_workers[freeWorkers.back()];
+                freeWorkers.pop_back();
+
+                // Create list of requests for worker
+                //-------------------------------------------------------------------------
+
+                TInlineVector<RequestBucket*, requestScheduleBatchSize> requestsToEnqueue;
+                while ( !m_pendingRequests.empty() )
+                {
+                    RequestBucket* pRequestBucket = m_pendingRequests.front();
+                    m_pendingRequests.erase( m_pendingRequests.begin() ); // Yes, this will cause a lot of copies but we dont want old request to be starved by new ones
+
+                    // Do we already have a task for this request?
+                    if ( WorkerTask* pExistingTask = FindTaskForRequest( pRequestBucket ) )
+                    {
+                        pExistingTask->AddRequest( pRequestBucket );
+                        EE::Delete( pRequestBucket );
+                    }
+                    else // Add to list of request to queue
+                    {
+                        requestsToEnqueue.emplace_back( pRequestBucket );
+                    }
+
+                    // Did we dequeue enough requests?
+                    if ( requestsToEnqueue.size() == requestScheduleBatchSize )
+                    {
+                        break;
+                    }
+                }
+
+                // Dispatch Requests
+                //-------------------------------------------------------------------------
+
+                for( RequestBucket* pRequestBucket : requestsToEnqueue )
+                {
+                    worker.CreateTask( pRequestBucket );
+                    EE::Delete( pRequestBucket );
+                }
+            }
+        }
     }
 
     void ResourceServer::UpdateWorkers()
@@ -459,21 +525,14 @@ namespace EE::Resource
             return;
         }
 
-        bool requestsUpdated = false;
-
         for ( int32_t i = int32_t( m_requests.size() ) - 1; i >= 0; i-- )
         {
             if ( m_requests[i]->IsComplete() )
             {
                 EE::Delete( m_requests[i] );
                 m_requests.erase( m_requests.begin() + i );
-                requestsUpdated = true;
+                m_requestsUpdated = true;
             }
-        }
-
-        if ( requestsUpdated )
-        {
-            m_requestsUpdatedEvent.Execute();
         }
 
         m_cleanupRequested = false;
@@ -597,7 +656,6 @@ namespace EE::Resource
                 m_packagingStage = PackagingStage::Complete;
             }
         }
-
     }
 
     void ResourceServer::RunPackagingTask()

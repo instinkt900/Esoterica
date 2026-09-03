@@ -10,16 +10,13 @@ namespace EE::Render
 {
     void MaterialShaderRenderBucket::Initialize( RenderSystem* pRenderSystem )
     {
-        m_clusterVisibleBuffer.Initialize( pRenderSystem->GetContextRHI() );
-        m_drawArgumentBuffer.Initialize( pRenderSystem->GetContextRHI() );
+        m_drawArgumentBuffer.Initialize( pRenderSystem->GetContextRHI(), false );
     }
 
     void MaterialShaderRenderBucket::Shutdown( RenderSystem* pRenderSystem )
     {
-        RHI::DestroyBuffer( pRenderSystem->GetContextRHI(), eastl::move( m_clusterVisibleCounterBuffer ) );
         RHI::DestroyBuffer( pRenderSystem->GetContextRHI(), eastl::move( m_pDrawCounterBuffer ) );
 
-        m_clusterVisibleBuffer.Shutdown( pRenderSystem->GetContextRHI() );
         m_drawArgumentBuffer.Shutdown( pRenderSystem->GetContextRHI() );
     }
 
@@ -66,35 +63,22 @@ namespace EE::Render
         m_renderViewBuckets.clear();
     }
 
-    void DeviceRenderView::UpdateDeviceResources( RenderSystem* pRenderSystem, TArrayView<uint32_t const> clusterCapacityPerShader )
+    void DeviceRenderView::UpdateDeviceResources( RenderSystem* pRenderSystem, TArrayView<uint32_t const> clusterCapacityPerShader, uint32_t numMeshInstancePages )
     {
         size_t renderBucketIndex = 0;
         for ( size_t shaderIndex = 0; shaderIndex < m_renderViewBuckets.size(); ++shaderIndex )
         {
             DeviceRenderViewBucket& bucket = m_renderViewBuckets[shaderIndex];
 
-            bucket.ForEachRenderBucket( [&renderBucketIndex, shaderIndex, &clusterCapacityPerShader, pRenderSystem] ( MaterialShaderRenderBucket& renderBucket )
+            bucket.ForEachRenderBucket( [&renderBucketIndex, shaderIndex, numMeshInstancePages, &clusterCapacityPerShader, pRenderSystem] ( MaterialShaderRenderBucket& renderBucket )
             {
                 uint32_t const clustersCapacity = clusterCapacityPerShader[shaderIndex];
-                size_t const clusterVisibleBufferSizeWorstCase = clustersCapacity * sizeof( uint2 );
-                size_t const drawArgumentBufferSizeWorstCase = Math::IntegerDivideCeiling<uint32_t>( clustersCapacity, RHI::MaxDispatchSize ) * sizeof( ShaderTypes::DrawArgument );
 
-                //-------------------------------------------------------------------------
-
-                auto UpdateBuffer_ClusterVisible = [pRenderSystem, &renderBucket, renderBucketIndex] ( RHI::Buffer* && pOldBuffer, size_t newBufferSize )
-                {
-                    pRenderSystem->QueueResourceDelete( eastl::move( pOldBuffer ) );
-
-                    RHI::BufferParameters clusterVisibleBufferParameters = {};
-                    clusterVisibleBufferParameters.m_bufferSize = newBufferSize;
-                    clusterVisibleBufferParameters.m_format = RHI::DataFormat::RG32_UInt;
-                    clusterVisibleBufferParameters.m_descriptorTypes = TBitFlags<RHI::DescriptorTypeFlags>( RHI::DescriptorTypeFlags::Buffer, RHI::DescriptorTypeFlags::RWBuffer );
-                    clusterVisibleBufferParameters.m_debugName.sprintf( "%s ClusterVisible Buffer %i", renderBucket.m_bucketName.c_str(), renderBucketIndex );
-
-                    return RHI::CreateBuffer( pRenderSystem->GetContextRHI(), clusterVisibleBufferParameters );
-                };
-
-                renderBucket.m_clusterVisibleBuffer.UpdateDeviceResources( clusterVisibleBufferSizeWorstCase, UpdateBuffer_ClusterVisible );
+                // Cluster culling emits one draw argument per ( culling group, view, sub-bucket ).
+                // Culling groups span 128 cluster records of a single shader whole record stream ( union across view layers ), and a view records can be spread across every one of those groups.
+                // So a bucket can receive up to clustersCapacity / 128 + numMeshInstancePages + 1 draw arguments.
+                uint32_t const numMaxDrawArguments = ( clustersCapacity + 127 ) / 128 + numMeshInstancePages + 1;
+                size_t const drawArgumentBufferSizeWorstCase = numMaxDrawArguments * sizeof( ShaderTypes::DrawArgument );
 
                 //-------------------------------------------------------------------------
 
@@ -107,10 +91,6 @@ namespace EE::Render
                     countBufferParameters.m_debugName.sprintf( "%s DrawCounter Buffer %i", renderBucket.m_bucketName.c_str(), renderBucketIndex );
 
                     renderBucket.m_pDrawCounterBuffer = RHI::CreateBuffer( pRenderSystem->GetContextRHI(), countBufferParameters );
-
-                    countBufferParameters.m_debugName.sprintf( "%s ClusterVisibleCounter Buffer %i", renderBucket.m_bucketName.c_str(), renderBucketIndex );
-
-                    renderBucket.m_clusterVisibleCounterBuffer = RHI::CreateBuffer( pRenderSystem->GetContextRHI(), countBufferParameters );
                 }
 
                 //-------------------------------------------------------------------------

@@ -291,6 +291,7 @@ namespace EE::Render
 
         baseSize += ( ( numInstances + 31 ) / 32 );
         baseSize += uint32_t( pMeshResource->GetLODDistances().size() );
+        baseSize += 3; // Compressed world AABB ( 12-bit shared exponent + six 14-bit mantissas )
 
         return baseSize * 4;
     }
@@ -356,6 +357,13 @@ namespace EE::Render
         for ( uint32_t lodIndex = 0; lodIndex < uint32_t( meshDataLODDistance.size() ); ++lodIndex )
         {
             meshInstanceRoot.WriteLODDistance( bufferData_WriteCombined, lodIndex, meshDataLODDistance[lodIndex] * globalUniformScale );
+        }
+
+        // Write world bounds - always stored on the CPU in compressed form and decompressed on the fly
+        {
+            AABB const worldAABB = GetWorldBounds().GetAABB();
+
+            meshInstanceRoot.WriteWorldAABB( bufferData_WriteCombined, worldAABB.m_center, worldAABB.m_halfExtents, GetWorldTransform().GetTranslation().ToFloat3() );
         }
     }
 }

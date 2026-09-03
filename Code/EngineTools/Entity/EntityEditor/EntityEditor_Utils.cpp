@@ -1,7 +1,7 @@
 #include "EntityEditor_Utils.h"
 #include "EntityEditor_Context.h"
 #include "EngineTools/Core/ToolsContext.h"
-#include "EngineTools/FileSystem/FileRegistry.h"
+#include "EngineTools/FileSystem/DataFileSystem.h"
 #include "Engine/Render/Components/Component_StaticMesh.h"
 #include "Engine/Physics/Components/Component_PhysicsCollisionMesh.h"
 #include "Engine/Entity/Entity.h"
@@ -44,7 +44,7 @@ namespace EE::EntityModel
         DataPath physicsResourcePath = resourceID.GetDataPath();
         physicsResourcePath.ReplaceExtension( Physics::CollisionMesh::GetStaticResourceTypeID().ToString() );
         ResourceID const physicsResourceID( physicsResourcePath );
-        if ( context.m_pToolsContext->m_pFileRegistry->DoesFileExist( physicsResourceID ) )
+        if ( context.m_pToolsContext->m_pDataFileSystem->DoesFileExist( physicsResourceID ) )
         {
             auto pPhysicsMeshComponent = New<Physics::CollisionMeshComponent>( StringID( "Physics Component" ) );
             pPhysicsMeshComponent->SetCollisionMesh( physicsResourceID );

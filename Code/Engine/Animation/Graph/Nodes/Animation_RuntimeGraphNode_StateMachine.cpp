@@ -29,6 +29,17 @@ namespace EE::Animation
         }
     }
 
+    void StateMachineNode::Definition::PostInstantiateNode( InstantiationContext const& context ) const
+    {
+        auto pNode = static_cast<StateMachineNode*>( context.m_nodePtrs[context.m_currentNodeIdx] );
+        size_t const numStates = pNode->m_states.size();
+        EE_ASSERT( numStates <= s_maxStates );
+        for ( uint8_t stateIdx = 0; stateIdx < numStates; stateIdx++ )
+        {
+            pNode->m_states[stateIdx].m_pStateNode->m_transitionFlag = StateNode::TransitionFlag( &pNode->m_transitioningStates, stateIdx );
+        }
+    }
+
     //-------------------------------------------------------------------------
 
     SyncTrack const& StateMachineNode::GetSyncTrack() const
@@ -98,6 +109,7 @@ namespace EE::Animation
         PoseNode::InitializeInternal( context, initialTime );
 
         // Determine default state and initialize it
+        m_transitioningStates = 0;
         m_activeStateIndex = SelectDefaultState( context );
         EE_ASSERT( m_activeStateIndex != InvalidIndex );
         StateNode* pActiveState = m_states[m_activeStateIndex].m_pStateNode;
@@ -132,6 +144,7 @@ namespace EE::Animation
         m_states[m_activeStateIndex].m_pStateNode->Shutdown( context );
         m_activeStateIndex = InvalidIndex;
         m_pActiveTransition = nullptr;
+        m_transitioningStates = 0;
 
         PoseNode::ShutdownInternal( context );
     }
@@ -167,14 +180,15 @@ namespace EE::Animation
         //-------------------------------------------------------------------------
 
         int32_t transitionIdx = InvalidIndex;
+
         int32_t const numTransitions = (int32_t) currentlyActiveStateInfo.m_transitions.size();
         for ( int32_t i = 0; i < numTransitions; i++ )
         {
-            auto const& transition = currentlyActiveStateInfo.m_transitions[i];
+            TransitionInfo const& transition = currentlyActiveStateInfo.m_transitions[i];
             EE_ASSERT( transition.m_targetStateIdx != InvalidIndex );
 
             // Disallow any transitions to already transitioning states unless this is a forced transition, this will prevent infinite transition loops
-            if ( !transition.m_canBeForced && m_states[transition.m_targetStateIdx].m_pStateNode->IsTransitioning() )
+            if ( !transition.m_canBeForced && IsStateTransitioning( (uint8_t) transition.m_targetStateIdx ) )
             {
                 continue;
             }

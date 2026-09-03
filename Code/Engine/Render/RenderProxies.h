@@ -24,6 +24,7 @@ namespace EE::Render
         struct SpotLightUpdateCommand;
         struct SkinningTransformUpdateCommand;
         struct MeshInstanceTransformUpdateCommand;
+        struct MeshInstanceRootUpdateCommand;
     }
 
     //-------------------------------------------------------------------------
@@ -38,7 +39,7 @@ namespace EE::Render
 
     struct MeshInstanceProxy final
     {
-        void WriteRootTransform( Transform const& worldTransform, Float3 worldNonUniformScale );
+        void WriteRootTransform( Transform const& worldTransform, Float3 worldNonUniformScale, Float3 worldAABBCenter, Float3 worldAABBHalfExtents );
         void WriteLocalTransforms( TArrayView<Matrix43 const> localTransforms );
 
         inline bool IsValid() const { return m_instanceHandle.IsValid(); }
@@ -47,6 +48,7 @@ namespace EE::Render
 
         eastl::atomic<uint32_t>*                                                m_pTransformUpdateCounter = nullptr;
         uint64_t const*                                                         m_pTransformUpdateSequence = nullptr;
+        ShaderTypes::MeshInstanceRootUpdateCommand*                             m_pDstRootUpdateCommands = nullptr; // TODO: Need a workaround for platforms that don't support virtual memory. Can use PageAllocator<T> handle for that.
         ShaderTypes::MeshInstanceTransformUpdateCommand*                        m_pDstTransformUpdateCommands = nullptr; // TODO: Need a workaround for platforms that don't support virtual memory. Can use PageAllocator<T> handle for that.
 
         uint64_t                                                                m_dstTransformUpdateSequence = ~0ULL;

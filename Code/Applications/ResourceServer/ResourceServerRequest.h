@@ -44,6 +44,9 @@ namespace EE::Resource
         // Is this a packaging request
         inline bool IsPackagingRequest() const { return m_origin == RequestOrigin::Package; }
 
+        // Is this a manual forced recompilation
+        inline bool IsForcedCompilation() const { return m_origin == RequestOrigin::ManualCompileForced; }
+
         // Should we send an update message to clients when this request completes?
         bool ShouldNotifyClientsWhenComplete() const;
 
@@ -74,5 +77,73 @@ namespace EE::Resource
         Milliseconds                            m_upToDateCheckTime = 0;
         Milliseconds                            m_compileTime = 0;
         TypeSystem::ResourceInfo const*         m_pResourceInfo = nullptr;
+    };
+
+    //-------------------------------------------------------------------------
+
+    struct RequestBucket
+    {
+        RequestBucket() = default;
+
+        RequestBucket( Request const* pRequest )
+            : m_resourceID( pRequest->m_resourceID )
+            , m_isPackagingRequest( pRequest->IsPackagingRequest() )
+            , m_isForcedCompilation( pRequest->IsForcedCompilation() )
+        {
+            EE_ASSERT( m_resourceID.IsValid() );
+        }
+
+        inline bool MatchesRequest( Request const* pRequest ) const
+        {
+            if ( m_resourceID != pRequest->m_resourceID )
+            {
+                return false;
+            }
+
+            if ( m_isPackagingRequest != pRequest->IsPackagingRequest() )
+            {
+                return false;
+            }
+
+            if ( !m_isForcedCompilation && pRequest->IsForcedCompilation() )
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        inline bool MatchesRequest( RequestBucket const* pRequestBucket ) const
+        {
+            if ( m_resourceID != pRequestBucket->m_resourceID )
+            {
+                return false;
+            }
+
+            if ( m_isPackagingRequest != pRequestBucket->m_isPackagingRequest )
+            {
+                return false;
+            }
+
+            if ( !m_isForcedCompilation && pRequestBucket->m_isForcedCompilation )
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        inline bool HasFileWatcherRequest() const
+        {
+            for ( auto const& pRequest : m_requests ) { if ( pRequest->m_origin == RequestOrigin::FileWatcher ) { return true; } }
+            return false;
+        }
+
+    public:
+
+        ResourceID                      m_resourceID;
+        bool                            m_isPackagingRequest = false;
+        bool                            m_isForcedCompilation = false;
+        TInlineVector<Request*, 10>     m_requests;
     };
 }

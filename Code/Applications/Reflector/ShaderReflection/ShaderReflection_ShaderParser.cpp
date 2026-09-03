@@ -48,6 +48,81 @@ namespace EE::Reflection
         return Render::RHI::ShaderStage::Vertex;
     }
 
+    // Removes // line comments and /* */ block comments from the source, preserving string literals.
+    // The parser tokenizes the raw text and would otherwise treat comments as shader code.
+    void StripComments( String& source )
+    {
+        String stripped;
+        stripped.reserve( source.size() );
+
+        bool inLineComment = false;
+        bool inBlockComment = false;
+        bool inString = false;
+
+        for ( size_t index = 0; index < source.size(); ++index )
+        {
+            char const character = source[index];
+            char const next = ( index + 1 < source.size() ) ? source[index + 1] : '\0';
+
+            if ( inLineComment )
+            {
+                if ( character == '\n' )
+                {
+                    inLineComment = false;
+                    stripped.push_back( character );
+                }
+                continue;
+            }
+
+            if ( inBlockComment )
+            {
+                if ( character == '*' && next == '/' )
+                {
+                    inBlockComment = false;
+                    ++index;
+                }
+                continue;
+            }
+
+            if ( inString )
+            {
+                stripped.push_back( character );
+                if ( character == '\\' && index + 1 < source.size() )
+                {
+                    stripped.push_back( source[++index] );
+                }
+                else if ( character == '"' )
+                {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if ( character == '"' )
+            {
+                inString = true;
+                stripped.push_back( character );
+            }
+            else if ( character == '/' && next == '/' )
+            {
+                inLineComment = true;
+                ++index;
+            }
+            else if ( character == '/' && next == '*' )
+            {
+                inBlockComment = true;
+                ++index;
+                stripped.push_back( ' ' ); // Insert whitespace so that comments separate tokens properly
+            }
+            else
+            {
+                stripped.push_back( character );
+            }
+        }
+
+        source = eastl::move( stripped );
+    }
+
     uint32_t ParseStructure( StringTokenIterator& tokens, String const& shaderName, StringView expectedParent, uint32_t currentStructureSize,
                              String& structName, TVector<ReflectedShader::ParameterInfo>& members )
     {
@@ -278,6 +353,9 @@ namespace EE::Reflection
             PrintError( "UTF8 BOM detected, please resave this file in an encoding without the BOM: '%s'", shader.m_path.c_str() );
             return false;
         }
+
+        // Strip comments before tokenizing - the tokenizer has no comment awareness
+        StripComments( shader.m_rawSourceText );
 
         // Setup parameter info
         //-------------------------------------------------------------------------

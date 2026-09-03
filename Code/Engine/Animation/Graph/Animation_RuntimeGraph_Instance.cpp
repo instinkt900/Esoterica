@@ -90,10 +90,21 @@ namespace EE::Animation
         }
         #endif
 
+        TInlineVector<int16_t, 100> nodesThatRequireFinalization;
         for ( int16_t i = 0; i < numNodes; i++ )
         {
             instantiationContext.m_currentNodeIdx = i;
             m_pGraphDefinition->m_nodeDefinitions[i]->InstantiateNode( instantiationContext, InstantiationOptions::CreateNode );
+            if ( m_pGraphDefinition->m_nodeDefinitions[i]->RequiresPostInstantiationStage() )
+            {
+                nodesThatRequireFinalization.emplace_back( i );
+            }
+        }
+
+        for ( int16_t nodeIdx : nodesThatRequireFinalization )
+        {
+            instantiationContext.m_currentNodeIdx = nodeIdx;
+            m_pGraphDefinition->m_nodeDefinitions[nodeIdx]->PostInstantiateNode( instantiationContext );
         }
 
         // Set root node and initialize graph nodes
