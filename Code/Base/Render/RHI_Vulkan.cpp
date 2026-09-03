@@ -1128,6 +1128,29 @@ namespace EE::Render::RHI
             }
         }
 
+        // ClusterCompaction.esf calls WaveMatch, which is core SM 6.5 on D3D12 and has no core
+        // Vulkan equivalent at all: DXC lowers it to OpGroupNonUniformPartitionNV, so the module
+        // declares SPV_NV_shader_subgroup_partitioned and vkCreateComputePipelines fails
+        // VUID-VkShaderModuleCreateInfo-pCode-08742 unless this is enabled.
+        //
+        // A vendor extension, and the only one this backend enables. **That makes the compaction
+        // pass NVIDIA-only**, and compaction is what writes the draw arguments, so a device
+        // without it renders no geometry rather than losing one effect. Escalated and accepted on
+        // 2026-09-03; the alternative was rewriting WaveMatch as a portable ballot loop in a
+        // shared shader, which reaches D3D12. See Docs/Linux/Blocked.md.
+        //
+        // No feature struct to chain: the extension only gates the SPIR-V capability, so there is
+        // nothing to query and nothing to clear. Do not add a features query here - P8.5's
+        // query-as-enable-request defect was exactly that shape.
+        if ( HasExtension( availableDeviceExtensions, VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME ) )
+        {
+            deviceExtensions.emplace_back( VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME );
+        }
+        else
+        {
+            EE_LOG_WARNING( LogCategory::Render, "RHI/CreateContext", "This device has no VK_NV_shader_subgroup_partitioned. ClusterCompaction.esf uses WaveMatch, so cluster compaction will fail at pipeline creation and no geometry will be drawn." );
+        }
+
         if ( !pVulkanContext->m_meshShader )
         {
             // Loud, because the engine has no fallback and RenderPass_DebugDraw will halt in CmdDispatchMesh.

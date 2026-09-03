@@ -3,8 +3,15 @@
 
 ESF_PARAMETER string ShaderType = "Compute";
 
-EE_DECLARE_ROOT_CONSTANTS( ClusterCompactionRootConstants, b0, space0 );
-EE_DECLARE_ROOT_CBV( GlobalParameters, b1, space0 );
+EE_DECLARE_INDIRECT_ROOT_CONSTANTS( ClusterCompactionRootConstants, b0, space0 );
+EE_DECLARE_INDIRECT_ROOT_CBV( GlobalParameters, b1, space0 );
+
+// Reached only by an indirect dispatch, so the root arguments are read out of the argument
+// buffer. See EE_DECLARE_INDIRECT_ROOT_CONSTANTS in RHI.esh; the bodies below do not change.
+#ifdef __spirv__
+#define RootConstants EE_g_RootConstants
+#define RootCBV       EE_g_RootCBV
+#endif
 
 groupshared InstanceVisibilityRecord    gsPageEntries[64]; // Instance entries of the page this group compacts - at most 64 visible instances, 64 unique shader keys
 groupshared uint                        gsNumUniqueKeys;
@@ -14,8 +21,10 @@ groupshared uint                        gsChunkRecordBase;
 
 [RootSignature( ClusterCompactionRootSignature )]
 [numthreads( 128, 1, 1 )]
-void CS_main( uint groupID : SV_GroupID, uint groupThreadID : SV_GroupThreadID, uint3 dispatchThreadID : SV_DispatchThreadID )
+void CS_main( uint groupID : SV_GroupID, uint groupThreadID : SV_GroupThreadID, uint3 dispatchThreadID : SV_DispatchThreadID EE_INDIRECT_DISPATCH_ENTRY_ARGS )
 {
+    EE_INDIRECT_DISPATCH_ENTRY_INIT
+
     RWStructuredBuffer<InstanceVisibilityRecord>    instanceVisibilityBuffer        = GetRWBuffer( RootCBV.m_InstanceCulling_VisibilityBuffer );
     RWBuffer<uint4>                                 clusterRecordBuffer             = GetRWBuffer( RootCBV.m_ClusterRecordBuffer );
     RWBuffer<uint>                                  clusterRecordCountersBuffer     = GetRWBuffer( RootCBV.m_ClusterRecordCountersBuffer );
