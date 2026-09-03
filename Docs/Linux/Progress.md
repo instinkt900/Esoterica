@@ -498,20 +498,47 @@ read `m_pMappedAddress_WriteCombined` a few hundred frames later. For a texture,
 
 ### Still open
 
-- **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should.** `DebugDrawPrimitiveOutput` is
-  fixed; `PrimitiveOutput` in `RendererTypes.esh` - the material shaders and `DebugDrawMesh.esf` -
-  is not. Any `vk::ext_decorate` in that struct makes DXC flatten it per AST field in the pixel
-  shader, and `MaterialShaderInput::New` copies the whole struct into a local, so DXC rebuilds
-  `PrimitiveOutputFlags` with one constituent per bitfield into the single member those bitfields
-  lower to. spirv-val rejects the module outright, so it cannot ship half-done by accident. Two
-  ways out, neither cheap: give `PrimitiveOutput` a packed `uint` and accessors instead of a
-  nested bitfield struct, which is an upstream change that reaches Direct3D 12; or a fourth entry
-  in `Code/Scripts/DXCPatches`. **Not urgent** - NVIDIA renders correctly without it - but it is a
-  real conformance gap and another driver need not be so forgiving.
-- **The same query-as-enable-request pattern** used for the mesh shader features is still in place
-  for the shading rate, acceleration structure and ray tracing blocks (`RHI_Vulkan.cpp:1157-1232`).
-  Confirmed still present on 2026-09-01, and confirmed that **no VUID fires** for it on the RTX
-  3090 with driver 580.173.02 and host validation on.
+- **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should. Permanent, and P8.5 measured
+  exactly why.** `DebugDrawPrimitiveOutput` is fixed; `PrimitiveOutput` in `RendererTypes.esh` is
+  not. **There are three blockers, not one, and the last of them makes this dangerous to attempt:**
+
+  1. The material pixel entry did not declare the capability. `EE_PER_PRIMITIVE_PIXEL_ENTRY` was
+     added to `DebugDraw.esf` by P5.20 and never to `MaterialShaderPBR.esh`, so the first failure
+     is `Operand 2 of Decorate requires one of these capabilities: MeshShadingNV MeshShadingEXT`.
+     One line, and it exposes the next one.
+  2. The bitfields. Decorating makes DXC flatten the struct per AST field, and DXC then emits an
+     `OpCompositeConstruct` with one constituent per bitfield for a SPIR-V struct in which they
+     have lowered to a single member: *"Expected total number of Constituents to be equal to the
+     number of members of Result Type struct"*. **Giving `PrimitiveOutputFlags` four plain members
+     under `#if defined( __spirv__ )` clears this**, and was verified to. Its layout is free -
+     nothing in C++ mirrors it and both stages are SPIR-V.
+  3. **`SV_CullPrimitive`, which is the one that does not have a cheap answer.** It lowers to
+     `CullPrimitiveEXT`, which Vulkan allows only on an Output variable, and the pixel shader takes
+     `PrimitiveOutput` as an Input. It normally costs nothing because DXC drops input members
+     nobody reads, but decorating the struct makes DXC flatten the whole entry parameter, so the
+     member is declared anyway - `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07035`. **Copying the
+     struct member-wise instead of wholesale does not avoid it**, which was tried: the parameter
+     itself is what gets flattened.
+
+  **Do not work around blocker 3 by giving the member an ordinary semantic in the pixel stage.**
+  That was tried, it compiles, **it passes spirv-val, and it renders a black frame.** This item has
+  a silent failure mode, so `-Fc` and the validator are not sufficient tests for it - the frame is.
+
+  The honest fix is a separate pixel-shader input struct that omits the mesh-only builtin, which
+  changes a shared material-shader entry signature and reaches Direct3D 12. That is an
+  [escalation trigger](00-Conventions.md#escalation-triggers), not a Linux change. **Not urgent** -
+  NVIDIA interpolates the per-primitive values and produces the right answer - but nothing in
+  Vulkan promises that, and the two stages do currently disagree about the interface.
+- ~~**The same query-as-enable-request pattern**~~ **Fixed by P8.5 on 2026-09-03.** All three
+  remaining blocks - shading rate, acceleration structure and ray tracing - now clear the bits the
+  backend does not use, the way the mesh shader block always did. `primitiveFragmentShadingRate`
+  goes because no shader writes a per-primitive rate; capture-replay, host commands, indirect
+  build and indirect trace go because nothing calls them; and
+  `descriptorBindingAccelerationStructureUpdateAfterBind` goes because
+  `g_resourceHeapMutableTypes` has no acceleration structure type in it. The frame is unchanged and
+  still renders with **zero validation messages**. It was never observable here - no VUID fires on
+  this driver - so this is a fix by inspection, and a driver that enforces one of those pairs is
+  still the only thing that could have reported it.
 - **OIT is dead code, on both backends.** `OITResolve.esf` compiles, and nothing looks it up or
   builds a pipeline from it. `OIT.esh` has no consumers at all. Phase 5 criterion 8 asks for OIT
   parity and there is no OIT to have parity with.
@@ -547,8 +574,8 @@ correct-enough to keep going and wrong enough to sweep before the port is called
 | ~~The cluster culling argument buffer is never cleared~~ **Fixed.** The editor passes `maxNumCommands` = 146 where the engine passes 1, so 145 dispatches a frame read stale argument slots. Real, and **not** the P7.6 editor hang, which was the `EE_IndirectRoot` inheritance below | `Renderer_ForwardShading.cpp:732` | Was deferred as "one line in an upstream engine file", on the assumption that `maxNumCommands` stays 1 | Nothing now. See the P7.6 deadlock entry below |
 | ~~Attachment transitions use `ALL_COMMANDS` and all-access masks~~ **Decided by P8.4: permanent.** | `TransitionAttachmentIfNeeded`, `RHI_Vulkan.cpp` | Nothing at the call site says what last touched the image or what the pass will do to it | Over-synchronisation. Correct, slow. It moved to the [`ALL_COMMANDS` sites](#all_commands-sites) table with the other six, and the reasoning for all seven is there |
 | Mesh draws are dropped instead of halting | `CmdSetPipeline`, `RHI_Vulkan.cpp` | No GPU here has `VK_EXT_mesh_shader`, and halting stopped the frame before anything else could be exercised | **A frame missing its geometry is not a rendered frame.** It warns once. On hardware with mesh shaders the branch never runs |
-| A pixel shader in an indirect draw reads command 0's root **constants** | `EE_INDIRECT_PIXEL_ENTRY_INIT`, `RHI.esh` | There is no `DrawIndex` in a fragment shader, and carrying the command index across the stage boundary means a new per-primitive attribute in upstream structs | Nothing today. Exact for the root **CBV**, because `BucketResolve.esf:41` writes the same address into every command. The per-command root constants - `m_clusterOffset`, `m_renderViewIndex`, `m_clusterVisibleBuffer` - would be command 0's, and no pixel shader reads one. **A pixel shader that starts reading one gets silently wrong data past the first command** |
-| An indirect `RootSRV` cannot be read | `CreateCommandSignature`, `RHI_Vulkan.cpp` | Only `RootConstants` and `RootCBV` have indirect declarations. `DebugDrawMesh.esf` declares a `RootSRV`, so a signature can carry one | Nothing indexes it yet. A shader that did would need a third declaration macro |
+| ~~A pixel shader in an indirect draw reads command 0's root **constants**~~ **Permanent, P8.5.** | `EE_INDIRECT_PIXEL_ENTRY_INIT`, `RHI.esh` | There is no `DrawIndex` in a fragment shader, and carrying the command index across the stage boundary means a new per-primitive attribute in upstream structs | Nothing today. Exact for the root **CBV**, because `BucketResolve.esf:41` writes the same address into every command. The per-command root constants - `m_clusterOffset`, `m_renderViewIndex`, `m_clusterVisibleBuffer` - would be command 0's, and no pixel shader reads one. **A pixel shader that starts reading one gets silently wrong data past the first command** **The consequence, stated plainly: the first pixel shader to read a per-command root constant gets command 0's value for every command, silently.** Nothing reads one today. Fixing it needs the command index carried across the stage boundary as a new per-primitive attribute in a shared struct, which reaches Direct3D 12 - an escalation, not a Linux change |
+| ~~An indirect `RootSRV` cannot be read~~ **Permanent, P8.5.** | `CreateCommandSignature`, `RHI_Vulkan.cpp` | Only `RootConstants` and `RootCBV` have indirect declarations. `DebugDrawMesh.esf` declares a `RootSRV`, so a signature can carry one | Nothing indexes it yet. A shader that did would need a third declaration macro **The consequence: a shader that indexes an indirect `RootSRV` will not compile a signature for it, and finds out at pipeline creation.** `DebugDrawMesh.esf` declares one, so a signature can carry one; nothing indexes it. A third declaration macro beside `RootConstants` and `RootCBV` is the fix, and it is cheap - but writing it untested, for no caller, is what Phase 8 forbids |
 | ~~The `GPU hang` after a full frame~~ **Fixed.** It was `vkCmdSetFragmentShadingRateKHR` on a transfer command buffer, not the dropped mesh draws. See the 2026-08-31 NVIDIA entry | `BeginCommandBuffer`, `RHI_Vulkan.cpp` | Was recorded as unresolvable without mesh hardware. That was wrong: the kernel named it as `Xid 32` throughout, and a GPU with dedicated queue families made it reproducible | Nothing now. The frame loop runs and shuts down clean |
 
 **Five upstream shader files are unverified on Windows.** `RHI.esh` and the four shaders changed
@@ -581,7 +608,7 @@ needs a **Windows machine**, not new GPU hardware. The two waits are different.
 > | P8.2 Runtime shakedown | **mostly done**, 2026-09-02. Game preview runs, physics simulates, all three animation editors open. Gamepad camera control still needs a controller |
 > | P8.3 Raytracing, or the decision not to | **deferred**, 2026-09-03, by the developer. Still open - a deferral is not one of the two outcomes the task asks for |
 > | P8.4 RHI debt sweep | **done**, 2026-09-03. Phase 5 criteria 1, 8 and 9 closed. Found an upstream translate-gizmo crash |
-> | P8.5 Shader conformance | not started |
+> | P8.5 Shader conformance | **done**, 2026-09-03. One item fixed, three permanent. `PrimitiveOutput` has three blockers and a black-frame trap |
 > | P8.6 Sanitizers and build coverage | **done**, 2026-09-03. Nine configurations build; Shipping links; TSan blocked on the NVIDIA driver |
 > | P8.7 Fork review | not started. Do this last |
 >
@@ -649,6 +676,96 @@ Append one entry per completed task, newest first. Format:
 - Acceptance criteria met: which ones, and which not.
 - Anything the next agent needs to know.
 -->
+
+### 2026-09-03 - P8.5 Shader conformance. One item fixed, three made permanent, and a workaround that renders a black frame
+
+**All four items are now decided.** One was fixed outright, and the other three are permanent with
+the consequence written down - which is what P8.5 asks for. The `PrimitiveOutput` item took most of
+the session and **the useful result is a much sharper diagnosis, not a fix.**
+
+#### Fixed: the query-as-enable-request pattern, in all three remaining blocks
+
+`CreateContext` queries a feature struct, then passes **the same struct** to `vkCreateDevice`, so
+every bit the query filled in is a feature being *asked for*. The mesh shader block always cleared
+the bits it did not want - `multiviewMeshShader` really did reject `vkCreateDevice` - and the other
+three never did. They do now:
+
+| Block | Cleared | Why it is safe |
+|---|---|---|
+| Fragment shading rate | `primitiveFragmentShadingRate` | No shader writes a per-primitive rate |
+| Acceleration structure | capture-replay, host commands, indirect build, `descriptorBindingAccelerationStructureUpdateAfterBind` | Nothing calls them, and `g_resourceHeapMutableTypes` has no acceleration structure type, so the heap does not need the update-after-bind bit |
+| Ray tracing pipeline | both capture-replay bits, `rayTracingPipelineTraceRaysIndirect`, `rayTraversalPrimitiveCulling` | Nothing calls them |
+
+The frame is unchanged and still renders with **zero validation messages, zero errors and zero
+warnings** on the RTX 3090 with host validation on.
+
+**This is a fix by inspection and it should be read as one.** No VUID fires for the old code on this
+driver, which is exactly why the row sat in the Blocked.md driver queue. What changed is that the
+argument no longer needs a driver to settle it: the backend now asks only for what it uses, so
+there is nothing left for a stricter driver to reject.
+
+#### Permanent: `EE_INDIRECT_PIXEL_ENTRY_INIT`, and the indirect `RootSRV`
+
+Both promoted out of [Deferred on purpose](#deferred-on-purpose) with their consequences stated:
+
+- **A pixel shader in an indirect draw reads command 0's root constants.** The first pixel shader to
+  read a per-command root constant gets command 0's value for every command, **silently**. Nothing
+  reads one today. Carrying the command index across the stage boundary means a new per-primitive
+  attribute in a shared struct, which reaches Direct3D 12.
+- **An indirect `RootSRV` cannot be read.** A shader that indexes one finds out at pipeline
+  creation. `DebugDrawMesh.esf` declares one, so a signature can carry one; nothing indexes it. A
+  third declaration macro is cheap - but writing it untested, for no caller, is what this phase's
+  "do not" list forbids.
+
+#### Permanent: `PrimitiveOutput` and `PerPrimitiveEXT`. **There are three blockers, not one**
+
+The old record named one blocker. There are three, and the third has no cheap answer.
+
+1. **The material pixel entry never declared the capability.** P5.20 added
+   `EE_PER_PRIMITIVE_PIXEL_ENTRY` to `DebugDraw.esf` and not to `MaterialShaderPBR.esh`, so the
+   first failure is `Operand 2 of Decorate requires one of these capabilities: MeshShadingNV
+   MeshShadingEXT`. One line, and it only exposes the next blocker.
+2. **The bitfields**, as recorded: `OpCompositeConstruct` with one constituent per bitfield for a
+   struct whose bitfields lowered to one member. **Giving `PrimitiveOutputFlags` four plain members
+   under `#if defined( __spirv__ )` clears this, and was verified to.** Its layout is genuinely free
+   - nothing in C++ mirrors it, and on Linux both stages are SPIR-V. Note the identically-named
+   fields in `GlobalParameters` a few hundred lines above are *not* free; C++ writes those.
+3. **`SV_CullPrimitive`.** It lowers to `CullPrimitiveEXT`, which Vulkan allows only on an Output
+   variable, and the pixel shader takes `PrimitiveOutput` as an Input. Normally harmless - DXC drops
+   input members nobody reads - but decorating makes DXC flatten the **whole entry parameter**, so
+   the member is declared anyway and `VUID-CullPrimitiveEXT-CullPrimitiveEXT-07035` fires.
+   **Copying the struct member-wise instead of wholesale does not avoid it**; that was tried. The
+   parameter is what gets flattened, not the copy.
+
+**The trap, and the reason this entry is long: the obvious workaround produces a black frame.**
+Giving `m_cullPrimitive` an ordinary `TEXCOORD` semantic in the pixel stage compiles, **passes
+spirv-val**, and renders an almost entirely black frame - the two stages stop agreeing about the
+interface and the lighting flags arrive as garbage. RHI.esh says "`-Fc` is the test" for this
+decoration. **For this item it is not: the frame is.** A future session that gets a clean compile
+here has proved nothing.
+
+The honest fix is a separate pixel-shader input struct that omits the mesh-only builtin. That
+changes a shared material-shader entry signature and reaches Direct3D 12, so it is an escalation
+rather than a Linux change. Everything above was reverted; the tree is as it was.
+
+**What it costs to leave:** the mesh shader's outputs *are* decorated - DXC does that itself - so
+the two stages currently disagree, and the pixel shader reads per-primitive values as interpolated
+per-vertex ones. NVIDIA produces the right answer anyway. Nothing in Vulkan promises that.
+
+#### Found on the way, and left for P8.3
+
+`CmdDispatchRays`'s indirect path calls **`vkCmdTraceRaysIndirect2KHR`**, which needs
+`VK_KHR_ray_tracing_maintenance1`. `CreateContext` never enables that extension, and now never asks
+for `rayTracingPipelineTraceRaysIndirect` either. The call would be invalid if it ran; it cannot,
+because P5.16 has no callers on either backend. Whoever picks up
+[P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to) should start here.
+
+- Files added: none.
+- Upstream files edited: **none.** `RHI_Vulkan.cpp` is this port's own backend, and the shader
+  experiments were reverted, so `git diff upstream/main` over `Code/Engine/Render/Shaders/` is
+  unchanged. **Windows sees nothing from this task.**
+- Acceptance criteria met: P8.5's "each item is fixed, or promoted to a permanent limitation with
+  the consequence written down" - four items, one fixed and three promoted.
 
 ### 2026-09-03 - P8.6 Sanitizers and build coverage. **All nine configurations now build**, Shipping links, and TSan found a real defect in the crash handler
 

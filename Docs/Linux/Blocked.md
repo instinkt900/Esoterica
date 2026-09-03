@@ -94,11 +94,12 @@ callers across `Code/Engine`, `Code/EngineTools` and `Code/Game`, and no raytrac
 either backend. That makes it a decision rather than a measurement, and it moved to
 [P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to).
 
-### One thing only a different driver will find
+### One thing only a different driver would have found
 
-| # | What to check | Why | Detail in |
-|---|---|---|---|
-| 5 | **The query-as-enable-request pattern** is still in place for the shading rate, acceleration structure and ray tracing feature blocks. It was a real defect for mesh shaders. Confirmed still present by reading `RHI_Vulkan.cpp:1157-1232`; the mesh shader block is the only one that clears the bits it does not want | No cross-dependency VUID catches it today. Measured: RTX 3090, driver 580.173.02, host validation on, raytracing enabled - **no VUID fires** | Progress.md, 2026-08-31 NVIDIA entry |
+**Nothing is left here.** **P8.5 fixed the query-as-enable-request pattern on 2026-09-03** rather
+than waiting for a driver to catch it. All three remaining feature blocks now clear the bits the
+backend does not use, the way the mesh shader block always did, so there is nothing left for a
+stricter driver to reject. It was never observable on this one.
 
 ---
 
@@ -135,7 +136,7 @@ machine assumes they are waiting on hardware.
 |---|---|---|---|
 | 1 | **An animation graph has still never been evaluated.** P8.2 closed the rest of this row - game preview starts and stops, three physics bodies fall and settle, and a skeletal asset opens in the skeleton, animation graph and ragdoll editors. What is left is running a graph: give the graph a skeleton in the Variation Editor, put the clip in it, and press "Preview Graph". Needs nothing but time; `Docs/Linux/Scripts/FetchTestAssets.sh` already provides the skeleton and clip | [P8.2](Phases/Phase8-Completion.md#p82---runtime-shakedown) | Progress.md, P8.2 entry |
 | 2 | **Raytracing has no callers on either backend.** A scratch harness, or a recorded decision that it is unreachable. Not a hardware wait | [P8.3](Phases/Phase8-Completion.md#p83---raytracing-or-the-decision-not-to) | Progress.md, 2026-09-02 docs entry |
-| 3 | **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`, and should.** `DebugDrawPrimitiveOutput` was fixed by P5.20; `PrimitiveOutput` in `RendererTypes.esh` was not, because `MaterialShaderInput::New` copies the struct into a local and DXC then builds SPIR-V that spirv-val rejects. Two ways out, neither cheap: a packed `uint` with accessors, which reaches Direct3D 12; or a fourth `Code/Scripts/DXCPatches` entry. **Not urgent** - NVIDIA renders correctly without it - but another driver need not be so forgiving | [P8.5](Phases/Phase8-Completion.md#p85---shader-conformance) | [Rendering: where we are](Progress.md#still-open) |
+| 3 | **`PrimitiveOutput` cannot carry `PerPrimitiveEXT`.** **P8.5 measured it on 2026-09-03 and made it permanent**: there are three blockers, not one, and the third - `SV_CullPrimitive` being declared as a pixel shader Input once the struct is decorated - needs a separate pixel-shader input struct, which reaches Direct3D 12 and is therefore an escalation. **The obvious workaround compiles, passes spirv-val and renders a black frame**, so do not trust a clean compile here | escalation, then [P8.5](Phases/Phase8-Completion.md#p85---shader-conformance) | [Progress.md](Progress.md), P8.5 entry |
 | 4 | ~~**The six sanitizer configurations have never been built.**~~ **Done by P8.6 on 2026-09-03**, for the three Release ones. What is left is not a build: **TSan cannot run against the NVIDIA driver**, failing inside its own interceptors right after `vkCreateDevice`, and no `TSAN_OPTIONS` setting avoids it. The engine's threading under a real frame is therefore still uncovered. Mesa's lavapipe ICD runs, but has no `VK_EXT_mesh_shader` so the frame halts early. **Needs a machine with a different GPU vendor** | [P8.6](Phases/Phase8-Completion.md#p86---sanitizers-and-build-coverage) | [Progress.md](Progress.md), P8.6 entry |
 | 5 | ~~**The items in [Deferred on purpose](Progress.md#deferred-on-purpose).**~~ **Swept by P8.4 on 2026-09-03.** All seven `ALL_COMMANDS` barrier sites and both `EE_UNIMPLEMENTED_FUNCTION` markers are now permanent with a recorded reason, and the RenderDoc trigger is deliberately not wired up. The reasoning is in the [`ALL_COMMANDS` sites](Progress.md#all_commands-sites) table and the P8.4 entry | [P8.4](Phases/Phase8-Completion.md#p84---rhi-debt-sweep) | [Progress.md](Progress.md), P8.4 entry |
 
