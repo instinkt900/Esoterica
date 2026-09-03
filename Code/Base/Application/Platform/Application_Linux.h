@@ -24,13 +24,12 @@ namespace EE
 
     //-------------------------------------------------------------------------
 
-    // The Linux sibling of Win32Application. The two are not related by inheritance and must not
-    // be: see Docs/Linux/Phases/Phase6-WindowingInput.md, "Do not refactor Win32Application into
-    // a shared base".
+    // The Linux sibling of Win32Application. The two are not related by inheritance and must not be:
+    // do not refactor Win32Application into a shared base.
     //
-    // Everything platform neutral keeps its name and signature, so a subclass reads the same on
-    // both platforms. Only the Win32 typed members differ, and each one is named below next to
-    // the SDL3 call that replaces it.
+    // Everything platform neutral keeps its name and signature, so a subclass reads the same on both
+    // platforms. Only the Win32 typed members differ, and each is named below next to the SDL3 call
+    // that replaces it.
     class EE_BASE_API LinuxApplication
     {
     protected:
@@ -43,9 +42,8 @@ namespace EE
 
     public:
 
-        // There is no HINSTANCE, and no resource IDs. The icon and the splash screen are BMP
-        // files on disk, and either may be null. See Phase 6, P6.2: Windows resources have no
-        // Linux equivalent, and .rc files are not parsed.
+        // No HINSTANCE, and no resource IDs. Windows resources have no Linux equivalent and .rc
+        // files are not parsed, so the icon and splash screen are BMP paths and either may be null.
         LinuxApplication( char const* applicationName, char const* iconFilePath = nullptr, char const* splashScreenFilePath = nullptr, TBitFlags<InitOptions> options = TBitFlags<InitOptions>() );
         virtual ~LinuxApplication();
 
@@ -70,9 +68,8 @@ namespace EE
         // Hit test for border less windows, in place of handling WM_NCHITTEST. Returns an
         // SDL_HitTestResult widened to int32_t, so that this header needs no SDL enum.
         //
-        // Public because the SDL_SetWindowHitTest callback is a file static in the .cpp and has
-        // to reach it. Win32Application does the same thing with WindowMessageProcessor, which
-        // its own file static wndProc calls.
+        // Public because the SDL_SetWindowHitTest callback is a file static in the .cpp and has to
+        // reach it, as Win32Application's wndProc reaches WindowMessageProcessor.
         int32_t BorderlessWindowHitTest( Int2 const& cursor ) const;
 
     protected:

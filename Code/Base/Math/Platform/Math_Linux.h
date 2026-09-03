@@ -13,10 +13,9 @@ namespace EE::Math
 
         //-------------------------------------------------------------------------
 
-        // Note: this deliberately differs from Math_Win32.h, which casts the argument to
-        // unsigned long before the scan and so truncates every value above 2^32. That is an
-        // upstream bug, recorded in Docs/Linux/Progress.md. This version is correct for the
-        // full 64-bit range. Do not "fix" it to match Win32.
+        // Deliberately different from Math_Win32.h, which casts to unsigned long before the scan and
+        // so truncates every value above 2^32. That is an upstream bug. This is correct for the full
+        // 64-bit range. Do not "fix" it to match Win32.
         return 63u - (uint32_t) __builtin_clzll( value );
     }
 }

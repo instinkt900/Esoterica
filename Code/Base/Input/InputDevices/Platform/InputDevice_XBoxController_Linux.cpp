@@ -19,13 +19,12 @@ namespace EE::Input
 
     namespace
     {
-        // XBoxControllerInputDevice has no member to hold an SDL_Gamepad*, and its header is an
-        // upstream file, so the open handles live here instead, indexed by the hardware
-        // controller index the device was constructed with. XInput needs no such thing: it polls
-        // a slot number and the OS owns the connection.
+        // XBoxControllerInputDevice has no member to hold an SDL_Gamepad* and its header is upstream,
+        // so the open handles live here instead, indexed by hardware controller index. XInput needs
+        // no such thing: it polls a slot number and the OS owns the connection.
         //
-        // InputSystem creates s_maxControllers devices, which is 2 today. Four is headroom, and
-        // an index outside it is treated as permanently disconnected rather than as an error.
+        // Four is headroom over the two devices InputSystem creates. An index outside it is treated
+        // as permanently disconnected rather than as an error.
         constexpr uint32_t const g_maxTrackedControllers = 4;
 
         SDL_Gamepad* g_pOpenGamepads[g_maxTrackedControllers] = {};
@@ -138,9 +137,9 @@ namespace EE::Input
             // Set stick and trigger raw normalized values
             SetTriggerValues( SDL_GetGamepadAxis( pGamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER ) / g_maxTriggerRange, SDL_GetGamepadAxis( pGamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER ) / g_maxTriggerRange );
 
-            // **The vertical axes are negated.** SDL follows the joystick convention, where down
-            // is positive; XInput's sThumbLY is positive upwards, and the engine is written
-            // against XInput. Without this, every controller looks inverted on Linux only.
+            // The vertical axes are negated. SDL follows the joystick convention where down is
+            // positive, XInput's sThumbLY is positive upwards, and the engine is written against
+            // XInput. Without this every controller looks inverted on Linux only.
             Float2 const leftStick( SDL_GetGamepadAxis( pGamepad, SDL_GAMEPAD_AXIS_LEFTX ) / g_maxThumbstickRange, -SDL_GetGamepadAxis( pGamepad, SDL_GAMEPAD_AXIS_LEFTY ) / g_maxThumbstickRange );
             Float2 const rightStick( SDL_GetGamepadAxis( pGamepad, SDL_GAMEPAD_AXIS_RIGHTX ) / g_maxThumbstickRange, -SDL_GetGamepadAxis( pGamepad, SDL_GAMEPAD_AXIS_RIGHTY ) / g_maxThumbstickRange );
             SetAnalogStickValues( leftStick, rightStick );

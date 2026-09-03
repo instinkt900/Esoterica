@@ -12,20 +12,14 @@ namespace EE::Platform
     //-------------------------------------------------------------------------
     // Crash Handling
     //-------------------------------------------------------------------------
-    // Note on the Win32 sibling: its stack walker, crash dump writer and vectored exception
-    // handler are all inside an `#if 0` block, and Initialize/Shutdown have their bodies
-    // commented out. None of it runs. So there is no behaviour here to match, and this is not a
-    // port of that code.
+    // Not a port of the Win32 sibling. Its stack walker, dump writer and exception handler are all
+    // inside an #if 0 block with the Initialize and Shutdown bodies commented out, so there is no
+    // behaviour to match. This does the minimum that makes a Linux crash legible: print a backtrace
+    // and re-raise so the default action still applies. Core dumps stay the kernel's job.
     //
-    // What is implemented instead is the minimum that makes a Linux crash legible: a signal
-    // handler that prints a backtrace and then re-raises so the default action still applies.
-    // Core dumps stay the kernel's job, through `ulimit -c` and /proc/sys/kernel/core_pattern.
-    //
-    // **The handler is async-signal-safe, and must stay that way.** Only backtrace,
-    // backtrace_symbols_fd and write are called from it. The Win32 code allocated strings and
-    // formatted messages inside its handler, which is legal on Windows and undefined behaviour
-    // in a POSIX signal handler, so that structure is deliberately not copied. In particular:
-    // no malloc, no EE_LOG, no String, and no printf family.
+    // The handler is async-signal-safe and must stay that way: no malloc, no EE_LOG, no String, no
+    // printf family. The Win32 code formatted messages inside its handler, which is legal there and
+    // undefined behaviour in a POSIX signal handler, so do not copy that shape back in.
 
     namespace
     {
@@ -71,18 +65,11 @@ namespace EE::Platform
 
     void Initialize()
     {
-        // Warm up backtrace() before any signal can arrive.
-        //
-        // The handler itself is written to be async-signal-safe - write() rather than fputs,
-        // backtrace_symbols_fd rather than backtrace_symbols - but **backtrace() is not safe on
-        // its first call**. glibc loads the unwinder from libgcc_s.so lazily, so the first call
-        // reaches dlopen and mallocs. A crash that happened inside the allocator would then
-        // deadlock in the handler that is trying to report it, which is exactly the case the
-        // handler exists for.
-        //
-        // Calling it once here forces the load now, on the main thread, with nothing held. Found
-        // by ThreadSanitizer in P8.6, as "signal-unsafe call inside of a signal" with
-        // _dl_map_object_deps under CrashSignalHandler.
+        // Warm up backtrace() before any signal can arrive. It is not async-signal-safe on its
+        // first call: glibc loads the unwinder from libgcc_s.so lazily, so that call reaches dlopen
+        // and mallocs. A crash inside the allocator would then deadlock in the handler reporting
+        // it, which is the case the handler exists for. Calling it once here forces the load on the
+        // main thread with nothing held.
         void* warmupBuffer[1];
         int32_t const ignoredFrames = backtrace( warmupBuffer, 1 );
         (void) ignoredFrames;

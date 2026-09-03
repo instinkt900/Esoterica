@@ -16,18 +16,17 @@
 
 namespace EE
 {
-    // The Linux Resource Server runs as an ordinary window, and the Win32 system tray and
-    // taskbar members are gone rather than replaced. See P7.3 in Docs/Linux/Progress.md:
+    // This runs as an ordinary window. The Win32 tray and taskbar members are gone rather than
+    // replaced:
     //
-    // - No tray icon. A tray needs libayatana-appindicator or a StatusNotifierItem over D-Bus,
-    //   neither is present, and half the desktops this has to run on have no tray at all.
-    // - Because there is no tray, the window is neither started minimized nor hidden on first
-    //   show. Hiding it with nothing to restore it from would strand the user.
-    // - No taskbar progress overlay. ITaskbarList3 has no portable equivalent. The busy state
-    //   is already on screen in the UI's own request list.
-    // The single-instance guard is kept, as an flock rather than a named mutex. See the .cpp.
+    //  - No tray icon. A tray needs libayatana-appindicator or a StatusNotifierItem over D-Bus, and
+    //    many of the desktops this has to run on have no tray at all.
+    //  - With no tray, the window never starts minimized or hidden. Hiding it with nothing to
+    //    restore it from would strand the user.
+    //  - No taskbar progress overlay. ITaskbarList3 has no portable equivalent, and the busy state
+    //    is already on screen in the request list.
     //
-    // The Win32 sibling also declares an unused InternalUpdateContext. It is dropped here.
+    // The single-instance guard is kept, as an flock rather than a named mutex.
     class ResourceServerApplication final : public LinuxApplication
     {
     public:

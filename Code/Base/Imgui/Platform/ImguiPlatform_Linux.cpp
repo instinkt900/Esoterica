@@ -12,30 +12,24 @@
 //-------------------------------------------------------------------------
 // Vendored from Dear ImGui v1.92.9b-docking, backends/imgui_impl_sdl3.cpp
 //-------------------------------------------------------------------------
-// This mirrors ImguiPlatform_Win32.cpp, which is the same file's Win32 sibling adapted the same
-// way. Everything between this banner and the next one is upstream's code.
+// Everything between this banner and the next one is upstream's code.
 //
-// **It is deliberately left at upstream's indentation and formatting, and at column zero rather
-// than indented into this namespace.** That breaks Conventions rule 8, on purpose: this is a
-// fork of a file that upstream keeps changing, and the only cheap way to re-sync it is
+// Do not reformat it, and do not indent it into the namespace. That breaks Conventions rule 8 on
+// purpose, because the only cheap way to re-sync a file upstream keeps changing is
 //
 //     diff <upstream imgui_impl_sdl3.cpp> <this region>
 //
-// which stops working the moment the braces move. ImguiPlatform_Win32.cpp was reformatted into
-// house style and is now three years behind the imgui core it sits next to: its functions match
-// roughly 1.89.1, while Code/Base/ThirdParty/imgui is 1.92.9b. That is the cost this avoids.
+// and that stops working the moment the braces move. ImguiPlatform_Win32.cpp was reformatted into
+// house style and now sits around imgui 1.89.1 while the vendored core is 1.92.9b.
 //
-// Every deliberate change carries an "EE:" comment, so a re-sync can find them. In summary:
+// Every deliberate change carries an "EE:" comment so a re-sync can find them:
 //
 //  - Wrapped in EE::ImGuiX::Platform, guarded by __linux__ and EE_DEVELOPMENT_TOOLS.
-//  - Gamepad support removed. The engine owns gamepads; the Win32 sibling drops XInput likewise.
+//  - Gamepad support removed. The engine owns gamepads, as the Win32 sibling drops XInput.
 //  - The NewFrame time step removed. ImguiSystem::StartFrame sets io.DeltaTime already.
 //  - Only the Vulkan init entry point kept.
 //  - The backend data goes through EE::New and EE::Delete, so the engine tracks it.
 //  - Init, Shutdown and NewFrame are called from ImguiSystem below rather than by the app.
-//
-// Upstream's own header comment, changelog and licence are in the imgui repository. They are not
-// duplicated here; the version above is the whole provenance.
 //-------------------------------------------------------------------------
 
 // Clang warnings with -Weverything
