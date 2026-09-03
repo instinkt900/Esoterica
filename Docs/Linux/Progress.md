@@ -677,6 +677,69 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-03 - Comments in `RHI_Vulkan.cpp`. Unplanned. Comment-only, no code change
+
+The comments in `RHI_Vulkan.cpp` had grown into essays. They narrated the porting effort instead of
+explaining the code, and they leaned on context that only exists in the sessions that wrote them.
+Rewritten against one rule.
+
+**The rule.** Keep a comment only if it answers a question the code cannot:
+
+1. Why this value or flag, and not the obvious alternative.
+2. A Vulkan/D3D12 divergence that would cause a bug if a reader assumed parity.
+3. A deliberate divergence from the D3D12 backend.
+4. A workaround for a driver, API or tooling defect.
+5. A cross-file invariant, such as a layout mirrored in `RHI.esh`.
+
+Delete otherwise. Restatements of the code, Vulkan tutorials, history, provenance, and anything
+whose answer is "because that is what the function is called".
+
+| | before | after |
+|---|---|---|
+| Total lines | 8053 | 7372 |
+| Comment lines | 1860 (23%) | 1182 (16%) |
+| Code lines | 4920 | 4920 |
+| Phase and `Progress.md` references | 113 | 0 |
+| Markdown `**bold**` in comments | 128 | 0 |
+| `File.cpp:1234` references | 59 | 0 |
+
+**Two comments were wrong, not just wordy.** Both were superseded by work recorded in this file:
+
+- `QueueDeviceWait` called its `ALL_COMMANDS` mask "the correct-but-untuned choice the phase
+  document allows". P8.4 classified it permanent and not debt on 2026-09-03.
+- The indirect-draw banner said "No engine call site takes the working path today, so nothing in the
+  frame draws yet". P5.17 landed and the frame runs past it.
+
+Both deleted. A comment that contradicts this file is worse than no comment.
+
+**Nothing was lost.** The eight largest rationale topics - queue submission ordering, surface
+creation, the headless path, raytracing reachability, the bindless model, the `ALL_COMMANDS` sites,
+indirect draws, and scratch buffer sizing - are all recorded here already, and in more detail than
+the comments carried. The entries hold the rejected alternatives and the follow-up verdicts that the
+comments never had.
+
+**Verification.** A string-literal-aware comment stripper run over `HEAD` and over the working copy
+produces byte-identical output: 4920 code lines, no diff. That is the proof the change is
+comment-only. `RHI_Vulkan.cpp.o` then builds in `Linux_Debug` with 236 warnings, the same count as
+`HEAD`, all of them from EABase and VMA headers.
+
+The Windows MSBuild build was not run. The whole file sits inside `#ifdef __linux__` and no code
+changed, so Windows cannot see this.
+
+#### What the next session should know
+
+- **The style for this file is settled.** Short, why-focused, no phase identifiers, no `Progress.md`
+  pointers, no line numbers, no markdown emphasis. One term per concept: "the D3D12 backend", not a
+  mix of "the reference", "the specification" and "Direct3D 12".
+- **Do not put line numbers in a comment.** They rot silently. `TouchedFiles.md:83` still points at
+  `RHI_Vulkan.cpp:5394` for a `RG32_UInt` buffer view; that line was raytracing code even before
+  this task touched anything. Left alone, because it was already wrong and is not this task's to fix.
+- **The other Linux files still carry the old style.** `Platform_Linux.cpp`, `Application_Linux.cpp`,
+  `ImguiPlatform_Linux.cpp` and the NinjaGen scripts were not touched. Same treatment when asked.
+- 16% is an outcome, not a target. The keep test was applied per comment. `RHI_Direct3D12.cpp` sits
+  at 1.8% and is worth reading for voice, but Vulkan diverges from D3D12 in more places than a
+  straight port would, and those divergences are where most of the surviving comments sit.
+
 ### 2026-09-03 - P8.5 Shader conformance. One item fixed, three made permanent, and a workaround that renders a black frame
 
 **All four items are now decided.** One was fixed outright, and the other three are permanent with
