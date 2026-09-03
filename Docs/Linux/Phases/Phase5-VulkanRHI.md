@@ -503,9 +503,10 @@ most of the bugs this phase can produce, and far more cheaply than debugging vis
    loaded but not executed.
 7. The full engine frame renders correctly, checked against Windows Direct3D 12 screenshots of
    the same scene. List any visual difference, with an explanation. **Half met.** The frame is
-   correct on its own terms - see [Rendering: where we are](../Progress.md#what-works) - but
-   **nothing has been compared against Windows**, because no Windows build has been run. The
-   comparison is a row in the Windows queue in [Blocked.md](../Blocked.md).
+   correct on its own terms - see [Rendering: where we are](../Progress.md#what-works) - and
+   **Windows now renders the same map** (P8.1, 2026-09-04, Debug), but the two were compared **by
+   eye and not by capture**, so no visual difference has actually been listed. The comparison is a
+   row in the Windows queue in [Blocked.md](../Blocked.md).
 8. Feature parity is demonstrated for forward shading, cascaded shadows, GTAO, SMAA, OIT, mesh
    picking, and debug draw. Name each one, and verify each one. **Met for six of seven, and the
    seventh cannot be met.** Mesh picking was the last one owed, and P8.4 verified it on
