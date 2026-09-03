@@ -820,10 +820,14 @@ all. Verified in the editor, which passes `maxNumCommands` = 146 where the engin
 
 #### What is not closed
 
-- **The frame has not been compared against a pre-merge reference**, so P9.4's "correct frame"
-  criterion is still open. Everything the docs list is present - geometry, textures, normals, IBL,
-  direct lighting, shadows, sky, reflective ground plane. Thin sliver geometry near the horizon is
-  most likely distant boulders at a near-ground camera angle, and that is **unverified**.
+- **The frame has not been compared side by side against a pre-merge reference.** Everything the
+  docs list is present - geometry, textures, normals, IBL, direct lighting, shadows, sky, reflective
+  ground plane - and **the developer loaded pbrdemo in the Release build and confirmed it looked
+  correct** (2026-09-03), which also settles the thin sliver geometry near the horizon that this
+  session could not account for. Treat the criterion as met by inspection rather than by measurement;
+  a captured-frame comparison would still be worth having when P8.1 gives a Windows frame to compare
+  against.
+- **Only Release has been run and looked at.** Debug is blocked by the Resource Server assert above.
 - **Windows is still unbuilt.** P8.1 owes it and this merge does not change that.
 - **P9.5** has had its audit run but the sync point and merge notes are not yet recorded.
 
@@ -842,11 +846,54 @@ all. Verified in the editor, which passes `maxNumCommands` = 146 where the engin
   for its UI, and the engine finishes initialising inside that window. So it aborts about two
   seconds in, having launched the server correctly.
 
-  **Pre-existing, platform-neutral, and not this merge.** The halt is byte-identical at the merge
-  base and upstream did not touch it, even though it did rework `NetworkClient.cpp` and
-  `ResourceProvider_Network.cpp` in `47e6293`. It is upstream's code and it would race on Windows
-  too; nothing about it is a Linux defect, so it is recorded rather than fixed - Conventions rule 3.
-  Starting the server first sidesteps it completely, and every measurement above did that.
+  **The race is old. The abort is new, and this merge introduced it.** Upstream changed exactly
+  that line:
+
+  ```diff
+  -            EE_ASSERT( "LOST CONNECTION!!" );
+  +            EE_TRACE_HALT( "LOST CONNECTION!!" );
+  ```
+
+  `EE_ASSERT( "LOST CONNECTION!!" )` asserts on a **string literal**, which is always truthy, so it
+  **never fired**. The pre-merge engine sailed straight past a not-yet-connected client and picked
+  the connection up a frame or two later. `EE_TRACE_HALT` always halts when reached, so a race that
+  had been invisible since P7.3 is now a hard abort about two seconds into startup.
+
+  Upstream's change is arguably the correct one - a real mid-session disconnect should be loud - but
+  it turns a benign startup race into a crash, and it is **platform-neutral, so Windows will hit it
+  too.** Upstream's own code, so recorded rather than fixed - Conventions rule 3. Starting the
+  server first sidesteps it, and every measurement above did that.
+
+  **Method note, because this was got wrong twice before it was got right.** Once the merge is
+  committed, `git merge-base HEAD upstream/main` **is** `upstream/main`, so every
+  `git diff $( git merge-base HEAD upstream/main ) upstream/main` comes back empty and looks like
+  "upstream did not touch this". It proves nothing. Diff against the pre-merge fork tip instead -
+  `d2a2696` here, the merge commit's first parent:
+
+  ```bash
+  git diff --stat d1d5c41^1 HEAD -- <path>     # what the merge actually changed
+  ```
+
+- **The Debug `ResourceServer` dies seconds after start, and takes the Debug editor with it.**
+  Release is fine. In Debug it asserts in the fork's own RHI:
+
+  ```
+  EE_ASSERT( pVulkanCommandBuffer->m_stage == VulkanCommandBuffer::Stage::Recording )   RHI_Vulkan.cpp:2771
+  ```
+
+  `EndCommandBuffer` on a buffer that was never begun. The asserts are compiled out in Release,
+  which is the only reason Release survives it - the underlying mistake is there too. Because the
+  server dies, the Debug editor then fails with the `LOST CONNECTION!!` above, which is a symptom
+  and not the bug.
+
+  **Hypothesis, not a diagnosis - this is not yet confirmed.** The merge added a second,
+  compute-queue set of frame command pools and buffers to `RenderSystem`, selected at two separate
+  sites by `m_pRenderSettings->m_enableAsyncCompute` (`RenderSystem.cpp:359` and `:505`, default
+  `true`). The submit path now ends `m_frameComputeCommandBuffers[...]`, and the only
+  `BeginCommandBuffer` calls outside `RenderSystem` are `RenderWindow.cpp:108` and `:130`, which
+  begin the *window's* buffer. **A Resource Server has no world renderer**, so it plausibly never
+  begins the new compute buffer and still ends it, which would explain why only the server trips it.
+  Verify before acting on that.
 - **Append the `[Render:RHI]` block to `Esoterica.ini`, do not write it with `>`.** The recipe in
   "Start here" truncates, and the file on this machine carries a `[Resource]` section naming
   `CompiledData` and the server. Appending was deliberate; whether truncating it actually breaks a
