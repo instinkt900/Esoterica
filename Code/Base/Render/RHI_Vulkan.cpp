@@ -1193,6 +1193,14 @@ namespace EE::Render::RHI
             // CmdSetShadingRate takes them in one call.
             if ( fragmentShadingRateFeatures.pipelineFragmentShadingRate && fragmentShadingRateFeatures.attachmentFragmentShadingRate )
             {
+                // The query filled every bit this device supports and the same struct is what
+                // vkCreateDevice reads, so anything left set is a feature being asked for. Ask
+                // for the two the engine uses and nothing else - no shader writes a per-primitive
+                // rate, and requesting a feature the engine cannot exercise is a bug waiting for
+                // a driver that has a dependency to enforce. Same shape as the mesh shader block
+                // above, where multiviewMeshShader really did reject vkCreateDevice.
+                fragmentShadingRateFeatures.primitiveFragmentShadingRate = VK_FALSE;
+
                 deviceExtensions.emplace_back( VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME );
                 // Chained after the mesh shader features, which may or may not be there.
                 fragmentShadingRateFeatures.pNext = enabledFeatures.m_mutableDescriptorType.pNext;
@@ -1217,6 +1225,24 @@ namespace EE::Render::RHI
 
             if ( accelerationStructureFeatures.accelerationStructure && rayTracingPipelineFeatures.rayTracingPipeline )
             {
+                // Ask for the two bits the backend uses and clear the rest, as the mesh shader
+                // block does. Capture-replay, host commands and indirect build are not used;
+                // descriptorBindingAccelerationStructureUpdateAfterBind is not needed either,
+                // because g_resourceHeapMutableTypes has no acceleration structure type in it.
+                //
+                // **None of this can be exercised here.** P5.16 has no callers on either backend,
+                // so a device that rejects one of these pairs is the only thing that would report
+                // it, and this one does not. See P8.3 and the P8.5 entry in Progress.md.
+                accelerationStructureFeatures.accelerationStructureCaptureReplay = VK_FALSE;
+                accelerationStructureFeatures.accelerationStructureIndirectBuild = VK_FALSE;
+                accelerationStructureFeatures.accelerationStructureHostCommands = VK_FALSE;
+                accelerationStructureFeatures.descriptorBindingAccelerationStructureUpdateAfterBind = VK_FALSE;
+
+                rayTracingPipelineFeatures.rayTracingPipelineShaderGroupHandleCaptureReplay = VK_FALSE;
+                rayTracingPipelineFeatures.rayTracingPipelineShaderGroupHandleCaptureReplayMixed = VK_FALSE;
+                rayTracingPipelineFeatures.rayTracingPipelineTraceRaysIndirect = VK_FALSE;
+                rayTracingPipelineFeatures.rayTraversalPrimitiveCulling = VK_FALSE;
+
                 // VK_KHR_deferred_host_operations carries no feature bit. It is a dependency of
                 // VK_KHR_acceleration_structure and has to be enabled for it to load.
                 deviceExtensions.emplace_back( VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME );
