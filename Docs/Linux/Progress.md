@@ -874,26 +874,37 @@ all. Verified in the editor, which passes `maxNumCommands` = 146 where the engin
   git diff --stat d1d5c41^1 HEAD -- <path>     # what the merge actually changed
   ```
 
-- **The Debug `ResourceServer` dies seconds after start, and takes the Debug editor with it.**
-  Release is fine. In Debug it asserts in the fork's own RHI:
+- **The Debug `ResourceServer` ran off a dangling settings pointer. Fixed, and Debug now runs.**
+  It asserted seconds after start, taking the Debug editor with it:
 
   ```
   EE_ASSERT( pVulkanCommandBuffer->m_stage == VulkanCommandBuffer::Stage::Recording )   RHI_Vulkan.cpp:2771
   ```
 
-  `EndCommandBuffer` on a buffer that was never begun. The asserts are compiled out in Release,
-  which is the only reason Release survives it - the underlying mistake is there too. Because the
-  server dies, the Debug editor then fails with the `LOST CONNECTION!!` above, which is a symptom
-  and not the bug.
+  `EndCommandBuffer` on a buffer that was never begun. **The first hypothesis - that a server with
+  no world renderer never begins the merge's new compute command buffer - was wrong.**
+  `RenderSystem` does begin it, at `RenderSystem.cpp:365`. Recorded because it was published before
+  it was checked, and it reads plausibly.
 
-  **Hypothesis, not a diagnosis - this is not yet confirmed.** The merge added a second,
-  compute-queue set of frame command pools and buffers to `RenderSystem`, selected at two separate
-  sites by `m_pRenderSettings->m_enableAsyncCompute` (`RenderSystem.cpp:359` and `:505`, default
-  `true`). The submit path now ends `m_frameComputeCommandBuffers[...]`, and the only
-  `BeginCommandBuffer` calls outside `RenderSystem` are `RenderWindow.cpp:108` and `:130`, which
-  begin the *window's* buffer. **A Resource Server has no world renderer**, so it plausibly never
-  begins the new compute buffer and still ends it, which would explain why only the server trips it.
-  Verify before acting on that.
+  The cause is upstream. `47e6293` added a *stored* settings pointer, `m_pRenderSettings = &settings`
+  (`RenderSystem.cpp:23`), then reads `m_pRenderSettings->m_enableAsyncCompute` at five sites to
+  choose between the graphics and the new compute frame command buffers. The engine passes
+  `*pRenderSettings` from the settings registry, which outlives the `RenderSystem`. **Both
+  `ResourceServer` entry points pass a stack local**, so the pointer dangles as soon as
+  `Initialize`'s caller returns, and every later read is freed stack. The flag then answers
+  inconsistently - the begin path takes one buffer, the submit path takes the other.
+
+  Fixed in this fork's own `ResourceServerApplication_Linux.cpp` / `.h` by promoting the local to a
+  member declared above `m_renderSystem`. **No upstream file touched, and the Win32 sibling has the
+  bug identically** (`ResourceServerApplication.cpp:260`) - report it, do not fix it here.
+
+  **Release was never correct, it was only quiet.** Its asserts are compiled out, so it read the
+  same freed stack and happened to survive. "Release works, Debug does not" was a misleading frame:
+  the bug was in both.
+
+  **This is the merge's fourth defect, and it is the one a Debug run found.** Every P9.4
+  measurement before it was Release-only. Worth remembering next merge: run Debug, because it
+  forces host validation on *and* keeps the asserts.
 - **Append the `[Render:RHI]` block to `Esoterica.ini`, do not write it with `>`.** The recipe in
   "Start here" truncates, and the file on this machine carries a `[Resource]` section naming
   `CompiledData` and the server. Appending was deliberate; whether truncating it actually breaks a

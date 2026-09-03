@@ -142,14 +142,15 @@ authoritative status of each file; the rows below say what to do about it.
 
 ---
 
-### The Debug configuration, blocked by the Resource Server
+### Two upstream defects the merge brought, both needing an upstream report
 
-**Release runs; Debug does not.** Found 2026-09-03, immediately after the `47e6293` merge, by
-running the Debug editor. Not a hardware wait and not a Windows wait - it needs a session.
+**Neither is a hardware wait.** Both were found on 2026-09-03 by running the Debug build after the
+`47e6293` merge. **The Debug blocker itself is fixed** - Debug now runs and renders - so what is
+left here is reporting them, because both are upstream's and both reach Windows.
 
 | # | What to do | Files | Detail in |
 |---|---|---|---|
-| 1 | **The Debug `ResourceServer` asserts seconds after start**, `EndCommandBuffer` on a buffer that was never begun (`RHI_Vulkan.cpp:2771`). The Debug editor then dies with `LOST CONNECTION!!`, which is the symptom. Release only survives because its asserts are compiled out - **the mistake is present there too**. A specific, unconfirmed hypothesis about the merge's new compute command buffers is in the P9.1-P9.4 Progress.md entry; verify it before acting on it | `RHI_Vulkan.cpp`, `RenderSystem.cpp` | Progress.md, P9.1-P9.4 entry |
+| 1 | **`RenderSystem` stores a pointer to the settings it is given** (`m_pRenderSettings = &settings`, new in `47e6293`) and reads it every frame, and **both `ResourceServer` entry points pass a stack local.** The Linux one is fixed here by promoting it to a member; **`ResourceServerApplication.cpp:260` still dangles**, so the Win32 Resource Server reads freed stack to choose its frame command buffer. Release hides it because its asserts are compiled out | `ResourceServerApplication.cpp`, `RenderSystem.cpp:23` | Progress.md, P9.1-P9.4 entry |
 | 2 | **The engine aborts if the Resource Server is not already listening.** The merge turned `EE_ASSERT( "LOST CONNECTION!!" )` - always truthy, never fired - into a real `EE_TRACE_HALT`, so a startup race that had been invisible since P7.3 is now a hard abort. Upstream's code and platform-neutral, so **Windows will hit it too**. Report it; the workaround is to start the server first | `ResourceProvider_Network.cpp:97` | Progress.md, P9.1-P9.4 entry |
 
 ---
