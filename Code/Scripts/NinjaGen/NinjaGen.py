@@ -468,7 +468,7 @@ def main():
     placeholder_problem = write_shader_registration_placeholder( repo_root )
 
     solution, list_problems = SourceLists.load( repo_root )
-    configurations = Toolchain.build_configurations( solution.configurations )
+    configurations = Toolchain.build_configurations( solution.configurations, repo_root )
 
     text, emit_problems, debug_rules = emit( repo_root, solution, configurations )
 

@@ -104,6 +104,10 @@ Nine configurations exist: `Debug`, `Release` and `Shipping`, plus `Debug` and `
 with `ASan`, `TSan` and `UBSan`. **Prefer `Release`.** Debug is a cold build of the whole tree
 and the port's verified state is all in `Release`.
 
+**All nine build**, as of P8.6 on 2026-09-03, and the engine has been run in `Debug`, `Release`,
+`Shipping` and the three Release sanitizers. See [the sanitizer configurations](#the-sanitizer-configurations)
+below - two of them need a runtime option or they look like engine bugs.
+
 ## Building from a clone
 
 The order matters. Reflection generates C++ that the build compiles, so it sits in the middle of
@@ -238,6 +242,61 @@ Resource Server started after that cannot bind, so the symptom is a networking e
 server anywhere in `ps`. The `pkill` above matches the workers too, which is why it is worth
 running even when no server appears to be up.
 
+### The sanitizer configurations
+
+All six generate, and P8.6 built and ran the three Release ones. Substitute the sanitizer name:
+
+```bash
+ninja -f Build/Linux/Esoterica.ninja Build/Linux_Release_ASan/Esoterica.Applications.Engine
+```
+
+An output directory needs the same hand-written `Esoterica.ini` as any other, and the quickest way
+to give it data is to borrow the Release build's:
+
+```bash
+cp Build/Linux_Release/Esoterica.ini Build/Linux_Release_ASan/
+ln -sfn ../Linux_Release/CompiledData Build/Linux_Release_ASan/CompiledData
+cd Build/Linux_Release_ASan
+./Esoterica.Applications.Engine -packaged -map data://demo/render/pbr/pbrdemo.map
+```
+
+`-packaged` reads that `CompiledData` directly, so no Resource Server is needed. That matters
+here: the server would have to be a binary built with the same sanitizer, because an executable
+that loads an ASan-instrumented `.so` without being instrumented itself refuses to start.
+
+**ASan needs `protect_shadow_gap=0`, or Vulkan will not start.**
+
+```bash
+ASAN_OPTIONS=detect_leaks=1:protect_shadow_gap=0 ./Esoterica.Applications.Engine ...
+```
+
+The NVIDIA driver maps memory inside the region ASan reserves as its shadow gap. Without the
+option `vkCreateDevice` fails and the engine halts on `EE_ASSERT( result == VK_SUCCESS )` at
+`RHI_Vulkan.cpp:1288` - **a symptom that names Vulkan for a cause that is the sanitizer.**
+
+**ASan cannot see engine allocations.** `Memory.h:13` hardcodes `EE_USE_CUSTOM_ALLOCATOR` to 1, so
+everything comes from rpmalloc, which takes its memory from `mmap`. What ASan covers is the stack,
+globals and libc-level heap. Turning rpmalloc off does not compile on Linux; see
+[Progress.md, Still open](Progress.md#still-open).
+
+**TSan cannot run against the NVIDIA driver at all.** It fails inside its own interceptors right
+after `vkCreateDevice`:
+
+```
+ThreadSanitizer: CHECK failed: tsan_interceptors_posix.cpp:2156 "((thr->slot)) != (0)"
+```
+
+No `TSAN_OPTIONS` setting tried avoids it. Two ways round it, both proven:
+
+```bash
+# Mesa's software ICD. The engine reaches the render path, but lavapipe has no VK_EXT_mesh_shader,
+# so the frame halts the way any device without it does.
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ./Esoterica.Applications.Engine -packaged -map ...
+
+# The resource compiler. Threaded, and touches no Vulkan.
+./Esoterica.Applications.ResourceCompiler -compile data://demo/render/pbr/boulder/boulder.mesh -force
+```
+
 ## Troubleshooting
 
 | Symptom | Cause |
@@ -250,6 +309,8 @@ running even when no server appears to be up.
 | `vkCreateShaderModule` rejects a capability the device has | Stale SPIR-V. Re-run `CompileShaders.sh`, then `NinjaGen.py` |
 | Editor UI does not undock into separate windows | A Wayland session. Log into X11 |
 | `error while loading shared libraries` | Running a binary moved out of `Build/Linux_<configuration>/`. The rpath is `$ORIGIN` relative |
+| ASan build: `vkCreateDevice` fails, then `EE_ASSERT( result == VK_SUCCESS )` | Missing `ASAN_OPTIONS=protect_shadow_gap=0`. The NVIDIA driver maps into ASan's shadow gap |
+| TSan build: `CHECK failed: tsan_interceptors_posix.cpp` after device creation | TSan cannot run against the NVIDIA driver. Use the lavapipe ICD or the resource compiler |
 | ResourceCompiler exits 1 after compiling successfully | Upstream behaviour. Count `"Compiled successfully"` in its log, not the exit code |
 
 ## What this document does not cover

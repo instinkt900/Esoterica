@@ -111,7 +111,7 @@ def test_determinism():
     print( 'determinism' )
 
     repo_root = SourceLists.find_repo_root()
-    configurations = Toolchain.build_configurations( [ 'Debug', 'Release', 'Shipping' ] )
+    configurations = Toolchain.build_configurations( [ 'Debug', 'Release', 'Shipping' ], repo_root )
 
     first, _, _ = NinjaGen.emit( repo_root, SourceLists.load( repo_root )[0], configurations )
     second, _, _ = NinjaGen.emit( repo_root, SourceLists.load( repo_root )[0], configurations )

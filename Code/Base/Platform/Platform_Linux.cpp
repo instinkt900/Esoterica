@@ -71,6 +71,22 @@ namespace EE::Platform
 
     void Initialize()
     {
+        // Warm up backtrace() before any signal can arrive.
+        //
+        // The handler itself is written to be async-signal-safe - write() rather than fputs,
+        // backtrace_symbols_fd rather than backtrace_symbols - but **backtrace() is not safe on
+        // its first call**. glibc loads the unwinder from libgcc_s.so lazily, so the first call
+        // reaches dlopen and mallocs. A crash that happened inside the allocator would then
+        // deadlock in the handler that is trying to report it, which is exactly the case the
+        // handler exists for.
+        //
+        // Calling it once here forces the load now, on the main thread, with nothing held. Found
+        // by ThreadSanitizer in P8.6, as "signal-unsafe call inside of a signal" with
+        // _dl_map_object_deps under CrashSignalHandler.
+        void* warmupBuffer[1];
+        int32_t const ignoredFrames = backtrace( warmupBuffer, 1 );
+        (void) ignoredFrames;
+
         struct sigaction action;
         memset( &action, 0, sizeof( action ) );
         action.sa_sigaction = CrashSignalHandler;
