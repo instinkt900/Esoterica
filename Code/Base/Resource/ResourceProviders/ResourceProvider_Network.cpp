@@ -96,6 +96,21 @@ namespace EE::Resource
 
         if ( !m_networkClient.IsConnected() )
         {
+            // Not yet connected is not the same as lost. EnsureResourceServerIsRunning starts the
+            // Resource Server and returns immediately, and the server needs a second or two to
+            // finish its own initialisation and complete the websocket handshake. ixwebsocket
+            // retries on its own meanwhile - a refused connection raises WebSocketMessageType::Error,
+            // which leaves the status at Connecting - so there is nothing to do but wait a frame.
+            //
+            // Without this the first frame after startup halts every time the server was not
+            // already listening. Before this fork's upstream merge the halt was
+            // EE_ASSERT( "LOST CONNECTION!!" ), which asserts on a string literal and so never
+            // fired; making it a real halt exposed the wait.
+            if ( m_networkClient.IsConnecting() )
+            {
+                return;
+            }
+
             EE_TRACE_HALT( "LOST CONNECTION!!" );
             return;
         }

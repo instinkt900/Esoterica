@@ -151,7 +151,7 @@ left here is reporting them, because both are upstream's and both reach Windows.
 | # | What to do | Files | Detail in |
 |---|---|---|---|
 | 1 | **`RenderSystem` stores a pointer to the settings it is given** (`m_pRenderSettings = &settings`, new in `47e6293`) and reads it every frame, and **both `ResourceServer` entry points pass a stack local.** The Linux one is fixed here by promoting it to a member; **`ResourceServerApplication.cpp:260` still dangles**, so the Win32 Resource Server reads freed stack to choose its frame command buffer. Release hides it because its asserts are compiled out | `ResourceServerApplication.cpp`, `RenderSystem.cpp:23` | Progress.md, P9.1-P9.4 entry |
-| 2 | **The engine aborts if the Resource Server is not already listening.** The merge turned `EE_ASSERT( "LOST CONNECTION!!" )` - always truthy, never fired - into a real `EE_TRACE_HALT`, so a startup race that had been invisible since P7.3 is now a hard abort. Upstream's code and platform-neutral, so **Windows will hit it too**. Report it; the workaround is to start the server first | `ResourceProvider_Network.cpp:97` | Progress.md, P9.1-P9.4 entry |
+| 2 | **`NetworkResourceProvider::Update()` halted on the first frame the client was not yet connected**, so launching without an already-running Resource Server always aborted. **Fixed here** by returning early while `IsConnecting()`. The underlying mistake is upstream's, exposed by `47e6293` turning a never-firing `EE_ASSERT( "string" )` into a real `EE_TRACE_HALT`; **Windows has it too**. Report it. The fix changes shared behaviour, so it also needs re-checking under P8.1 | `ResourceProvider_Network.cpp:97` | Progress.md, P9.1-P9.4 entry |
 
 ---
 
