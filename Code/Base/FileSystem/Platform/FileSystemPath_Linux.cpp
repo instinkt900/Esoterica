@@ -11,7 +11,6 @@
 namespace EE::FileSystem
 {
     char const Path::s_pathDelimiter = '/';
-    constexpr static size_t const g_maxPathBufferLength = 1024;
 
     //-------------------------------------------------------------------------
 

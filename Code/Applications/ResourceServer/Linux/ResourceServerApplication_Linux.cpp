@@ -66,7 +66,9 @@ namespace EE
 
     //-------------------------------------------------------------------------
 
-    bool ResourceServerApplication::Initialize( int32_t argc, char** argv )
+    // argc and argv are unnamed because the body ignores them, exactly as upstream's Win32 version
+    // does. The Resource Server takes no command line arguments; the signature is the base class's.
+    bool ResourceServerApplication::Initialize( int32_t /* argc */, char** /* argv */ )
     {
         TypeSystem::Reflection::RegisterTypes( m_typeRegistry );
 

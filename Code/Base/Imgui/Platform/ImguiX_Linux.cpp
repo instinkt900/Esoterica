@@ -228,7 +228,6 @@ namespace EE::ImGuiX
 
         ImGui::PushStyleColor( ImGuiCol_ButtonHovered, 0xFF1C2BC4 );
 
-        ImU32 const backgroundColor = ImGui::ColorConvertFloat4ToU32( ImGui::GetStyle().Colors[ImGuiCol_Button] );
         ImU32 const hoverColor = 0xFF1C2BC4;
         ImU32 const activeColor = 0xFF141E89;
 

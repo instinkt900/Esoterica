@@ -141,9 +141,10 @@ authoritative status of each file; the rows below say what to do about it.
 | # | What to check | Files | Detail in |
 |---|---|---|---|
 | 1 | **Release and Shipping with MSBuild, and the standalone engine.** **Debug is verified**, 2026-09-04, and it built the whole tree. The other two configurations have still never been run, and Shipping's LTO is where a Linux/Windows toolchain difference would surface. **Only the editor was run** - `Esoterica.Applications.Engine` has not been launched on Windows at all | all | [AGENTS.md](../../AGENTS.md#definition-of-done), Progress.md 2026-09-04 entry |
-| 2 | **The Windows frame compared against the Linux one.** Phase 5 criterion 7. The 2026-09-04 run confirmed pbrdemo renders and **looks right by eye** - no capture, no pixel diff, so a subtle difference in lighting or shadowing would not have been seen | all shader edits | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
-| 3 | **Resource compiler output byte-identical to Windows.** Phase 3 criterion 4. Debug and Release on Linux already agree byte for byte across all 38 files, which rules out the float-formatting and optimisation differences and leaves only genuinely platform-dependent ones | `Esoterica.Applications.ResourceCompiler` | Progress.md, Phase 3 entry |
-| 4 | **Whether debug draw itself ran on Windows.** P5.20's `EE_INTERSTAGE_HANDLE` and `EE_PER_PRIMITIVE` are `__spirv__`-gated no-ops on Direct3D 12 and they **compile and render**, but the 2026-09-04 run did not confirm the debug-draw path they live on was exercised. Cheapest of the four: turn on a debug draw view in the editor and look | `RHI.esh`, `DebugDraw.esf`, `DebugDrawMesh.esf`, `RendererTypes.esh` | Progress.md, P5.20 and 2026-09-04 entries |
+| 2 | **The two `return`s added to `FileSystem.h`.** P8.8's fix for an upstream UB defect, and the only P8.8 change that reaches Direct3D 12. Nothing calls the affected overloads today, so a build is the whole check | `Code/Base/FileSystem/FileSystem.h` | [TouchedFiles.md](TouchedFiles.md), Progress.md 2026-09-04 P8.8 entry |
+| 3 | **The Windows frame compared against the Linux one.** Phase 5 criterion 7. The 2026-09-04 run confirmed pbrdemo renders and **looks right by eye** - no capture, no pixel diff, so a subtle difference in lighting or shadowing would not have been seen | all shader edits | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
+| 4 | **Resource compiler output byte-identical to Windows.** Phase 3 criterion 4. Debug and Release on Linux already agree byte for byte across all 38 files, which rules out the float-formatting and optimisation differences and leaves only genuinely platform-dependent ones | `Esoterica.Applications.ResourceCompiler` | Progress.md, Phase 3 entry |
+| 5 | **Whether debug draw itself ran on Windows.** P5.20's `EE_INTERSTAGE_HANDLE` and `EE_PER_PRIMITIVE` are `__spirv__`-gated no-ops on Direct3D 12 and they **compile and render**, but the 2026-09-04 run did not confirm the debug-draw path they live on was exercised. Cheapest of the five: turn on a debug draw view in the editor and look | `RHI.esh`, `DebugDraw.esf`, `DebugDrawMesh.esf`, `RendererTypes.esh` | Progress.md, P5.20 and 2026-09-04 entries |
 
 **What left this queue on 2026-09-04**, so that nobody re-adds it: open question 8's `Buffer<uint2>`
 change across all six shaders (picking included, because click-selection works); P5.17's indirect
@@ -152,6 +153,32 @@ and `BaseModule.cpp`; and `HLSL_STATIC_ASSERT`, whose shared-struct size checks 
 and **fired and passed** the moment a Windows machine compiled the shaders.
 
 ---
+
+### Eight upstream defects the warning sweep found, all needing an upstream report
+
+**None is a hardware wait and none is this fork's to fix** (Conventions rule 3). All eight are
+defects on **both** platforms, found on 2026-09-04 by P8.8 turning `-Wall -Wextra` into something
+that could be read. The full triage is in that entry in [Progress.md](Progress.md).
+
+**They are listed here because suppressing a warning does not fix what it found.**
+`Toolchain.UPSTREAM_WARNING_SUPPRESSIONS` now silences the flags these fired under, so nothing will
+report them again.
+
+| # | What is wrong | Files |
+|---|---|---|
+| 1 | **`result == Quaternion::Identity;`** - `==` written for `=`, so `GetRotation()` on an empty root motion track returns an **uninitialised quaternion** | `AnimationRootMotion.cpp:164` |
+| 2 | **Class types through printf varargs.** `ComponentID`, `EntityID` and `Radians` against `%u` and `%.2f` | `DebugView_EntityWorld.cpp:155, 338, 350` |
+| 3 | **Five incomplete format specifiers.** `ImGui::Text( "Prefer Highest Event %" )` and four more like it | `Animation_ToolsGraphNode_Events.cpp` |
+| 4 | **Three format strings that ignore an argument** they are passed | `Animation_ToolsGraphNode_State.cpp:358, 371, 384` |
+| 5 | **`&m_userContext != nullptr`** is always true. A dead guard | `ResourceEditor_AnimationGraph.cpp:3075` |
+| 6 | **`m_previousPosWS = m_previousPosWS;`** Self-assignment, harmless, and a refactor leftover in the file P8.4 found a crash in | `ImguiGizmo_Translate.cpp:548` |
+| 7 | **Three statements that compute nothing** - "expression result unused" | `PlayerInputState.cpp:29`, `Animation_RuntimeGraph_Instance.cpp:1702`, `BinarySerialization.h:394` |
+| 8 | **`static void HelpMarker` in a header.** Unused in every translation unit that does not call it, so it is why this fork's own sources need `-Wno-unused-function`. Wants to be `inline` | `ImguiX.h:501` |
+
+**A ninth was fixed here rather than reported only**, because it is undefined behaviour and because
+`-Werror` on this fork's sources could not tolerate it: the `Blob` overloads of `WriteBinaryFile` and
+`UpdateBinaryFile` (`FileSystem.h:88`, `:97`) never returned. See
+[TouchedFiles.md](TouchedFiles.md) - it reaches Direct3D 12, so it is also in the Windows queue.
 
 ### Two upstream defects the merge brought, both needing an upstream report
 
