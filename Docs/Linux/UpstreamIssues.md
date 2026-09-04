@@ -62,6 +62,7 @@ below therefore run roughly, but not exactly, in numeric order.
 | 29 | `Code/Applications/BuildGenerator/` | Does not work, and parses a solution format the repo no longer uses | `not fixed` |
 | 30 | `RHI_Direct3D12.cpp` | 6084 lines of Direct3D 12 with no platform guard and no platform suffix | `not fixed` |
 | 31 | `DataFileSystem.cpp:1270` | Saving any data file with the Resource Importer open deadlocks the editor | `fixed here` |
+| 32 | `PropertyGrid_SubmeshSettings.cpp:146` | A mesh with unnamed submeshes segfaults the editor when its Mesh Component is selected | `fixed here` |
 
 ---
 
@@ -153,6 +154,44 @@ that blocks, while MSVC's implementation may not. That is a guess and is a row i
 event fires. **8 added, 1 removed**, 6 of the added lines comment. Reproduced and confirmed with a
 harness that binds the same callback the importer does: it hangs on the old build and returns
 immediately on the new one.
+
+### 32. `PropertyGrid_SubmeshSettings.cpp:146` - a mesh with unnamed submeshes segfaults the editor
+
+Found on 2026-09-04, selecting a Sponza static mesh component in the map editor.
+
+The per-submesh row in the Mesh Component's property grid drew its label with
+
+```cpp
+ImGui::Text( pMesh->GetSubmesh( i ).m_ID.c_str() );
+```
+
+**The string is passed as the format string, and it can be null.** A submesh ID comes from the source
+file's node name; glTF makes node names optional, and `StringID::c_str()` returns `nullptr` for an
+invalid ID. `ImFormatStringToTempBufferV` dereferences the format on its first line
+(`imgui.cpp:2463`, `if ( fmt[0] == '%' ... )`), so this is a plain **segfault** - no assert, no
+message, the editor simply disappears.
+
+Measured on the import: **103 of Sponza's 103 submeshes have an invalid `m_ID`**, against 0 of 1 for
+`MaterialBall.gltf`. It shows in the compiled files too - `boulder.mesh` contains
+`namaqualand_boulder_02_LOD0`, and `sponza.mesh` contains no submesh names at all. So every asset in
+the repository is fine and an unnamed one is fatal.
+
+**Upstream already guards this exact value elsewhere**: `PropertyGrid_Mesh.cpp:24` and `:44` both
+check `IsValid()` before calling `c_str()`. This site missed it.
+
+Four sibling sites in `ResourceEditor_Mesh.cpp` (`:793` to `:796`) pass the same possibly-null
+strings as `%s` **arguments** rather than as the format. Those do not crash - ImGui explicitly
+substitutes `"(null)"` for a null `%s` (`imgui.cpp:2466`) - but they read as `(null)` in the Mesh
+editor's Submeshes window.
+
+**Platform-neutral, so Windows has it too.** Nothing about it is Linux-specific; it needs an asset
+whose source nodes are unnamed, which the repository does not contain.
+
+**What was done:** the crash site guards on `IsValid()`, passes the name through `"%s"`, and falls
+back to `Submesh <n>` - the rows are what a material override is selected against, so they have to be
+distinguishable. The four display-only sites fall back to `Unnamed`, since the submesh index is
+already drawn as that row's label. **Verified in a headless ImGui context**: the old call segfaults,
+`Text( "%s", nullptr )` returns cleanly, and the guarded form formats every row.
 
 ---
 
