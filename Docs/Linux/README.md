@@ -40,6 +40,7 @@ upstream code that you read along the way. See Conventions rule 3.
 | [03-Dependencies.md](03-Dependencies.md) | Every Windows dependency and its Linux replacement |
 | [04-BuildAndRun.md](04-BuildAndRun.md) | How to build and run each target on Linux |
 | [TouchedFiles.md](TouchedFiles.md) | Registry of every upstream file this port modifies |
+| [UpstreamIssues.md](UpstreamIssues.md) | Every upstream bug this port has found, what it is, and what was done about it |
 | [Progress.md](Progress.md) | Running log of completed and in-flight work |
 | [Blocked.md](Blocked.md) | What is written but not verified, indexed by the machine that unblocks it |
 | [Phases/](Phases/) | Per-phase task specifications. [Phase 8](Phases/Phase8-Completion.md) is the remaining-work list, [Phase 9](Phases/Phase9-UpstreamMerge.md) the first upstream merge |
