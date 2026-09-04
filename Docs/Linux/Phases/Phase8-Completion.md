@@ -28,6 +28,7 @@ could ever go upstream.
 > | P8.5 Shader conformance | **done**, 2026-09-03. Query-as-enable fixed in all three blocks; the other three items permanent. `PrimitiveOutput` needs an escalation |
 > | P8.6 Sanitizers and build coverage | **done**, 2026-09-03. All nine configurations build, Shipping links with `ld.lld`, TSan found a signal-safety defect. No CI, decided and recorded |
 > | P8.7 Fork review | not started. Do this last |
+> | P8.8 A warning-free build | **done**, 2026-09-04. **Unplanned, and added because the question had never been measured.** 99.3% of the warnings were upstream's or the Reflector's. Three warning tiers, `-Werror` on this fork's own sources, and eight upstream defects for a report |
 >
 > **These are ordered by size and risk, not by dependency.** Only P8.7 has to come last. P8.1 was
 > first because it was the only item that could have turned out to be large. **Its answer is now
@@ -112,7 +113,7 @@ Three kinds of work end up here.
 > live on was not specifically exercised.
 >
 > See the 2026-09-04 entry in [Progress.md](../Progress.md) and the Windows queue in
-> [Blocked.md](../Blocked.md), which is now four rows.
+> [Blocked.md](../Blocked.md), which is now five rows.
 
 **Needs a Windows machine with MSBuild and a GPU. Nothing else in this phase does.**
 
@@ -333,6 +334,35 @@ fork stands alone. Either answer is acceptable. An unsupported one is not.
 **Done when** `Docs/Linux/ForkReview.md` exists with all five bullets above answered, its
 verdict is summarised in [README.md](../README.md), and a Progress.md entry records the numbers so
 the next review has a baseline to compare against.
+
+### P8.8 - A warning-free build
+
+> **Done, 2026-09-04. Added after the fact**, because the phase plan had no place for it and the
+> question - are these warnings upstream's or the port's? - had never been measured. It turned out to
+> be **99.3% upstream's or the Reflector's, and 0.7% this fork's**, and the triage found eight
+> upstream defects that a warning count had been hiding. The whole result is in the 2026-09-04 P8.8
+> entry in [Progress.md](../Progress.md).
+
+`Toolchain.py` passed `-Wall -Wextra` to every source and translated none of upstream's MSVC
+suppression list, which produced 85,097 diagnostics at 17,264 unique sites. Three tiers now replace
+it - strict with `-Werror` for this fork's own sources, a curated 32-flag suppression list for
+upstream's, and `-w` for generated code - plus `-isystem` for third-party and `External/` include
+paths, which is the one part that is not a suppression.
+
+**What it costs, and what to know before changing it:**
+
+- **`-Wunused-parameter` and `-Wunused-function` are off even on this fork's own sources**, because
+  upstream headers leak both into them and clang has no per-header suppression that spares
+  first-party headers under `Code/`. `WarningSweep.py --audit-fork` is the deliberate check.
+- **Build all nine configurations before believing a clean result.** Shipping found 30 warnings that
+  Debug, Release and a `-fsyntax-only` sweep all missed, because `EE_ASSERT` compiles out there and
+  every asserted `VkResult` becomes unused.
+- **A new upstream warning class after a merge is one line**, added to
+  `Toolchain.UPSTREAM_WARNING_SUPPRESSIONS` with its site count. If it fires in one of this fork's
+  own files, the build has already failed and that is the intent.
+
+**Done when** `python3 Docs/Linux/Scripts/WarningSweep.py` reports nothing, every configuration
+builds, and the upstream defects the triage found are recorded for a report rather than fixed here.
 
 ---
 

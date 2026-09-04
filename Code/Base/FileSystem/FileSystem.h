@@ -85,7 +85,7 @@ namespace EE::FileSystem
     EE_FORCE_INLINE bool ReadBinaryFile( Path const& filePath, Blob& fileData ) { return ReadBinaryFile( filePath.c_str(), fileData ); }
 
     EE_BASE_API bool WriteBinaryFile( char const* pFilePath, void const* pData, size_t size, bool overwrite = true, bool flushToDisk = false );
-    EE_FORCE_INLINE bool WriteBinaryFile( char const* pFilePath, Blob const& fileData, bool overwrite = true, bool flushToDisk = false ) { WriteBinaryFile( pFilePath, fileData.data(), fileData.size(), overwrite, flushToDisk ); }
+    EE_FORCE_INLINE bool WriteBinaryFile( char const* pFilePath, Blob const& fileData, bool overwrite = true, bool flushToDisk = false ) { return WriteBinaryFile( pFilePath, fileData.data(), fileData.size(), overwrite, flushToDisk ); }
     EE_FORCE_INLINE bool WriteBinaryFile( String const& filePath, Blob const& fileData, bool overwrite = true, bool flushToDisk = false ) { return WriteBinaryFile( filePath.c_str(), fileData, overwrite, flushToDisk ); }
 
     // This acts as a write operation but will check the file contents first and only write the data if the file needs to be updated!
@@ -94,7 +94,7 @@ namespace EE::FileSystem
     EE_FORCE_INLINE bool UpdateBinaryFile( String const& filePath, void const* pData, size_t size, bool* pWasFileUpdated = nullptr ) { return UpdateBinaryFile( filePath.c_str(), pData, size, pWasFileUpdated ); }
     EE_FORCE_INLINE bool UpdateBinaryFile( Path const& filePath, void const* pData, size_t size, bool* pWasFileUpdated = nullptr ) { return UpdateBinaryFile( filePath.c_str(), pData, size, pWasFileUpdated ); }
 
-    EE_FORCE_INLINE bool UpdateBinaryFile( char const* pFilePath, Blob const& fileData, bool* pWasFileUpdated = nullptr ) { UpdateBinaryFile( pFilePath, fileData.data(), fileData.size(), pWasFileUpdated ); }
+    EE_FORCE_INLINE bool UpdateBinaryFile( char const* pFilePath, Blob const& fileData, bool* pWasFileUpdated = nullptr ) { return UpdateBinaryFile( pFilePath, fileData.data(), fileData.size(), pWasFileUpdated ); }
     EE_FORCE_INLINE bool UpdateBinaryFile( String const& filePath, Blob const& fileData, bool* pWasFileUpdated = nullptr ) { return UpdateBinaryFile( filePath.c_str(), fileData, pWasFileUpdated ); }
     EE_FORCE_INLINE bool UpdateBinaryFile( Path const& filePath, Blob const& fileData, bool* pWasFileUpdated = nullptr ) { return UpdateBinaryFile( filePath.c_str(), fileData, pWasFileUpdated ); }
 

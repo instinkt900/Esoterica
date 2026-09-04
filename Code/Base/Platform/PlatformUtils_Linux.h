@@ -31,7 +31,9 @@ namespace EE::Platform::Linux
     EE_BASE_API bool KillProcess( uint32_t processID );
 
     // Check if a named process is currently running
-    inline bool IsProcessRunning( char const* processName, uint32_t* pProcessID ) { return GetProcessID( processName ) != 0; }
+    // pProcessID is unnamed because the body ignores it, exactly as upstream's Win32 version does.
+    // The signature is upstream's and stays, so that a caller compiles against either platform.
+    inline bool IsProcessRunning( char const* processName, uint32_t* /* pProcessID */ ) { return GetProcessID( processName ) != 0; }
 
     // Open a path in explorer
     EE_BASE_API void OpenInExplorer( char const* path );

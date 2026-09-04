@@ -88,10 +88,10 @@ namespace EE
         virtual void ResizeMainWindow( Int2 const& newWindowSize ) = 0;
 
         // Handle user application input events. Replaces ProcessInputMessage.
-        virtual void ProcessInputEvent( SDL_Event const& event ) {};
+        virtual void ProcessInputEvent( SDL_Event const& ) {};
 
         // Get title bar region for border less windows
-        virtual void GetBorderlessTitleBarInfo( Math::ScreenSpaceRectangle& outTitlebarRect, bool& isInteractibleWidgetHovered ) const {};
+        virtual void GetBorderlessTitleBarInfo( Math::ScreenSpaceRectangle& /* outTitlebarRect */, bool& /* isInteractibleWidgetHovered */ ) const {};
 
         //-------------------------------------------------------------------------
 

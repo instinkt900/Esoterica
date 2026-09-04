@@ -1355,13 +1355,13 @@ namespace EE::Render::RHI
         }
 
         // Every per-descriptor-type allocation must have been freed, as the D3D12 backend checks.
-        for ( auto const& pair : pVulkanContext->m_bufferStats )
+        for ( [[maybe_unused]] auto const& pair : pVulkanContext->m_bufferStats )
         {
             EE_ASSERT( pair.second.m_numAllocations == 0 );
             EE_ASSERT( pair.second.m_numBytes == 0 );
         }
 
-        for ( auto const& pair : pVulkanContext->m_textureStats )
+        for ( [[maybe_unused]] auto const& pair : pVulkanContext->m_textureStats )
         {
             EE_ASSERT( pair.second.m_numAllocations == 0 );
             EE_ASSERT( pair.second.m_numBytes == 0 );
@@ -1969,7 +1969,7 @@ namespace EE::Render::RHI
         VkSemaphoreCreateInfo semaphoreCreateInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
         semaphoreCreateInfo.pNext = &semaphoreTypeCreateInfo;
 
-        VkResult const result = vkCreateSemaphore( pVulkanContext->m_device, &semaphoreCreateInfo, nullptr, &pVulkanQueue->m_timelineSemaphore );
+        [[maybe_unused]] VkResult const result = vkCreateSemaphore( pVulkanContext->m_device, &semaphoreCreateInfo, nullptr, &pVulkanQueue->m_timelineSemaphore );
         EE_ASSERT( result == VK_SUCCESS );
 
         SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_QUEUE, uint64_t( pVulkanQueue->m_queue ), parameters.m_debugName );
@@ -2016,7 +2016,7 @@ namespace EE::Render::RHI
         VulkanQueue* pVulkanQueue = static_cast<VulkanQueue*>( pQueue );
 
         uint64_t completedValue = 0;
-        VkResult const result = vkGetSemaphoreCounterValue( pVulkanQueue->m_device, pVulkanQueue->m_timelineSemaphore, &completedValue );
+        [[maybe_unused]] VkResult const result = vkGetSemaphoreCounterValue( pVulkanQueue->m_device, pVulkanQueue->m_timelineSemaphore, &completedValue );
         EE_ASSERT( result == VK_SUCCESS );
 
         return completedValue;
@@ -2037,7 +2037,7 @@ namespace EE::Render::RHI
         waitInfo.pSemaphores = &pVulkanQueue->m_timelineSemaphore;
         waitInfo.pValues = &semaphore;
 
-        VkResult const result = vkWaitSemaphores( pVulkanQueue->m_device, &waitInfo, UINT64_MAX );
+        [[maybe_unused]] VkResult const result = vkWaitSemaphores( pVulkanQueue->m_device, &waitInfo, UINT64_MAX );
         EE_ASSERT( result == VK_SUCCESS );
     }
 
@@ -2140,7 +2140,7 @@ namespace EE::Render::RHI
 
         // D3D12 skips ExecuteCommandLists on an empty list but still signals, which is what an
         // empty submit does here.
-        VkResult const result = vkQueueSubmit2( pVulkanQueue->m_queue, 1, &submitInfo, VK_NULL_HANDLE );
+        [[maybe_unused]] VkResult const result = vkQueueSubmit2( pVulkanQueue->m_queue, 1, &submitInfo, VK_NULL_HANDLE );
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanQueue->m_pendingWaits.clear();
@@ -2225,7 +2225,7 @@ namespace EE::Render::RHI
         presentInfo.pSwapchains = &pVulkanSwapchain->m_swapchain;
         presentInfo.pImageIndices = &imageIndex;
 
-        VkResult const result = vkQueuePresentKHR( pVulkanQueue->m_queue, &presentInfo );
+        [[maybe_unused]] VkResult const result = vkQueuePresentKHR( pVulkanQueue->m_queue, &presentInfo );
 
         // Neither of these is an error here. The engine resizes the swapchain itself, from the
         // window size, so a stale swapchain is already on its way to being replaced.
@@ -2240,7 +2240,7 @@ namespace EE::Render::RHI
 
         // D3D12 signals its fence and blocks on an event, because it has no queue-idle
         // call. Vulkan has one, and it means precisely this.
-        VkResult const result = vkQueueWaitIdle( pVulkanQueue->m_queue );
+        [[maybe_unused]] VkResult const result = vkQueueWaitIdle( pVulkanQueue->m_queue );
         EE_ASSERT( result == VK_SUCCESS );
     }
 
@@ -2399,7 +2399,7 @@ namespace EE::Render::RHI
         swapchainCreateInfo.presentMode = pVulkanSwapchain->m_presentMode;
         swapchainCreateInfo.clipped = VK_TRUE;
 
-        VkResult result = vkCreateSwapchainKHR( pVulkanContext->m_device, &swapchainCreateInfo, nullptr, &pVulkanSwapchain->m_swapchain );
+        [[maybe_unused]] VkResult result = vkCreateSwapchainKHR( pVulkanContext->m_device, &swapchainCreateInfo, nullptr, &pVulkanSwapchain->m_swapchain );
         EE_ASSERT( result == VK_SUCCESS );
 
         SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_SWAPCHAIN_KHR, uint64_t( pVulkanSwapchain->m_swapchain ), "Swapchain" );
@@ -2584,7 +2584,7 @@ namespace EE::Render::RHI
         // has to reset itself.
         commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
-        VkResult const result = vkCreateCommandPool( pVulkanContext->m_device, &commandPoolCreateInfo, nullptr, &pVulkanCommandPool->m_commandPool );
+        [[maybe_unused]] VkResult const result = vkCreateCommandPool( pVulkanContext->m_device, &commandPoolCreateInfo, nullptr, &pVulkanCommandPool->m_commandPool );
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanCommandPool->m_pQueue = parameters.m_pQueue;
@@ -2626,7 +2626,7 @@ namespace EE::Render::RHI
         VulkanCommandPool* pVulkanCommandPool = static_cast<VulkanCommandPool*>( pCommandPool );
 
         // No RELEASE_RESOURCES: this runs once per frame per pool, and the memory is meant to be reused.
-        VkResult const result = vkResetCommandPool( pVulkanContext->m_device, pVulkanCommandPool->m_commandPool, 0 );
+        [[maybe_unused]] VkResult const result = vkResetCommandPool( pVulkanContext->m_device, pVulkanCommandPool->m_commandPool, 0 );
         EE_ASSERT( result == VK_SUCCESS );
     }
 
@@ -2641,7 +2641,7 @@ namespace EE::Render::RHI
         allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocateInfo.commandBufferCount = 1;
 
-        VkResult const result = vkAllocateCommandBuffers( pVulkanContext->m_device, &allocateInfo, &pVulkanCommandBuffer->m_commandBuffer );
+        [[maybe_unused]] VkResult const result = vkAllocateCommandBuffers( pVulkanContext->m_device, &allocateInfo, &pVulkanCommandBuffer->m_commandBuffer );
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanCommandPool->m_allocatedCommandBuffers.emplace_back( pVulkanCommandBuffer );
@@ -2732,7 +2732,7 @@ namespace EE::Render::RHI
         // without re-recording, and nothing here proves the engine never does.
         beginInfo.flags = 0;
 
-        VkResult const result = vkBeginCommandBuffer( pVulkanCommandBuffer->m_commandBuffer, &beginInfo );
+        [[maybe_unused]] VkResult const result = vkBeginCommandBuffer( pVulkanCommandBuffer->m_commandBuffer, &beginInfo );
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanCommandBuffer->m_stage = VulkanCommandBuffer::Stage::Recording;
@@ -2781,7 +2781,7 @@ namespace EE::Render::RHI
         // A barrier recorded and never flushed would not happen at all.
         FlushBarriers( pVulkanCommandBuffer );
 
-        VkResult const result = vkEndCommandBuffer( pVulkanCommandBuffer->m_commandBuffer );
+        [[maybe_unused]] VkResult const result = vkEndCommandBuffer( pVulkanCommandBuffer->m_commandBuffer );
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanCommandBuffer->m_stage = VulkanCommandBuffer::Stage::Closed;
@@ -3226,7 +3226,7 @@ namespace EE::Render::RHI
 
         VulkanRootSignature* pVulkanRootSignature = static_cast<VulkanRootSignature*>( pVulkanCommandBuffer->m_pBoundRootSignature );
 
-        DescriptorReflection const& descriptorReflection = pVulkanRootSignature->m_descriptorReflections[constantIndex];
+        [[maybe_unused]] DescriptorReflection const& descriptorReflection = pVulkanRootSignature->m_descriptorReflections[constantIndex];
         EE_ASSERT( descriptorReflection.m_descriptorTypeFlags == TBitFlags( DescriptorTypeFlags::RootConstant ) );
         EE_ASSERT( constantSize == sizeof( uint32_t ) * descriptorReflection.m_numConstants );
 
@@ -4216,7 +4216,10 @@ namespace EE::Render::RHI
         pVulkanCommandBuffer->m_bufferBarriers.emplace_back( barrier );
     }
 
-    void CmdBarrier( CommandBuffer* pCommandBuffer, Texture* pTexture, TBitFlags<PipelineStage> sourceSync, TBitFlags<PipelineStage> destinationSync, TBitFlags<ResourceAccess> sourceAccess, TBitFlags<ResourceAccess> destinationAccess, TextureState sourceState, TextureState destinationState, TextureBarrierRegion region, TBitFlags<TextureBarrierFlags> flags )
+    // sourceState is unnamed on purpose: this function reads the old layout from the texture instead,
+    // for the reason the comment on barrier.oldLayout below gives. The parameter stays because the
+    // signature is RHI.h's and the Direct3D 12 backend does use it.
+    void CmdBarrier( CommandBuffer* pCommandBuffer, Texture* pTexture, TBitFlags<PipelineStage> sourceSync, TBitFlags<PipelineStage> destinationSync, TBitFlags<ResourceAccess> sourceAccess, TBitFlags<ResourceAccess> destinationAccess, TextureState /* sourceState */, TextureState destinationState, TextureBarrierRegion region, TBitFlags<TextureBarrierFlags> flags )
     {
         VulkanCommandBuffer* pVulkanCommandBuffer = static_cast<VulkanCommandBuffer*>( pCommandBuffer );
         VulkanTexture* pVulkanTexture = static_cast<VulkanTexture*>( pTexture );
@@ -4863,7 +4866,7 @@ namespace EE::Render::RHI
         bottomLevelCreateInfo.size = bottomLevelSizes.accelerationStructureSize;
         bottomLevelCreateInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
 
-        VkResult result = pVulkanContext->m_vkCreateAccelerationStructure( pVulkanContext->m_device, &bottomLevelCreateInfo, nullptr, &pVulkanAccelerationStructure->m_bottomLevel.m_handle );
+        [[maybe_unused]] VkResult result = pVulkanContext->m_vkCreateAccelerationStructure( pVulkanContext->m_device, &bottomLevelCreateInfo, nullptr, &pVulkanAccelerationStructure->m_bottomLevel.m_handle );
         EE_ASSERT( result == VK_SUCCESS );
 
         VkAccelerationStructureDeviceAddressInfoKHR bottomLevelAddressInfo = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR };
@@ -5131,7 +5134,10 @@ namespace EE::Render::RHI
     // Which ViewDimension a texture is, by the same rules the D3D12 backend uses. One function for
     // the same reason the format mapping is: two backends that classify a texture differently
     // disagree about what its views mean.
-    static ViewDimension VulkanTextureViewDimension( uint32_t width, uint32_t height, uint32_t depth, uint32_t arrayLayers, uint32_t numSamples, TBitFlags<DescriptorTypeFlags> const& descriptorTypes )
+    // width is unnamed because the classification only ever needs height, depth and the layer count.
+    // It stays in the signature so that the argument list matches the texture description's field
+    // order, which is how every call site reads.
+    static ViewDimension VulkanTextureViewDimension( uint32_t /* width */, uint32_t height, uint32_t depth, uint32_t arrayLayers, uint32_t numSamples, TBitFlags<DescriptorTypeFlags> const& descriptorTypes )
     {
         bool const isCubemap = descriptorTypes.AreAnyFlagsSet( DescriptorTypeFlags::TextureCube );
 
@@ -5386,7 +5392,7 @@ namespace EE::Render::RHI
         }
 
         VmaAllocationInfo allocationInfo = {};
-        VkResult result = vmaCreateBuffer( pVulkanContext->m_resourceAllocator, &bufferCreateInfo, &allocationCreateInfo, &pVulkanBuffer->m_buffer, &pVulkanBuffer->m_allocation, &allocationInfo );
+        [[maybe_unused]] VkResult result = vmaCreateBuffer( pVulkanContext->m_resourceAllocator, &bufferCreateInfo, &allocationCreateInfo, &pVulkanBuffer->m_buffer, &pVulkanBuffer->m_allocation, &allocationInfo );
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanBuffer->m_allocationSize = allocationInfo.size;
@@ -5595,7 +5601,7 @@ namespace EE::Render::RHI
         // hint about what the CPU will touch. The offset is applied to the pointer so the
         // caller sees the same address either way.
         void* pMappedAddress = nullptr;
-        VkResult const result = vmaMapMemory( pVulkanContext->m_resourceAllocator, pVulkanBuffer->m_allocation, &pMappedAddress );
+        [[maybe_unused]] VkResult const result = vmaMapMemory( pVulkanContext->m_resourceAllocator, pVulkanBuffer->m_allocation, &pMappedAddress );
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanBuffer->m_pMappedAddress_WriteCombined = static_cast<uint8_t*>( pMappedAddress ) + pVulkanBuffer->m_mappedRange.m_offset;
@@ -5698,7 +5704,7 @@ namespace EE::Render::RHI
         viewCreateInfo.subresourceRange.layerCount = numArrayLayers;
 
         VkImageView imageView = VK_NULL_HANDLE;
-        VkResult const result = vkCreateImageView( device, &viewCreateInfo, nullptr, &imageView );
+        [[maybe_unused]] VkResult const result = vkCreateImageView( device, &viewCreateInfo, nullptr, &imageView );
         EE_ASSERT( result == VK_SUCCESS );
 
         return imageView;
@@ -5814,7 +5820,7 @@ namespace EE::Render::RHI
             }
 
             VmaAllocationInfo allocationInfo = {};
-            VkResult const result = vmaCreateImage( pVulkanContext->m_resourceAllocator, &imageCreateInfo, &allocationCreateInfo, &pVulkanTexture->m_image, &pVulkanTexture->m_allocation, &allocationInfo );
+            [[maybe_unused]] VkResult const result = vmaCreateImage( pVulkanContext->m_resourceAllocator, &imageCreateInfo, &allocationCreateInfo, &pVulkanTexture->m_image, &pVulkanTexture->m_allocation, &allocationInfo );
             EE_ASSERT( result == VK_SUCCESS );
 
             pVulkanTexture->m_allocationSize = allocationInfo.size;
@@ -6122,7 +6128,7 @@ namespace EE::Render::RHI
         // SamplerParameters::m_setLODRange has no D3D12 use either; CreateSampler there
         // ignores it too.
 
-        VkResult const result = vkCreateSampler( pVulkanContext->m_device, &samplerCreateInfo, nullptr, &pVulkanSampler->m_sampler );
+        [[maybe_unused]] VkResult const result = vkCreateSampler( pVulkanContext->m_device, &samplerCreateInfo, nullptr, &pVulkanSampler->m_sampler );
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanSampler->m_nodeIndex = parameters.m_nodeIndex;
@@ -6370,7 +6376,7 @@ namespace EE::Render::RHI
         reflection.m_shaderStages.AppendFlags( shaderStage );
 
         SpvReflectShaderModule module = {};
-        SpvReflectResult const createResult = spvReflectCreateShaderModule( spirv.size(), spirv.data(), &module );
+        [[maybe_unused]] SpvReflectResult const createResult = spvReflectCreateShaderModule( spirv.size(), spirv.data(), &module );
         EE_ASSERT( createResult == SPV_REFLECT_RESULT_SUCCESS );
 
         if ( shaderStage == ShaderStage::Compute || shaderStage == ShaderStage::Task || shaderStage == ShaderStage::Mesh )
@@ -6479,7 +6485,7 @@ namespace EE::Render::RHI
                 moduleCreateInfo.codeSize = byteCode.size();
                 moduleCreateInfo.pCode = reinterpret_cast<uint32_t const*>( byteCode.data() );
 
-                VkResult const result = vkCreateShaderModule( pVulkanContext->m_device, &moduleCreateInfo, nullptr, &pVulkanShader->m_shaderModules[shaderIndex] );
+                [[maybe_unused]] VkResult const result = vkCreateShaderModule( pVulkanContext->m_device, &moduleCreateInfo, nullptr, &pVulkanShader->m_shaderModules[shaderIndex] );
                 EE_ASSERT( result == VK_SUCCESS );
             }
 
@@ -6671,7 +6677,7 @@ namespace EE::Render::RHI
         rootParameterLayoutCreateInfo.bindingCount = uint32_t( rootParameterBindings.size() );
         rootParameterLayoutCreateInfo.pBindings = rootParameterBindings.data();
 
-        VkResult result = vkCreateDescriptorSetLayout( pVulkanContext->m_device, &rootParameterLayoutCreateInfo, nullptr, &pVulkanRootSignature->m_rootParameterSetLayout );
+        [[maybe_unused]] VkResult result = vkCreateDescriptorSetLayout( pVulkanContext->m_device, &rootParameterLayoutCreateInfo, nullptr, &pVulkanRootSignature->m_rootParameterSetLayout );
         EE_ASSERT( result == VK_SUCCESS );
 
         // Both sets, in order. Set 1 is the same layout for every pipeline in the engine.
@@ -6739,7 +6745,7 @@ namespace EE::Render::RHI
         cacheCreateInfo.initialDataSize = parameters.m_initialCacheData.size();
         cacheCreateInfo.pInitialData = parameters.m_initialCacheData.data();
 
-        VkResult const result = vkCreatePipelineCache( pVulkanContext->m_device, &cacheCreateInfo, nullptr, &pVulkanPipelineCache->m_pipelineCache );
+        [[maybe_unused]] VkResult const result = vkCreatePipelineCache( pVulkanContext->m_device, &cacheCreateInfo, nullptr, &pVulkanPipelineCache->m_pipelineCache );
         EE_ASSERT( result == VK_SUCCESS );
 
         return pVulkanPipelineCache;
@@ -6768,7 +6774,7 @@ namespace EE::Render::RHI
         VulkanPipelineCache* pVulkanPipelineCache = static_cast<VulkanPipelineCache*>( pPipelineCache );
 
         size_t dataSize = 0;
-        VkResult result = vkGetPipelineCacheData( pVulkanContext->m_device, pVulkanPipelineCache->m_pipelineCache, &dataSize, nullptr );
+        [[maybe_unused]] VkResult result = vkGetPipelineCacheData( pVulkanContext->m_device, pVulkanPipelineCache->m_pipelineCache, &dataSize, nullptr );
         EE_ASSERT( result == VK_SUCCESS );
 
         // The view has to outlive the call, so the bytes live on the cache object.
@@ -7003,7 +7009,7 @@ namespace EE::Render::RHI
 
         VkPipelineCache const cache = ( pVulkanPipelineCache != nullptr ) ? pVulkanPipelineCache->m_pipelineCache : VK_NULL_HANDLE;
 
-        VkResult const result = vkCreateGraphicsPipelines( pVulkanContext->m_device, cache, 1, &pipelineCreateInfo, nullptr, &pVulkanPipeline->m_pipeline );
+        [[maybe_unused]] VkResult const result = vkCreateGraphicsPipelines( pVulkanContext->m_device, cache, 1, &pipelineCreateInfo, nullptr, &pVulkanPipeline->m_pipeline );
         EE_ASSERT( result == VK_SUCCESS );
 
         SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_PIPELINE, uint64_t( pVulkanPipeline->m_pipeline ), parameters.m_debugName );
@@ -7062,7 +7068,7 @@ namespace EE::Render::RHI
 
         VkPipelineCache const cache = ( pVulkanPipelineCache != nullptr ) ? pVulkanPipelineCache->m_pipelineCache : VK_NULL_HANDLE;
 
-        VkResult const result = vkCreateComputePipelines( pVulkanContext->m_device, cache, 1, &pipelineCreateInfo, nullptr, &pVulkanPipeline->m_pipeline );
+        [[maybe_unused]] VkResult const result = vkCreateComputePipelines( pVulkanContext->m_device, cache, 1, &pipelineCreateInfo, nullptr, &pVulkanPipeline->m_pipeline );
         EE_ASSERT( result == VK_SUCCESS );
 
         SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_PIPELINE, uint64_t( pVulkanPipeline->m_pipeline ), parameters.m_debugName );
@@ -7202,7 +7208,7 @@ namespace EE::Render::RHI
 
         VkPipelineCache const cache = ( pVulkanPipelineCache != nullptr ) ? pVulkanPipelineCache->m_pipelineCache : VK_NULL_HANDLE;
 
-        VkResult const result = pVulkanContext->m_vkCreateRayTracingPipelines( pVulkanContext->m_device, VK_NULL_HANDLE, cache, 1, &pipelineCreateInfo, nullptr, &pVulkanPipeline->m_pipeline );
+        [[maybe_unused]] VkResult const result = pVulkanContext->m_vkCreateRayTracingPipelines( pVulkanContext->m_device, VK_NULL_HANDLE, cache, 1, &pipelineCreateInfo, nullptr, &pVulkanPipeline->m_pipeline );
         EE_ASSERT( result == VK_SUCCESS );
 
         SetVulkanObjectName( pVulkanContext, VK_OBJECT_TYPE_PIPELINE, uint64_t( pVulkanPipeline->m_pipeline ), parameters.m_debugName );
@@ -7274,7 +7280,7 @@ namespace EE::Render::RHI
             break;
         }
 
-        VkResult const result = vkCreateQueryPool( pVulkanContext->m_device, &queryPoolCreateInfo, nullptr, &pVulkanQueryPool->m_queryPool );
+        [[maybe_unused]] VkResult const result = vkCreateQueryPool( pVulkanContext->m_device, &queryPoolCreateInfo, nullptr, &pVulkanQueryPool->m_queryPool );
         EE_ASSERT( result == VK_SUCCESS );
 
         pVulkanQueryPool->m_queryType = queryPoolCreateInfo.queryType;

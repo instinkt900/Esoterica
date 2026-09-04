@@ -71,6 +71,24 @@ ESOTERICA_INCLUDE_DIRECTORIES = (
     'External/DirectXShaderCompiler/inc/dxc',
 )
 
+def include_flag( directory ):
+    """-I for code this fork or upstream owns, -isystem for everything else.
+
+    clang does not report warnings from a header reached through -isystem, which is the correct
+    tool here rather than a -Wno- list: the vendored EASTL, EABase, imgui and box3d headers and
+    everything under External/ are not this fork's to fix, and Conventions rule 5 says so for the
+    vendored ones. Before this, EASTL's type_pod.h alone accounted for 25,560 of the build's 85,097
+    warning diagnostics - 8 unique sites, re-reported once per translation unit that included it.
+
+    Note the order consequence: -isystem paths are searched after every -I path. Nothing in the tree
+    relies on a third-party header shadowing a first-party one of the same name, and a full build of
+    every configuration is what confirms that.
+    """
+
+    is_first_party = ( directory == 'Code'
+                       or ( directory.startswith( 'Code/' ) and '/ThirdParty/' not in directory ) )
+    return f'-I{directory}' if is_first_party else f'-isystem{directory}'
+
 # EA.props: EASTL_USER_CONFIG_HEADER=$(EE_EASTL_USER_CONFIG_HEADER), whose value already
 # includes the quotes. The quotes are part of the macro, so they have to survive the shell.
 #
@@ -117,24 +135,122 @@ COMMON_COMPILER_FLAGS = (
     # gates each behind its own instruction set flag.
     '-mbmi',
     '-mlzcnt',
-    '-Wall',
-    '-Wextra',
     # The vendored imgui and EASTL define their export macros as __declspec(dllexport) under
     # `#if EE_DLL`, and Code/**/ThirdParty is out of bounds (Conventions rule 5). -fdeclspec
     # makes clang parse the attribute and ignore it, which is the generator-side fix that rule
-    # points to. It fires -Wignored-attributes hundreds of times from those headers, so the
-    # warning is off; nothing first-party uses __declspec.
+    # points to. It fires -Wignored-attributes at every first-party declaration that uses one of
+    # those macros - the use site is ours even though the macro is not - so the warning is off.
     '-fdeclspec',
     '-Wno-ignored-attributes',
-    # Esoterica.props sets TreatWarningAsError with EnableAllWarnings and a long list of disabled
-    # MSVC warning numbers that have no clang equivalent. That list is deliberately not translated
-    # and -Werror is not passed, because upstream warnings are not this fork's to fix.
+    # Warning flags are NOT here. They depend on who owns the source being compiled; see
+    # WARNING_FLAGS below.
 )
 
 C_FLAGS   = ( '-std=c17', )     # LanguageStandard_C: stdc17
 CPP_FLAGS = ( '-std=c++20', )   # LanguageStandard: stdcpp20
 
 # FloatingPointModel: Precise is clang's default. Never pass -ffast-math.
+
+#-------------------------------------------------------------------------
+# Warnings
+#-------------------------------------------------------------------------
+
+# The build is warning-free, and it takes three different policies to be.
+#
+# Esoterica.props sets TreatWarningAsError with EnableAllWarnings and a long list of disabled MSVC
+# warning numbers. Upstream is clean on MSVC *because that list exists*. This generator used to
+# pass -Wall -Wextra to everything and translate none of it, which produced 85,097 diagnostics at
+# 17,264 unique sites - and 99.3% of those sites were upstream's or the Reflector's, not this
+# fork's. Every flag below was triaged once, at that measurement; the counts are from it.
+#
+# Docs/Linux/Scripts/WarningSweep.py reproduces the measurement. Run it after a merge.
+#
+# Three tiers, chosen per source file by who owns the file:
+#
+#   FORK        Sources this fork adds (LinuxSources.txt). Strict, and -Werror.
+#   UPSTREAM    Upstream's own sources. -Wall -Wextra minus what upstream trips.
+#   GENERATED   Reflector output. Nobody reads it and its shape is upstream's to change.
+
+# What upstream first-party code trips, with the unique-site count from the 2026-09-04 sweep.
+#
+# Most of the -Wformat family is an LP64 artefact: uint64_t is `unsigned long` here and
+# `unsigned long long` on Windows, so `%llu` is correct there and merely mismatched here. But the
+# triage also found real defects on BOTH platforms - a missing `return`, `==` written for `=`, class
+# types passed through printf varargs, and five incomplete format specifiers. Those are recorded in
+# Docs/Linux/Progress.md for an upstream report; they are upstream's to fix, not this fork's, and
+# suppressing the flag here does not make them go away.
+UPSTREAM_WARNING_SUPPRESSIONS = (
+    '-Wno-unused-parameter',                        # 711
+    '-Wno-sign-compare',                            # 284
+    '-Wno-unused-variable',                         # 124
+    '-Wno-format-security',                         # 103
+    '-Wno-missing-field-initializers',              # 58
+    '-Wno-inconsistent-missing-override',           # 30
+    '-Wno-format',                                  # 28. Real defects hide in here; see above
+    '-Wno-unused-but-set-variable',                 # 25
+    '-Wno-unnecessary-virtual-specifier',           # 22
+    '-Wno-unused-const-variable',                   # 14
+    '-Wno-trigraphs',                               # 11
+    '-Wno-unused-private-field',                    # 8
+    '-Wno-braced-scalar-init',                      # 7
+    '-Wno-unused-function',                         # 4
+    '-Wno-return-type',                             # 4, and two of them are undefined behaviour
+    '-Wno-reorder-ctor',                            # 3
+    '-Wno-unused-value',                            # 3
+    '-Wno-deprecated-copy-with-user-provided-copy', # 3
+    '-Wno-format-extra-args',                       # 3
+    '-Wno-logical-op-parentheses',                  # 2
+    '-Wno-unknown-pragmas',                         # 1
+    '-Wno-switch',                                  # 1
+    '-Wno-unused-lambda-capture',                   # 1
+    '-Wno-defaulted-function-deleted',              # 1
+    '-Wno-unused-comparison',                       # 1
+    '-Wno-self-assign-field',                       # 1
+    '-Wno-deprecated-enum-compare-conditional',     # 1
+    '-Wno-tautological-pointer-compare',            # 1
+    '-Wno-unneeded-internal-declaration',           # 1
+    '-Wno-string-concatenation',                    # 1
+    '-Wno-range-loop-construct',                    # 1
+    '-Wno-missing-designated-field-initializers',   # 1
+)
+
+# This fork's own sources. Strict, and an error, so the clean state cannot rot.
+#
+# Three suppressions, and each is load-bearing:
+#
+# - The two missing-field-initializer flags are the Vulkan idiom. `VkFooCreateInfo x = { VK_STRUCTURE
+#   _TYPE_FOO };` leaves the rest zero-initialised, which is exactly what Vulkan asks for, and
+#   RHI_Vulkan.cpp does it 106 times. Designated initialisers do not help: clang 21 moves the same
+#   diagnostic to -Wmissing-designated-field-initializers, which -Wextra also enables. The only
+#   warning-free spelling is `= {}` plus a separate sType assignment, per struct, per site.
+#
+# - -Wno-unused-parameter is a real loss and is here under protest. Upstream headers leak 199 of
+#   them into this fork's translation units - IDataFile.h, EditorTool.h, ReflectedType.h, String.h -
+#   and clang has no per-header suppression that would not also cover this fork's own headers under
+#   Code/. An unused parameter in new Linux code will therefore not be caught. Run WarningSweep.py
+#   with `--audit-fork` to check for them deliberately.
+#
+# - -Wno-unused-function is the same leak with one cause: ImguiX.h:501 declares `static void
+#   HelpMarker`, and a static function in a header is unused in every translation unit that does not
+#   call it. Four of this fork's own files include it transitively, through DialogManager.h. It wants
+#   to be `inline`, which is upstream's one-word change to make.
+FORK_WARNING_FLAGS = (
+    '-Wall',
+    '-Wextra',
+    '-Werror',
+    '-Wno-missing-field-initializers',
+    '-Wno-missing-designated-field-initializers',
+    '-Wno-unused-parameter',
+    '-Wno-unused-function',
+)
+
+UPSTREAM_WARNING_FLAGS = ( '-Wall', '-Wextra' ) + UPSTREAM_WARNING_SUPPRESSIONS
+
+# 15,366 sites, and none of them are in code a human wrote. The Reflector's output is regenerated on
+# every reflection run and its shape is decided by upstream's code generator, so there is nothing
+# here for this fork to fix and nothing for a reviewer to read. -w rather than a flag list, because
+# the list would grow every time upstream changes a template.
+GENERATED_WARNING_FLAGS = ( '-w', )
 
 #-------------------------------------------------------------------------
 # Configurations
