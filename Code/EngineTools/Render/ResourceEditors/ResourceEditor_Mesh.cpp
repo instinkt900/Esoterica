@@ -790,10 +790,18 @@ namespace EE::Render
                 //-------------------------------------------------------------------------
 
                 ImGui::Indent( totalLabelWidth );
-                ImGui::Text( EE_ICON_CUBE_OUTLINE" %s", submesh.m_ID.c_str() );
-                ImGuiX::TextTooltip( "Source Mesh Node: %s", submesh.m_ID.c_str() );
-                ImGui::Text( EE_ICON_PALETTE" %s", submesh.m_materialNameID.c_str() );
-                ImGuiX::TextTooltip( "Source Material Name: %s", submesh.m_materialNameID.c_str() );
+
+                // Both names come from the source file and are optional in gltf, so either may be an
+                // invalid StringID, whose c_str() is null. These are arguments rather than format
+                // strings so they do not crash, but they read as "(null)". The submesh index is
+                // already drawn as this row's label, so say what is missing instead of repeating it.
+                char const* pSubmeshName = submesh.m_ID.IsValid() ? submesh.m_ID.c_str() : "Unnamed";
+                char const* pMaterialName = submesh.m_materialNameID.IsValid() ? submesh.m_materialNameID.c_str() : "Unnamed";
+
+                ImGui::Text( EE_ICON_CUBE_OUTLINE" %s", pSubmeshName );
+                ImGuiX::TextTooltip( "Source Mesh Node: %s", pSubmeshName );
+                ImGui::Text( EE_ICON_PALETTE" %s", pMaterialName );
+                ImGuiX::TextTooltip( "Source Material Name: %s", pMaterialName );
 
                 // LOD and Isolate
                 //-------------------------------------------------------------------------

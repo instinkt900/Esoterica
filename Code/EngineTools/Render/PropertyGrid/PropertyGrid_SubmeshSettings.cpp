@@ -143,7 +143,21 @@ namespace EE::Render
                     ImGuiX::ItemTooltip( "Is this sub-mesh visible?" );
 
                     ImGui::SameLine();
-                    ImGui::Text( pMesh->GetSubmesh( i ).m_ID.c_str() );
+
+                    // A submesh ID comes from the source file's node name, which is optional in gltf,
+                    // so it may be invalid - and StringID::c_str() is null for an invalid ID. Passing
+                    // that to ImGui::Text as the format string dereferences it. Fall back to the index,
+                    // since these rows are what the material override below is selected against.
+                    StringID const submeshID = pMesh->GetSubmesh( i ).m_ID;
+                    if ( submeshID.IsValid() )
+                    {
+                        ImGui::Text( "%s", submeshID.c_str() );
+                    }
+                    else
+                    {
+                        ImGui::Text( "Submesh %d", i );
+                    }
+
                     if ( m_pickers[i]->UpdateAndDraw() )
                     {
                         UpdateMaterialOverride( i, m_pickers[i]->GetResourceID() );

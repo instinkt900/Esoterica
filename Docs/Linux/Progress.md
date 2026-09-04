@@ -709,6 +709,88 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-04 - `ImGui::Text( nullptr )`. **A one-line segfault**, and the third defect that unnamed glTF nodes caused. Unplanned
+
+**Selecting a Sponza static mesh component in the map editor segfaulted the editor.** Third session
+entry of the day on the same asset, and the third defect traceable to the same property of it: its
+glTF has no node names.
+
+`PropertyGrid_SubmeshSettings.cpp:146` drew each submesh row with
+`ImGui::Text( pMesh->GetSubmesh( i ).m_ID.c_str() )`. **The string is the format string**, and
+`StringID::c_str()` returns null for an invalid ID, and `ImFormatStringToTempBufferV` dereferences
+the format on its first line (`imgui.cpp:2463`). No assert, no message - the process is just gone,
+which is why nothing turned up in the log.
+
+### The measurement that sized it
+
+Two cheap checks settled that this is asset-specific rather than universal, which was the open
+question:
+
+```
+boulder.mesh  strings  ->  namaqualand_boulder_02_LOD0, namaqualand_boulder_02
+sponza.mesh   strings  ->  no submesh names at all, only "Default"
+```
+
+`StringID` serialises as a string into compiled resources, so `c_str()` works at runtime for a named
+mesh. Then, straight off the importer: **103 of Sponza's 103 submeshes have an invalid `m_ID`**,
+against **0 of 1** for `MaterialBall.gltf`. So every asset in `Data/` is safe and any unnamed one is
+fatal. `strings` on a compiled resource is worth remembering - it answered in one command what
+loading the resource would have needed a harness for.
+
+### Reproducing an ImGui crash with no window
+
+**ImGui runs headless.** `CreateContext`, `AddFontDefault`, `io.DisplaySize`, `NewFrame`, `Begin` -
+no backend, no renderer, no display - and the formatting path is fully exercised, because it runs
+long before anything is drawn. 71 lines against `libEsoterica.Base.so`:
+
+| | |
+|---|---|
+| `ImGui::Text( nullptr )` | **segfault**, exit 139 |
+| `ImGui::Text( "%s", nullptr )` | returns, ImGui substitutes a placeholder |
+| the guarded form the fix uses | returns, every row formatted |
+
+**One trap:** ImGui 1.92 asserts on an unbuilt font atlas in `NewFrame`, and `ImFontAtlas::Build()`
+and `SetTexID` no longer exist. Set `io.BackendFlags \|= ImGuiBackendFlags_RendererHasTextures` to
+say the backend owns texture uploads, and the assert goes away.
+
+The middle row is the useful one: it proves the four sibling sites in `ResourceEditor_Mesh.cpp`
+(`:793` to `:796`) **do not crash**, because they pass the name as a `%s` argument rather than as the
+format. They only read `(null)`. That is the difference between the two fixes in this change, and it
+is not visible by eye - both look like "prints a name that might be null".
+
+### What was fixed, and why the two fallbacks differ
+
+- **`PropertyGrid_SubmeshSettings.cpp:146`** guards on `IsValid()`, formats through `"%s"`, and falls
+  back to **`Submesh <n>`**. There is no index shown in that panel and **the rows are what a material
+  override is selected against**, so they have to be tellable apart. This is the crash.
+- **`ResourceEditor_Mesh.cpp:793-796`** fall back to **`Unnamed`**. The submesh index is already drawn
+  as that row's big label, so repeating it would be noise. Display only.
+
+`PropertyGrid_Mesh.cpp:24` and `:44` already guard this exact value on `IsValid()`, so the guard is
+upstream's own pattern rather than something invented here.
+
+### The material story, corrected
+
+The earlier entry said Sponza's materials could not be assigned per part. **That is wrong for the
+component**, and it is worth correcting because it changes what to tell a user:
+`MeshComponent::SubmeshSettings::m_materialOverrides` is keyed by **`m_submeshIdx`, an integer**, not
+by name. So with this crash fixed, a material can be assigned to each of the 103 submeshes from the
+component's property grid and the missing names do not matter.
+
+What remains stuck is the **descriptor-level** `m_materialMappings`, which is keyed by
+`submesh.m_ID / m_materialNameID / m_lodMask`. Sponza has neither node names nor material names -
+`GLTF.cpp:716` falls back to the literal `"Default"` - so all 103 keys are `(null)/Default/1`, and
+that mechanism can only set one material for the whole mesh. Confirmed by measurement: `m_materialID`
+is `'Default'` on every submesh. Fixing *that* means synthesizing both node and material names in the
+importer, which was offered and not taken, so it stays a known limitation rather than a defect.
+
+**Upstream files edited:** `Code/EngineTools/Render/PropertyGrid/PropertyGrid_SubmeshSettings.cpp`
+and `Code/EngineTools/Render/ResourceEditors/ResourceEditor_Mesh.cpp`. Neither was on the original
+survey list; both escalated and approved. **Nobody has seen the fixed rows drawn** - the fixes were
+verified against the crash mechanism, not in the editor - so that is a row in
+[Blocked.md](Blocked.md).
+
+
 ### 2026-09-04 - The editor deadlocked on a successful import. **Two fixes**, one upstream and one this port's. Unplanned
 
 **Importing Sponza through the editor rather than by hand hit two more defects.** The first hangs the
