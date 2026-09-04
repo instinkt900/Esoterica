@@ -1083,7 +1083,7 @@ namespace EE
     {
         EE_ASSERT( m_pAsyncTask == nullptr );
 
-        Threading::ScopeLock const sl( m_mutex );
+        Threading::Lock lock( m_mutex );
 
         auto const& fsEvents = m_fileSystemWatcher.GetFileSystemChangeEvents();
         for ( auto const& fsEvent : fsEvents )
@@ -1265,6 +1265,13 @@ namespace EE
         }
 
         //-------------------------------------------------------------------------
+
+        // Release the lock before notifying. A handler is free to call back into this class, and
+        // several of the public functions take this same mutex, which is not recursive.
+        // ResourceImporterEditorTool::OnResourceDatabaseUpdated calls GetAllResourcesThatDependOnFile,
+        // so saving a descriptor with the Resource Importer open deadlocked the editor here.
+        // Update() already fires this event with no lock held.
+        lock.unlock();
 
         if ( m_fileCacheUpdatedEvent.HasBoundUsers() )
         {

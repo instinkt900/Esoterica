@@ -21,6 +21,10 @@ Status values:
 | `worked around` | The upstream file is untouched; the Linux side avoids or absorbs the problem. |
 | `fixed as a side effect` | In a file this port rewrites anyway, so fixing it costs no merge debt. |
 
+**The numbers are stable IDs, assigned in the order items were found.** `TouchedFiles.md` and
+`Progress.md` cite them, so a new item appends and an existing number never changes. The sections
+below therefore run roughly, but not exactly, in numeric order.
+
 ---
 
 ## Index
@@ -57,6 +61,7 @@ Status values:
 | 28 | `NinjaGen.py`, four defects | The stale build script does not run at all | `fixed as a side effect` |
 | 29 | `Code/Applications/BuildGenerator/` | Does not work, and parses a solution format the repo no longer uses | `not fixed` |
 | 30 | `RHI_Direct3D12.cpp` | 6084 lines of Direct3D 12 with no platform guard and no platform suffix | `not fixed` |
+| 31 | `DataFileSystem.cpp:1270` | Saving any data file with the Resource Importer open deadlocks the editor | `fixed here` |
 
 ---
 
@@ -105,6 +110,49 @@ asserts compiled out, `CalculateAngleBetweenUnitVectors` returns a meaningless a
 mis-flips its axes, which is cosmetic.
 
 **What was done:** nothing. Recorded per Conventions rule 3 and Phase 8's "do not" list.
+
+### 31. `DataFileSystem.cpp:1270` - saving a data file with the Resource Importer open deadlocks the editor
+
+Found on 2026-09-04, importing Sponza through the editor rather than by hand.
+
+**In plain terms: the class notifies its observers while still holding its own lock, and one of the
+observers calls straight back into it.** `ProcessFileSystemChanges` takes `m_mutex` at line 1086 with
+a function-scope `ScopeLock`, so the lock is still held when it fires
+`m_fileCacheUpdatedEvent.Execute()` at the bottom of the same function. The Resource Importer binds
+that event (`EditorTool_ResourceImporter.cpp:597`), and its handler calls
+`GetAllResourcesThatDependOnFile`, which takes `m_mutex` again at line 789.
+
+`Threading::Mutex` is `typedef std::mutex` (`Threading.h:36`) and is **not** recursive, so the main
+thread blocks on itself:
+
+```
+ProcessFileSystemChanges          takes m_mutex                 DataFileSystem.cpp:1086
+  m_fileCacheUpdatedEvent.Execute()  still holding it           DataFileSystem.cpp:1270
+    ResourceImporterEditorTool::OnResourceDatabaseUpdated       EditorTool_ResourceImporter.cpp:662
+      GetAllResourcesThatDependOnFile takes m_mutex AGAIN       DataFileSystem.cpp:789
+```
+
+**The trigger is any file appearing in the data directory while the importer has a file selected**,
+which is exactly what saving a descriptor does. The file system watcher picks it up on the next
+frame. So the editor dies on a successful import, not a failed one - which is a good disguise,
+because a failed import leaves it perfectly healthy.
+
+Observed on the hung process: every one of its 20 threads asleep, the main thread parked in
+`futex_wait_queue`, and **2 CPU ticks in 5 seconds**. No child process, so nothing to do with the
+file dialog that had just closed.
+
+`Update()` fires the same event at line 249 with **no** lock held, so upstream is inconsistent with
+itself and the unlocked one is the shape that works.
+
+**Platform-neutral in the source.** Whether Windows deadlocks too is not settled: re-locking a
+non-recursive `std::mutex` is undefined behaviour, and libstdc++ maps it to a plain pthread mutex
+that blocks, while MSVC's implementation may not. That is a guess and is a row in
+[Blocked.md](Blocked.md) for the Windows machine to answer.
+
+**What was done:** the `ScopeLock` becomes a `Threading::Lock` and is explicitly unlocked before the
+event fires. **8 added, 1 removed**, 6 of the added lines comment. Reproduced and confirmed with a
+harness that binds the same callback the importer does: it hangs on the old build and returns
+immediately on the new one.
 
 ---
 

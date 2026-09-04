@@ -709,6 +709,93 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-04 - The editor deadlocked on a successful import. **Two fixes**, one upstream and one this port's. Unplanned
+
+**Importing Sponza through the editor rather than by hand hit two more defects.** The first hangs the
+editor; the second is why the first took a while to reach. Immediately after the three glTF fixes in
+the entry below, so this is the same session continuing into the editor path.
+
+| | What | Whose |
+|---|---|---|
+| 1 | `DataFileSystem::ProcessFileSystemChanges` fires its update event while holding `m_mutex`, and the Resource Importer's handler calls back into a function that takes the same non-recursive mutex. **Saving a descriptor with the importer open deadlocks the main thread on itself.** | upstream, [UpstreamIssues.md](UpstreamIssues.md) item 31 |
+| 2 | `WriteFileToDisk` does not resolve the case of a path's parent directory, so writing to a lowercased data path fails with `ENOENT`. **"Import As" into any capitalised directory silently failed** - which is every stock directory in `Data/`. | **this port's**, in its own `FileSystem_Linux.cpp` |
+
+**Defect 2 is why defect 1 hid.** The first import attempts failed to write, so no file appeared in
+`Data/`, so the watcher never fired and the editor stayed healthy - it even shut down cleanly. The
+deadlock only arrived once a write finally succeeded, into a directory that happened to be lowercase.
+**A failed import leaves the editor fine and a successful one kills it**, which is a good disguise.
+
+### Diagnosing a hang with no ptrace
+
+`/proc/sys/kernel/yama/ptrace_scope` is `1` on this machine and there is no passwordless sudo, so
+**gdb could not attach to the live editor at all.** Everything below came out of `/proc`, and it was
+enough to identify the defect without a backtrace:
+
+- **`/proc/<pid>/task/*/wchan`** named the wait. Main thread in `futex_wait_queue`, which is a
+  `std::mutex` or condvar, not `waitpid` (`do_wait`) and not a pipe read (`pipe_read`). That ruled out
+  the file dialog, which was the obvious suspect since the hang followed clicking "Import As".
+- **Sampling `utime + stime` from `/proc/<pid>/stat` over 5 seconds** settled stuck versus slow: **2
+  ticks**, and zero on the main thread. Do not read the `%CPU` column of `ps` for this - it is an
+  average over the process lifetime and read 21.8%, which looks like work.
+- **`ps --ppid <pid>`** showed no children and `pgrep zenity` found nothing, so no dialog was
+  outstanding.
+- **`xwininfo`/`xdotool` on the editor's window** said `IsUnviewable`, i.e. it was on an inactive i3
+  workspace. A red herring worth knowing about: it means "not currently mapped", not "hung".
+- **The previous run's `EsotericaEditorLog.txt`** held the actual first failure, with the lowercase
+  path in it. **The log is written at shutdown**, so the file on disk belongs to the *previous* run -
+  check its timestamp against the process start time before reading it as current.
+
+### Reproducing a deadlock without the UI
+
+The deadlock lives behind an editor click, but it does not need the editor. **~140 lines linked
+against the `.so` files**, constructing a `TaskSystem`, a `TypeRegistry` and a `DataFileSystem`,
+binding the same callback the Resource Importer binds, then writing a file into `Data/` and pumping
+`Update()`. Under `timeout --signal=KILL 90` it hangs on the old build after printing that the
+handler was entered, and returns instantly on the new one. That is the whole test.
+
+Two things about the harness, both of which cost a run:
+
+- **It links `Esoterica.Base`, `Engine.Tools`, `Engine.Runtime`, `Game.Runtime` and `Game.Tools`.**
+  `TypeRegistration.h` calls into the game modules, so the first three are not enough.
+- **`TypeSystem::Reflection::UnregisterTypes` has to be called**, or `~TypeRegistry` asserts on
+  `m_registeredEnums.empty()` at exit. The harness did not, so the run ends on an assert **after** the
+  test has already passed and printed its result. That is the harness, not the engine - the same shape
+  as the `rpmalloc` leak note in the entry below. Read the result line, not the exit code.
+
+### What the fixes were checked against
+
+- **The deadlock harness hangs before and passes after.** Not "looks fine now": measured both ways on
+  the same binary set, 90 second watchdog.
+- **The case fix writes to the right place.** Writing `Data/demo/render/pbr/gltf/casetest.txt` now
+  lands in the real `Data/Demo/Render/PBR/glTF/`, and **creates no stray lowercase directory** -
+  checked explicitly, because creating the parent instead of resolving it would quietly build a second
+  copy of a data tree beside the real one. That is why the fix resolves and does not `mkdir`.
+- **The four existing mesh descriptors still compile byte-identical.** Worth re-running even though
+  this change looks unrelated to the compiler: `WriteFileToDisk` is what writes every compiled
+  resource, so it is on the hottest write path in the tree.
+- **Linux Debug builds clean**, zero warnings.
+- **Windows: not built.** `FileSystem_Linux.cpp` is inside `#ifdef __linux__` and cannot reach it. The
+  `DataFileSystem.cpp` change can, and is row 7 of the Windows queue in [Blocked.md](Blocked.md) -
+  not to verify the fix, which is correct on any standard library, but to find out whether MSVC
+  reproduces the *bug*, which decides how the upstream report is worded.
+
+### On the fix for defect 2, and what it deliberately does not do
+
+`Path::GetCorrectCaseForPath` already existed in this fork and is why *reads* survive lowercased data
+paths. It walks an existing path a component at a time, so **a file being created cannot use it** -
+the walk fails on the last component, which is the new filename. The fix resolves the parent
+directory only and keeps the filename verbatim.
+
+**It does not create a missing directory.** A genuinely absent parent is a caller error on both
+platforms, and guessing would turn a typo into a new lowercase directory next to the real one. So
+`TryResolveParentDirectoryCase` returns false in that case and the original `ENOENT` is reported
+unchanged.
+
+**Upstream files edited:** `Code/EngineTools/FileSystem/DataFileSystem.cpp`, which was **not** on the
+original survey list and was escalated before being touched. `Code/Base/FileSystem/Platform/FileSystem_Linux.cpp`
+is this fork's own file, so it needs no registry row.
+
+
 ### 2026-09-04 - Importing Sponza. **Three upstream crashes, all fixed**, and upstream bugs now have their own document. Unplanned
 
 **The Khronos Sponza sample could not be imported, and it broke three separate things on the way.**

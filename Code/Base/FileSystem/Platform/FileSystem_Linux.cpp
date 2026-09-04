@@ -3,6 +3,7 @@
 #include "Base/Platform/PlatformUtils_Linux.h"
 #include "Base/Encoding/Hash.h"
 #include "Base/Math/Math.h"
+#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -75,10 +76,49 @@ namespace EE::FileSystem
         return ( (uint64_t) fileInfo.st_mtim.tv_sec * 1000000000ull ) + (uint64_t) fileInfo.st_mtim.tv_nsec;
     }
 
+    // Data paths are lowercase by design, so a path derived from one is written back out in that
+    // spelling. Reads survive it because they go through Path::GetCorrectCaseForPath, which walks an
+    // existing path. A file being created cannot use that directly - its own name is not on disk yet
+    // and the walk fails on the last component - so only the parent directory is resolved here and
+    // the filename is kept verbatim.
+    //
+    // Returns false when there is nothing to correct, which includes a parent directory that really
+    // does not exist. Creating it is deliberately not done here: a missing directory is a caller
+    // error on both platforms, and guessing would put a second lowercase copy of a data directory
+    // beside the real one.
+    static bool TryResolveParentDirectoryCase( char const* pPath, String& outPath )
+    {
+        String const requestedPath( pPath );
+        size_t const lastDelimiterIdx = requestedPath.rfind( Path::s_pathDelimiter );
+        if ( lastDelimiterIdx == String::npos )
+        {
+            return false;
+        }
+
+        // Keep the trailing delimiter: GetCorrectCaseForPath preserves it, and it is what marks the
+        // string as a directory path.
+        String resolvedParentDirectory;
+        if ( !Path::GetCorrectCaseForPath( requestedPath.substr( 0, lastDelimiterIdx + 1 ).c_str(), resolvedParentDirectory ) )
+        {
+            return false;
+        }
+
+        outPath = resolvedParentDirectory + requestedPath.substr( lastDelimiterIdx + 1 );
+        return outPath != requestedPath;
+    }
+
     bool WriteFileToDisk( char const* pPath, void const* pData, size_t size, bool overwrite = true, bool flushToDisk = false )
     {
         int const creationFlags = overwrite ? ( O_CREAT | O_TRUNC ) : ( O_CREAT | O_EXCL );
-        int const fileDescriptor = open( pPath, O_WRONLY | creationFlags, 0644 );
+        int fileDescriptor = open( pPath, O_WRONLY | creationFlags, 0644 );
+
+        // ENOENT means a directory component is missing, which may only be a case mismatch
+        String correctedPath;
+        if ( fileDescriptor < 0 && errno == ENOENT && TryResolveParentDirectoryCase( pPath, correctedPath ) )
+        {
+            fileDescriptor = open( correctedPath.c_str(), O_WRONLY | creationFlags, 0644 );
+        }
+
         if ( fileDescriptor < 0 )
         {
             String const errorString = Platform::Linux::GetLastErrorMessage();
