@@ -709,6 +709,112 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-04 - Importing Sponza. **Three upstream crashes, all fixed**, and upstream bugs now have their own document. Unplanned
+
+**The Khronos Sponza sample could not be imported, and it broke three separate things on the way.**
+Each one killed a process outright. All three are platform-neutral upstream defects that reach
+Windows, none is a Linux defect, and all three are now fixed here because a human asked for the
+fixes rather than another record-and-move-on entry.
+
+The full write-up of each, in plain terms, is in the new
+**[UpstreamIssues.md](UpstreamIssues.md)** as items 2, 3 and 4. What follows is the investigation,
+which is what this file is for.
+
+**The three, in the order the import hits them:**
+
+| # | Where it dies | What it is |
+|---|---|---|
+| 1 | `EditorTool_ResourceImporter.cpp:744`, in the **editor** | `InspectGLTF` names mesh items from `mesh.name`. glTF makes that optional, Sponza has none, so all 103 items came back invalid and the assert on `IsValid()` killed the editor **on selecting the file** |
+| 2 | `GLTF.cpp:111`, in the **resource compiler** | The node scale assert is inverted. Sponza's root node is a uniform `scale: [0.008, 0.008, 0.008]`, which is the only kind the code can represent, and exactly what the assert rejected |
+| 3 | `ResourceCompiler_RenderMesh.cpp:327`, in the **resource compiler** | The LOD loop assumed one emitted geometry per submesh in order. On LOD 1 only 64 of 103 geometries survived simplification, so the 65th submesh read `mesh.m_geometry[167]` from a 167-element vector |
+
+**Item 2 was already in this file, found by P8.2 and left unfixed under Conventions rule 3.** So the
+first crash a user hits had been recorded, correctly, and then sat there. Worth noticing: recording
+an upstream bug is the right default, and it is not the same as the bug being harmless.
+
+### What made this cheap to find, and what would have made it expensive
+
+**A headless harness beat driving the editor.** The crash is in the editor's UI path, so the obvious
+route is a virtual display and `xdotool`. Instead: ~100 lines linked straight against
+`libEsoterica.Base.so` and `libEsoterica.Engine.Tools.so`, calling `Import::InspectFile` and
+`gltf::ReadStaticMesh` directly and printing each item's validity. Compile it with the flags out of
+`compile_commands.json` but `-DEE_RELEASE=1` to match the `.so` files, and it reproduces both
+process-killing asserts in under a second each, with no display and no clicking. **Two traps in
+writing one:**
+
+- **Construct `ApplicationGlobalState` before anything else, including argument parsing.** A
+  `FileSystem::Path` built from `argv` allocates, and allocating first asserts on
+  `Memory::g_isMemorySystemInitialized`.
+- **Make stdout unbuffered.** `EE_DEBUG_BREAK` is `__builtin_debugtrap()`, so the process dies on
+  `SIGTRAP` with its buffer unflushed and every diagnostic printf is lost. The first two runs looked
+  like the assert fired before the code that precedes it.
+
+**`Data/PortTests/` is gitignored and is the right place for test assets.** Sponza is 51 MB.
+
+### Measurement traps, and one thing that looked like a defect and was not
+
+- **Asserts are live in Release.** `EE_DEVELOPMENT_TOOLS` is set for everything except Shipping, so
+  "it is a Release build" is not a reason an assert cannot be the crash.
+- **The repository's only glTF asset hides items 2 and 3 by construction.**
+  `Data/Editor/MaterialBall/MaterialBall.gltf` has named meshes, named nodes and no `scale` key at
+  all, and one geometry so it cannot reach item 3. The glTF path looked exercised and was not.
+- **`Memory leak detected` at exit was the harness, not the engine.** The harness never freed the 103
+  `ImportableItem*` that `InspectFile` allocates. `rpmalloc` prints that line for any outstanding
+  allocation, and this file already carries an entry about the Resource Server printing it for a real
+  reason - which is exactly why a fresh instance of it should not be assumed to be that one. Freeing
+  them made it go away.
+- **The ResourceCompiler exits non-zero on success.** It returned 2 for "compiled with warnings".
+  Read the log, not the exit code, as the note at the top of this file already says.
+
+### What the fixes were checked against
+
+- **Both crashes gone** on unmodified `Sponza.gltf`: `InspectFile` returns 103 valid items, and
+  `ReadStaticMesh` returns 103 geometries and 103 submeshes.
+- **Sponza compiles against `Highpoly.meshgrp`**, the 6-LOD auto-generating group that produced item
+  3, in **both Release and Debug**. 1.5 s and 2.3 s respectively.
+- **No change to any existing asset.** `Boulder.mesh`, `Floor.mesh`, `MaterialBall.mesh` and
+  `SkyDome.mesh` were compiled on `main`, then on the branch, and are **byte-identical by md5**.
+  This mattered most for item 3, which rewrote index arithmetic every mesh goes through.
+- **Linux Debug builds clean**, 240/240 targets, zero warnings.
+- **Windows: not built.** Row 6 in the Windows queue in [Blocked.md](Blocked.md).
+
+### What was deliberately left alone
+
+- **`GLTF.cpp:18`** - a missing comma between `""` and `"data_too_short"` makes `g_errorStrings` a
+  single concatenated element, so it holds 9 strings for 10 `cgltf_result` values. Every parse-failure
+  message names the wrong error and `legacy_gltf` reads out of bounds. One character to fix, and
+  unrelated to the crash, so it is item 5 in [UpstreamIssues.md](UpstreamIssues.md) instead.
+- **The skeleton and animation loops in `InspectGLTF`** have the identical unnamed-item defect
+  (item 6). Not fixed, and not only for scope: an animation's name is what `gltf::ReadAnimation`
+  matches on to *find* the animation, so a synthesized name would trade a crash for a failed import.
+  Fixing it properly means selecting an animation by index. No unnamed-animation asset was on hand
+  to test against either way.
+- **Sponza's materials.** The import compiles with 103 "Could not resolve material slot, setting
+  placeholder material" warnings, because the descriptor has no material mappings. Its 25 materials
+  are a separate job and nobody asked for them.
+
+### Upstream bugs moved out of this file
+
+**[UpstreamIssues.md](UpstreamIssues.md) is new, and is now the only place upstream bugs are
+recorded.** The "Upstream issues observed" section here was 386 lines and 26 items; it is now a
+pointer. Nothing was dropped - every item moved, and each gained a plain-terms statement of what it
+is and an explicit **What was done** line, because "is this fixed or not" was previously something
+you had to infer from the prose. There is an index table at the top to scan.
+
+The three new items above bring it to 30. Four statuses are used: `not fixed`, `fixed here`,
+`worked around`, `fixed as a side effect`.
+
+[Conventions rule 3](00-Conventions.md#rule-3---change-nothing-you-were-not-asked-to-change) and the
+seven inline cross-references in this file now point at the new document.
+[README.md](README.md)'s document map lists it.
+
+**Upstream files edited:** `Code/EngineTools/Import/Formats/GLTF.cpp`,
+`Code/EngineTools/Import/RawFileInspector.cpp`,
+`Code/EngineTools/Render/ResourceCompilers/ResourceCompiler_RenderMesh.cpp`. **None was on the
+original survey list**, so all three were escalated before being touched, and all three now have
+rows in [TouchedFiles.md](TouchedFiles.md).
+
+
 ### 2026-09-04 - P8.8 The build is warning-free, and the triage found real upstream bugs. Unplanned
 
 **Every configuration now builds with no warnings at all**, and this fork's own sources build with
@@ -1734,7 +1840,7 @@ Host validation still has to be off, or the engine segfaults inside `librenderdo
 Verifying picking crashed the editor twice before it succeeded once. It is **upstream, platform-
 neutral, deterministic, and easy for a user to hit** - the default gizmo mode, an ordinary camera
 angle, and any selected entity. Written up under
-[Upstream issues observed](#upstream-issues-observed) with a gdb backtrace and a reproduction.
+[UpstreamIssues.md](UpstreamIssues.md) with a gdb backtrace and a reproduction.
 **Not fixed here.**
 
 Two things about finding it that are worth reusing:
@@ -1849,7 +1955,7 @@ fill in, and both editors open them and say so.
 The Khronos glTF sample assets would have been the tidier source - CC BY 4.0, stable URLs, no FBX.
 **Fox, RiggedFigure, RiggedSimple and CesiumMan all fail**, so the script uses assimp's
 BSD-licensed FBX test models through ufbx instead. Recorded under
-[Upstream issues observed](#upstream-issues-observed); platform-neutral, so Windows has it too.
+[UpstreamIssues.md](UpstreamIssues.md); platform-neutral, so Windows has it too.
 
 #### Three traps that cost time and are not port defects
 
@@ -2728,7 +2834,7 @@ Memory leak detected (span->list_size == span->used_count) at Code/Base/ThirdPar
 and traps. **Reproduced with zero clients and no dialog shown**, so it is not this change, and not
 P7.2's. **Root-caused since**: `Network::Server` never drains `m_receivedMessages` at shutdown.
 It is upstream, platform-neutral, and intermittent. See
-[Upstream issues observed](#upstream-issues-observed).
+[UpstreamIssues.md](UpstreamIssues.md).
 
 **Destroying the window out from under the application asserts.** `xdotool windowclose` sends
 `XDestroyWindow` rather than `WM_DELETE_WINDOW`, and the next swapchain acquire fails:
@@ -4376,7 +4482,7 @@ changing; P6.8 and Phase 7 should simply expect the flag until the ResourceServe
 **A related upstream observation, not fixed here.** When `Engine::Initialize` fails, the
 following `Engine::Shutdown` segfaults in `RenderSystem::WaitAllQueuesIdle`, because it tears
 down systems that were never initialized. That is upstream behaviour on both platforms and it
-only shows up on a failed start; it is recorded under "Upstream issues observed".
+only shows up on a failed start; it is recorded in [UpstreamIssues.md](UpstreamIssues.md).
 
 ### 2026-08-30 - P6.6 The Vulkan surface. **Esoterica renders on Linux**
 
@@ -5089,7 +5195,7 @@ and that is a Phase 4 binding model decision, not this file's.
 | `RHI_Direct3D12.cpp:3978` | The top level structure buffer is created with `BufferFlags::NoDescriptors` and descriptor types `RWBuffer\|Raw`, and `GetAccelerationStructureHandle` then asks it for a `DescriptorTypeFlags::Buffer` handle it cannot have. Two asserts. This one gets the descriptor it is about to be asked for. |
 | `RHI_Direct3D12.cpp:3969` | The scratch buffer is sized from the bottom level prebuild alone and then reused for the top level build at `:3392`, which overruns whenever the top level needs more. Here it is sized to the larger of the two. |
 
-All three are recorded under "Upstream issues observed".
+All three are recorded in [UpstreamIssues.md](UpstreamIssues.md).
 
 #### Four pipeline parameters have no Vulkan equivalent
 
@@ -5316,7 +5422,7 @@ The group is written for parity, not because the frame needs it.
 | `RHI.h` | Vulkan |
 |---|---|
 | `CmdResetQueryPool` | **Direct3D 12 does nothing here and Vulkan requires it.** This is the one place in the backend where the asymmetry runs that way: a Vulkan query is undefined until it has been reset. It may not run inside a render pass, so it goes through `PrepareTransfer`. |
-| `CmdBeginQuery` on a timestamp pool | Nothing. A timestamp is written at one point, not over a range, and `vkCmdBeginQuery` on a timestamp pool is a validation error. It matches what the reference achieves anyway; see "Upstream issues observed". |
+| `CmdBeginQuery` on a timestamp pool | Nothing. A timestamp is written at one point, not over a range, and `vkCmdBeginQuery` on a timestamp pool is a validation error. It matches what the reference achieves anyway; see [UpstreamIssues.md](UpstreamIssues.md). |
 | `CmdEndQuery` on a timestamp pool | `vkCmdWriteTimestamp2` at `BOTTOM_OF_PIPE`, because Direct3D's `EndQuery` timestamp is taken after the work the scope covers. **It is legal inside a render pass**, which matters: a profile scope around a pass must not tear it the way a reset would. |
 | `GetQueryTimestampFrequency` | `1e9 / timestampPeriod`. Vulkan reports nanoseconds per tick and Direct3D 12 reports ticks per second, which is the inversion the phase document asks for. |
 
@@ -5769,7 +5875,7 @@ engine leaves alone arrives in the backend as `DontCare`.
 Both `DontCare` values now preserve, which is what the reference backend does. `Clear`, `Load`
 and `StoreActionType::None` are unchanged, so a caller that means "discard" still has
 `StoreActionType::None` to say it with. **This is a deliberate divergence from the phase
-document's literal mapping** and it is written up under "Upstream issues observed" below.
+document's literal mapping** and it is written up in [UpstreamIssues.md](UpstreamIssues.md).
 
 #### Queue ownership: `CONCURRENT`, which P5.5 left to this task
 
@@ -8402,389 +8508,13 @@ Answered:
 
 ## Upstream issues observed
 
-Bugs and oddities in upstream code. **Do not fix them here** (Conventions rule 3). Record them,
-and file them upstream as issues if they matter.
-
-<!-- ### <file>:<line> - <description> -->
-
-Noted during the first survey, in `Code/Scripts/NinjaGen/NinjaGen.py`. This port rewrites that
-stale build script, so these get fixed as a side effect rather than as upstream fixes:
-
-- It parses `Esoterica.sln`, which the repo no longer contains. The project moved to
-  `Esoterica.slnx`.
-- `cpp_rule` calls `toolchain.compiler_c` instead of `compiler_cpp`.
-- `-fsanitize-address` is not a valid flag. It should be `-fsanitize=address`.
-- It declares `-std=c++17`, but the project needs C++20.
-
-Also noted, and not fixed:
-
-- `Code/Applications/BuildGenerator/` does not work. It emits rule references with no rule
-  definitions, and it parses the legacy `.sln` GUID format. Left alone on purpose.
-- `Esoterica.slnx` references `Docs/docs/CodingGuidelines.md`, which the repository does not
-  contain.
-
-### `ImguiGizmo_Translate.cpp:76` - selecting an entity while looking down a world axis kills the editor
-
-**The most reachable upstream bug this port has found.** Found by P8.4 on 2026-09-03 while
-verifying mesh picking, and **deterministically reproducible**.
-
-`TranslationGizmo::SetupManipulators` builds each axis's screen-space direction with
-
-```cpp
-( m_axes[axisIdx].m_axisEndSS - ctx.m_positionSS ).ToDirectionAndLength2( m_axes[axisIdx].m_axisDirSS, m_axes[axisIdx].m_axisLengthSS );
-```
-
-then `TryFlipAxes` passes two of those to `Math::CalculateAngleBetweenUnitVectors`, which asserts
-that both are unit length. **When an axis points nearly at the camera its screen-space projection
-is nearly zero long, `ToDirectionAndLength2` yields a zero direction, and the assert fires.**
-
-Backtrace, from the editor launched under gdb:
-
-```
-#2  EE::Math::CalculateAngleBetweenUnitVectors           Code/Base/Math/MathUtils.h:115
-#3  TranslationGizmo::SetupManipulators::$_1( 0, 1 )     ImguiGizmo_Translate.cpp:76
-#4  TranslationGizmo::SetupManipulators                  ImguiGizmo_Translate.cpp:99
-#5  GizmoBase::UpdateAndDraw                             ImguiGizmo_Base.cpp:45
-#6  ImGuiX::Gizmo::UpdateAndDraw                         ImguiGizmo.cpp:229
-#7  MapEditor::DrawViewportUI                            MapEditor.cpp:435
-```
-
-The failing pair is `axisIdx0 = 0`, `axisIdx1 = 1` - **X against Y**, not the vertical axis.
-
-To reproduce, in the map editor on `pbrdemo`: hold right mouse in the viewport, hold `S` for about
-three seconds to back the camera along its own forward axis, nudge the pitch down slightly, release,
-then click any entity. The gizmo appears and the editor dies with
-`Trace/breakpoint trap (core dumped)`.
-
-**Why it matters:** this is the *default* gizmo mode, and "line the camera up with a world axis and
-click something" is an ordinary thing to do in a map editor. `ImguiGizmo_Scale.cpp:71` has the same
-call on the same kind of value, so the scale gizmo is presumably reachable the same way.
-
-**Platform-neutral - `Code/Engine/Imgui/Gizmos/` and `Code/Base/Math/MathUtils.h` are untouched by
-this port - so Windows has it too.** It only halts in a build with `EE_DEVELOPMENT_TOOLS`; with
-asserts compiled out, `CalculateAngleBetweenUnitVectors` returns a meaningless angle and the gizmo
-mis-flips its axes, which is cosmetic. Not fixed here, per Conventions rule 3 and Phase 8's "do
-not" list.
-
-### `GLTF.cpp:111` - the node scale assert is inverted, so glTF skeletal import always fails
-
-Found by P8.2 while looking for a rigged asset. `Import::gltf::GetNodeTransform` reads:
-
-```cpp
-float scale = 1.0f;
-if ( pNode->has_scale )
-{
-    // TODO: log warning
-    EE_ASSERT( pNode->scale[0] != pNode->scale[1] || pNode->scale[1] != pNode->scale[2] );
-    scale = pNode->scale[0];
-}
-```
-
-It asserts that the scale is **non**-uniform. The condition is inverted - the surrounding code wants
-a uniform scale, and takes `scale[0]` as if it had one. Any glTF whose skeleton nodes carry a scale
-trips it.
-
-Two related asserts sit on the same path and fire on the assets that get past the first:
-`GLTF.cpp:435` (correctly requiring a uniform scale) and `Transform.h:71` (the same check inside the
-`Transform` constructor).
-
-Measured against the Khronos glTF sample assets, all four of which fail:
-
-| Asset | Skeleton | Skeletal mesh | Animation |
-|---|---|---|---|
-| Fox | compiles | `Transform.h:71` | "Root scaling detected!" |
-| RiggedFigure | compiles | `Transform.h:71` | `GLTF.cpp:435` |
-| RiggedSimple | compiles | compiles | `GLTF.cpp:435` |
-| CesiumMan | `GLTF.cpp:111` | `Transform.h:71` | `GLTF.cpp:111` |
-
-**Platform-neutral, so Windows has it too, and the "TODO: log warning" says the author knew the
-handling was unfinished.** Not fixed here, per Conventions rule 3. It is why
-`FetchTestAssets.sh` uses FBX through ufbx rather than glTF.
-
-### `UFbx::ReadAnimation` asserts on an animation whose last key sits on the stack end time
-
-`huesitos.fbx`, from assimp's test models, imports its skeleton and skinned mesh fine and then fails
-its animation on
-
-```
-time <= ( pAnimStack->time_end + Math::Epsilon )
-```
-
-A one-epsilon boundary condition in the ufbx import path. Platform-neutral. Found by P8.2, not
-chased further, because `animation_with_skeleton.fbx` imports all three resources and was enough.
-
-### `Server_WS::ConnectClient` asserts that the client is not already in the socket map
-
-Seen once in four editor starts, on the Resource Server that the editor spawns for itself:
-
-```
-m_clientSocketMap.find( clientID ) == m_clientSocketMap.end()
-```
-
-`NetworkServer_WebSockets.cpp:143`. The receive callback calls `ConnectClient` from the `Open`
-message, and again from the `Message` case when `HasConnectedClient` is false. `ConnectClient`
-adds the client to the base class's list first and then asserts that the socket map does not
-already hold it, so any second call for the same `clientID` fires the assert and takes the whole
-Resource Server down with it - and the editor with that.
-
-**The mechanism is not proved**, only the crash. Both call sites are reachable and the ordering
-between them is not obviously serialized, but ixWebSocket delivers a connection's callbacks on
-that connection's own thread, so the simple two-threads race is not the explanation. Whoever
-chases this should start by logging the `clientID` and the calling path at both sites.
-
-Platform-neutral upstream code, so Windows has it too. It is **intermittent**: three of four
-starts on this machine were clean.
-
-### `Network::Server` and `Network::Client` never drain `m_receivedMessages` at shutdown
-
-**This is the Resource Server's "Memory leak detected" on exit, and it is not a Linux defect.**
-
-`Server::m_receivedMessages` is a `TLockFreeQueue<Message*>`. The websocket receive callback runs
-on ixWebSocket's per-connection threads and fills it with `EE::New<Message>`
-(`NetworkServer_WebSockets.cpp:35`). It is drained in exactly one place: `Server::Update`, on the
-main thread, which deletes each message as it handles it (`NetworkServer.cpp:24-37`).
-
-**Nothing drains it at shutdown.** `~Server()` is `= default`, and `Server_WS::Stop` deletes the
-`ix::WebSocketServer` without touching the queue. So every message that arrives after the last
-`Update` and before `stop()` is allocated and never freed, and `rpmalloc_finalize` reports it:
-
-```
-Shutting down low level socket/threading support.
-Memory leak detected (span->list_size == span->used_count) at Code/Base/ThirdParty/rpmalloc/rpmalloc.c:1424
-```
-
-**`Client` has the same shape** - same undrained queue, same `= default` destructor
-(`NetworkClient.h:31`, `:81`) - so the engine and the editor can hit it too. They rarely do,
-because a client's inbound traffic at shutdown is much thinner than a server's.
-
-Both files are platform-neutral. **Windows has this too**, and has probably never noticed, because
-it only fires when a message lands in that window.
-
-#### Why it looks like a Linux defect, and how to tell it apart
-
-- **It is intermittent.** Three runs in four on this machine, with **zero external clients**: the
-  three compiler workers are themselves websocket clients and heartbeat continuously, so the
-  server always has traffic to catch.
-- **It does not reproduce under `gdb`**, which is the tell. The debugger changes the timing enough
-  that the last `Update` drains the queue.
-- **The engine shuts down clean**, which made it look Resource-Server-specific. It is not; it is
-  `Server` versus `Client` traffic volume.
-
-Do not go looking for a missing `ShutdownThreadHeap`. `Memory::InitializeThreadHeap` is called on
-these threads and deliberately never finalized - the comment in `Memory.cpp:68` says so, and
-relies on `rpmalloc_finalize` to release the heaps. That is fine. The leak is a real one.
-
-### `ResourceServerContext::Initialize` leaks its `CompilerRegistry` on every failure path
-
-Found in P7.3, and true on both platforms by inspection. `Initialize` allocates
-`m_pCompilerRegistry` with `EE::New<CompilerRegistry>`, then returns false if the network server
-cannot bind, if the compiled resource DB will not connect, or on any later step. Nothing deletes
-it, so `~ResourceServerContext` asserts on `m_pCompilerRegistry == nullptr`. Windows never sees
-it because the single-instance mutex in `_tWinMain` stops a second server reaching the bind.
-
-### `ResourceServerApplication::Shutdown` asserts that the application was initialized
-
-Same shape as the `Engine::Shutdown` entry below, and the same on both platforms.
-`Win32Application::Run` and `LinuxApplication::Run` both call `Shutdown()` when `Initialize()`
-returns false, before setting `m_initialized`. `Shutdown` opens with `EE_ASSERT( WasInitialized() )`,
-so a failed start asserts instead of reporting the real error. The Linux sibling returns early
-instead of asserting; the upstream file is untouched.
-
-### `Engine::Shutdown` crashes when `Engine::Initialize` failed
-
-Found during the P6.7 bring-up, and true on both platforms by inspection. A failed `Initialize`
-leaves `RenderSystem` unconstructed, and `Shutdown` calls `RenderSystem::WaitAllQueuesIdle`
-anyway, which dereferences a null queue. It only shows on a failed start, so it hides the real
-error behind a segfault. `Engine::m_initializationStageReached` already records how far the start
-got, and `Shutdown` could tear down only what that stage covers.
-
-### `RHI.h:1044` - `LoadAction` defaults to discarding every attachment
-
-`LoadAction` is zero initialised, `LoadActionType::DontCare` is zero and `StoreActionType::DontCare`
-is zero, so every action a caller does not set says "discard". That is harmless on Direct3D 12,
-which has no load or store actions and preserves a bound render target either way, and it is not
-harmless on any backend that honours them.
-
-**No engine pass sets a store action at all**, and `RenderPass_DebugDraw.cpp:1316` builds a
-`LoadAction` that sets only the depth action and then binds the frame's final colour target with
-it at `:1358`. On a backend that honours the values, the first discards every render pass output
-in the frame and the second discards the rendered frame.
-
-The Vulkan backend maps both `DontCare` values to preserve, and leaves `Clear`, `Load` and
-`StoreActionType::None` exact. A caller that really wants an attachment left alone still has
-`StoreActionType::None`. Worth raising upstream: the fix there is either a non-discarding default
-or explicit actions at each call site.
-
-### `RHI_Direct3D12.cpp:3981`, `:3978` and `:3969` - three faults in the raytracing path
-
-None has ever run: nothing in the engine creates an acceleration structure.
-
-- **`:3981`** has the line that fills in `Direct3D12AccelerationStructure::m_instanceBuffer`
-  commented out, and `:3390` dereferences it during the top level build. That is a null pointer.
-- **`:3978`** creates the top level structure buffer with `BufferFlags::NoDescriptors` and
-  descriptor types `RWBuffer|Raw`, and `GetAccelerationStructureHandle` at `:4002` then asks it for
-  a `DescriptorTypeFlags::Buffer` handle. Two asserts fire: one for the missing descriptor type and
-  one for the missing handle.
-- **`:3969`** sizes the scratch buffer from the bottom level prebuild alone and then reuses it for
-  the top level build at `:3392`. It overruns whenever the top level needs more scratch, which is
-  common.
-
-The Vulkan backend does not reproduce any of the three. Each is written up at the line in
-`RHI_Vulkan.cpp`.
-
-### `RHI_Direct3D12.cpp:3490` - `CmdBeginQuery` calls `BeginQuery` on a timestamp query
-
-`ID3D12GraphicsCommandList::BeginQuery` does not support `D3D12_QUERY_TYPE_TIMESTAMP`; a timestamp
-is written by `EndQuery` alone. The reference switches on exactly that type and calls `BeginQuery`
-for it, which the debug layer rejects.
-
-Nothing in the engine calls `CmdBeginQuery`, so it has never run. The Vulkan backend does nothing
-for a timestamp begin, which is what the reference effectively achieves minus the complaint.
-
-### `RHI_Direct3D12.cpp:3714` - `CmdWriteDebugMarker` packs its auto flags two different ways
-
-The `InOut` branch builds its flag from the enum's ordinal, `UINT( MarkerTypeFlags::In ) << 30`,
-which is `1 << 30`. The single-marker branch builds it from the bit field, `markerType << 30`,
-and `TBitFlags` converts to `1 << flagIndex`, so the same `In` becomes `2 << 30`. One of the two
-is wrong and they cannot both be right.
-
-Nothing in the engine calls `CmdWriteDebugMarker` and `DeviceCapabilities::m_breadcrumbs` is
-`false` on both backends, so it costs nothing today. The Vulkan backend reproduces both branches
-exactly, so the two write identical bytes; fixing it belongs upstream, next to a decision about
-which one was meant.
-
-### `RHI_Direct3D12.cpp:284` - `RGB565_UNorm` and `BGR565_UNorm` map to the same DXGI format
-
-Both return `DXGI_FORMAT_B5G6R5_UNORM`. Under DXGI's naming, which lists a packed format's
-components least significant first, that is the `BGR565` one; `RGB565` has no DXGI format at all.
-Vulkan has both, so the Vulkan backend could tell them apart and chooses not to: mapping them
-faithfully would make the two backends draw the same asset differently. Nothing in the engine uses
-either format, so this costs nothing today. Recorded because a future reader will see two
-`DataFormat` members reaching one `VkFormat` and assume it is a copy-paste slip.
-
-### Eleven functions are `inline` on one side of the declaration only
-
-Eight headers declare a member `inline` whose only definition is out of line in the matching
-`.cpp` (`ResourceRecord.h`, `InputSystem.h`, `ImguiX.h`, `AnimationSkeleton.h`,
-`Animation_RuntimeGraph_Instance.h` twice, `Animation_RuntimeGraphNode_Blend1D.h`,
-`ResourceCompilerContext.h`). `MathUtils.cpp` has the mirror image: three `ToString` definitions
-marked `inline` where the header declares them `EE_BASE_API` without it.
-
-Both are ill-formed. An inline function has to be defined in every translation unit that uses it,
-and clang emits nothing for a definition no other TU can see. MSVC emits them anyway because
-`__declspec( dllexport )` forces it, so the bug is invisible on Windows. Fixed here by dropping
-`inline`, which is correct on both compilers. Worth an upstream PR: it is a one-word change per
-site and it costs Windows nothing.
-
-### `va_list` is read twice in five places
-
-`CompileContext::LogError`, `LogWarning` and `LogMessage` each `va_start` once and then hand the
-same `va_list` to two consumers - `SystemLog::AddEntryVarArgs` and `m_log.Log*`. `ImguiX.h`'s two
-`DrawShadowedText` overloads do the same to draw the shadow and then the text.
-
-On MSVC x64 a `va_list` is a pointer passed by value, so the callee's advance does not disturb the
-caller's copy and the second read happens to work. In the System V ABI it is a one-element array
-that decays to a pointer, the callee advances the *caller's* state, and the second read walks off
-the end of the argument area. This segfaulted every standalone resource compile, immediately after
-the resource had compiled successfully. Fixed here with `va_copy`. This one is a genuine latent
-bug on Windows too, not merely a portability difference, and is the better upstream PR of the two.
-
-### The Reflector hardcodes Windows path separators in five places
-
-`ReflectorSettings.h` spells `g_codeFolderPath`, `g_buildFolderPath`, `g_buildTempFolderPath`,
-`g_runtimeEngineProjectPath` and `g_toolsEngineProjectPath` with backslashes, and
-`ClangParser.cpp`'s `g_includePaths` array does the same. `Reflector.cpp` also appends `.vcxproj`
-paths verbatim. On Linux a backslash is an ordinary filename character, so this created a
-directory literally named `Build\_Temp\` in the repository root and found no headers at all.
-
-Two of the `g_includePaths` entries also have the wrong case: `EABase\include\common` against
-`EABase/include/Common`, and `EASTL\include` against `EASTL/Include`.
-
-### The Reflector's builtin type table assumes LLP64
-
-`ClangUtils.cpp` maps `clang::BuiltinType::ULongLong` to `uint64_t` and has no case for `ULong`.
-That is correct on Windows, where `uint64_t` is `unsigned long long`. Linux is LP64, so
-`uint64_t` is `unsigned long`, and every 64-bit property failed with
-"Cannot resolve property typename (uint64_t)".
-
-### `FileSystem.h` has an inline that never returns
-
-`UpdateBinaryFile` at line 97 forwards to its overload and drops the result:
-
-```cpp
-EE_FORCE_INLINE bool UpdateBinaryFile( char const* pFilePath, Blob const& fileData, bool* pWasFileUpdated = nullptr )
-{ UpdateBinaryFile( pFilePath, fileData.data(), fileData.size(), pWasFileUpdated ); }
-```
-
-Falling off the end of a non-void function is undefined behaviour. Every caller reads a garbage
-return value. Not fixed here (Conventions rule 3), and worth reporting upstream: this one is a
-real bug on Windows too.
-
-### `Math_Win32.h` truncates `GetMostSignificantBit` above 2^32
-
-`Code/Base/Math/Platform/Math_Win32.h` casts its argument to `unsigned long` before the scan:
-
-```cpp
-_BitScanReverse64( &index, (unsigned long) value );
-```
-
-`unsigned long` is 32 bits on Windows, so every value above `2^32` gives the wrong answer.
-`Math_Linux.h` uses `__builtin_clzll` and is correct for the full 64-bit range. **The two
-platforms therefore disagree**, which is worse than either bug alone, so it is commented in the
-Linux header as well as recorded here. Not fixed on the Win32 side (Conventions rule 3).
-
-### `SystemLog_Win32.cpp` drops newlines on medium-length messages
-
-`TraceMessage` bounds its newline append at `numCharsWritten < 509` while the buffer is 2048
-bytes, so messages between 509 and 2045 characters silently lose their newline.
-`SystemLog_Linux.cpp` bounds it at the real buffer size. Commented in the Linux file.
-
-### `IniFile.cpp` puts its whole body inside `#if defined(_MSC_VER)`
-
-The guard opens at line 4 and its matching `#endif` is the **last line of the file**. On any
-non-MSVC compiler the translation unit produces nothing at all: it compiles cleanly and leaves
-`IniFile::Load`, `Save`, `GetString` and `SetString` undefined until something tries to link an
-executable. This is the single most expensive bug found so far, because there is no compile
-error to point at.
-
-### Two `#include` directives use a backslash
-
-`Code/Base/Utils/GlobalRegistryBase.h` and
-`Code/Base/Input/InputDevices/InputDevice_Controller.cpp`. clang does not treat `\` as a path
-separator inside an include, so neither header was found on Linux. MSVC accepts `/`, so fixing
-them costs Windows nothing.
-
-### Path case mismatches between the `.vcxproj` files and the disk
-
-Found on 2026-08-27. MSBuild ignores case, so Windows builds fine. On Linux the file is simply
-not found. `SyncUpstream.py` writes the on-disk spelling into `UpstreamProjects.txt` and warns.
-**Not fixed in the `.vcxproj` files** (Conventions rule 3, TouchedFiles.md).
-
-| Project | Listed | On disk | Affects the build |
-|---|---|---|---|
-| `Esoterica.Base` | `ThirdParty/enkits/TaskScheduler.cpp` | `ThirdParty/EnkiTS/TaskScheduler.cpp` | yes |
-| `Esoterica.Engine.Runtime` | `Navmesh/NavPower.cpp` | `Navmesh/Navpower.cpp` | yes |
-| `Esoterica.Base` | `ThirdParty/enkits/TaskScheduler.h` | `ThirdParty/EnkiTS/TaskScheduler.h` | no, header |
-| `Esoterica.Base` | `ThirdParty/enkits/TaskScheduler_Esoterica.h` | `ThirdParty/EnkiTS/TaskScheduler_Esoterica.h` | no, header |
-| `Esoterica.Base` | `ThirdParty/enkits/LockLessMultiReadPipe.h` | `ThirdParty/EnkiTS/LockLessMultiReadPipe.h` | no, header |
-| `Esoterica.Applications.Reflector` | `Resources/Resource.h` | `Resources/resource.h` | no, header |
-| `Esoterica.Applications.BuildGenerator` | `Resources/Resource.h` | `Resources/resource.h` | no, header |
-
-The header rows no longer reach the build, because `SyncUpstream.py` ignores `<ClInclude>`. They
-are recorded so nobody investigates them twice.
-
-### `RHI_Direct3D12.cpp` has no platform guard
-
-`Code/Base/Render/RHI_Direct3D12.cpp` is 6084 lines of Direct3D 12 with no `#if _WIN32` at the
-top and no platform suffix in its name. The same is true of the vendored
-`Code/Base/ThirdParty/D3D12MemoryAllocator/`. Nothing about the file marks it as Windows-only,
-so nothing but an explicit entry in `Exclusions.txt` keeps it out of a Linux build.
-
-This is fine for upstream, which is Windows-only. Recorded because it is the single clearest
-argument against deciding what to build from filenames.
-
-The case mismatches are worth reporting upstream. They cost nothing on Windows, so upstream will
-not notice them on its own.
+Moved to **[UpstreamIssues.md](UpstreamIssues.md)** on 2026-09-04. That document is now the only
+place upstream bugs are recorded, so there is one list to read and one place to add to.
+
+It carries every item this section held, each with what the bug is in plain terms and what was
+done about it. The default is still what [Conventions rule 3](00-Conventions.md#rule-3---change-nothing-you-were-not-asked-to-change)
+says: record an upstream bug and move on. A handful are fixed in the fork, and each of those says
+so and has a row in [TouchedFiles.md](TouchedFiles.md).
 
 ---
 

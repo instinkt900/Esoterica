@@ -93,7 +93,7 @@ While you work in this repository you may **not**:
 - Fix typos in upstream comments.
 
 Each one of these causes a merge conflict later, and gains nothing. If you find a real upstream
-bug, note it in [Progress.md](Progress.md) under "Upstream issues observed" and move on. Do not
+bug, note it in [UpstreamIssues.md](UpstreamIssues.md) and move on. Do not
 fix it here. File it upstream as an issue instead. Upstream accepts bug reports, and rejects
 large PRs.
 

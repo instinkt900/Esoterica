@@ -162,8 +162,6 @@ namespace EE::Render
 
         for ( MeshLODSettings const& lod : meshGroup.m_lodSettings )
         {
-            uint32_t const lodGeometryBaseIndex = uint32_t( mesh.m_geometry.size() );
-
             // Do we have an explicit LOD mesh specified, if so, use that
             DataPath lodMeshDataPath;
             if ( !lod.m_filenameSuffix.empty() )
@@ -249,8 +247,17 @@ namespace EE::Render
 
             bool isValidMeshData = false;
 
-            for ( GeometryBuilder const& geometryBuilder : convertedMesh.m_geometryBuilders )
+            // Where each source geometry ended up in this LOD, or InvalidIndex if it was not emitted.
+            // A geometry is skipped when it is empty, when its clusters come out empty, or when
+            // simplification fails on a LOD past the first, so the emitted count can be lower than
+            // the source count and the two cannot be indexed by the same running counter.
+            TVector<int32_t> lodGeometryIndices;
+            lodGeometryIndices.resize( convertedMesh.m_geometryBuilders.size(), InvalidIndex );
+
+            for ( int32_t builderIdx = 0; builderIdx < (int32_t) convertedMesh.m_geometryBuilders.size(); builderIdx++ )
             {
+                GeometryBuilder const& geometryBuilder = convertedMesh.m_geometryBuilders[builderIdx];
+
                 if ( geometryBuilder.GetVertices().empty() || geometryBuilder.GetIndices().empty() )
                 {
                     ctx.LogWarning( "Empty geometry skipped" );
@@ -306,6 +313,7 @@ namespace EE::Render
                         continue;
                     }
 
+                    lodGeometryIndices[builderIdx] = (int32_t) mesh.m_geometry.size();
                     mesh.m_geometry.emplace_back( eastl::move( geometry ) );
                 }
             }
@@ -314,26 +322,27 @@ namespace EE::Render
 
             if ( isValidMeshData )
             {
-                uint32_t geometryIndex = 0;
                 for ( Import::Mesh::Submesh const& importedSubmesh : importedMesh->GetSubmeshes() )
                 {
-                    // Need to account for empty geometries that are skipped earlier
-                    GeometryBuilder const& sourceGeometryBuilder = convertedMesh.m_geometryBuilders[geometryIndex];
-                    if ( sourceGeometryBuilder.GetVertices().empty() || sourceGeometryBuilder.GetIndices().empty() )
+                    // Look up the geometry this submesh refers to. Skip the submesh when that
+                    // geometry was not emitted for this LOD.
+                    if ( importedSubmesh.m_geometryIdx < 0 || importedSubmesh.m_geometryIdx >= (int32_t) lodGeometryIndices.size() )
                     {
                         continue;
                     }
 
-                    Geometry const& geometry = mesh.m_geometry[lodGeometryBaseIndex + geometryIndex];
-                    if ( geometry.m_clusterVertices.empty() || geometry.m_clusterTriangles.empty() )
+                    int32_t const geometryIndex = lodGeometryIndices[importedSubmesh.m_geometryIdx];
+                    if ( geometryIndex == InvalidIndex )
                     {
                         continue;
                     }
+
+                    Geometry const& geometry = mesh.m_geometry[geometryIndex];
 
                     Mesh::Submesh submesh = {};
                     submesh.m_ID = importedSubmesh.m_ID;
                     submesh.m_materialNameID = importedSubmesh.m_materialID;
-                    submesh.m_geometryIdx = lodGeometryBaseIndex + geometryIndex;
+                    submesh.m_geometryIdx = geometryIndex;
                     submesh.m_lodMask = uint8_t( 1 ) << uint8_t( mesh.m_geometryLODDistance.size() );
 
                     mesh.m_submeshes.emplace_back( eastl::move( submesh ) );
@@ -349,8 +358,6 @@ namespace EE::Render
                     {
                         combinedAABB = AABB::GetCombinedBox( transformedAABB, combinedAABB );
                     }
-
-                    geometryIndex++;
                 }
 
                 mesh.m_geometryLODDistance.push_back( lod.m_lodDistance );

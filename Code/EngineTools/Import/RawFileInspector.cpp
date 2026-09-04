@@ -151,7 +151,21 @@ namespace EE::Import
 
                 auto pImportableItem = EE::New<ImportableMesh>();
                 pImportableItem->m_sourceFile = resourcePath;
-                pImportableItem->m_nameID = StringID( mesh.name );
+
+                // Mesh names are optional in gltf, but an unnamed importable item is not valid, so
+                // fall back to the mesh index. Meshes with no name are always imported whole, since
+                // the mesh filter in the readers cannot match them by name either.
+                if ( mesh.name != nullptr && mesh.name[0] != 0 )
+                {
+                    pImportableItem->m_nameID = StringID( mesh.name );
+                }
+                else
+                {
+                    InlineString generatedName;
+                    generatedName.sprintf( "Mesh_%d", m );
+                    pImportableItem->m_nameID = StringID( generatedName.c_str() );
+                }
+
                 pImportableItem->m_isSkeletalMesh = pSceneData->meshes[m].weights_count > 0;
 
                 if ( pMaterial == nullptr )

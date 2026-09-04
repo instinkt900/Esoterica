@@ -108,7 +108,9 @@ namespace EE::Import::gltf
             if ( pNode->has_scale )
             {
                 // TODO: log warning
-                EE_ASSERT( pNode->scale[0] != pNode->scale[1] || pNode->scale[1] != pNode->scale[2] );
+                // Only uniform scale is supported, since we take a single component below. This check
+                // matches the one in the animation path, which is written the same way round.
+                EE_ASSERT( pNode->scale[0] == pNode->scale[1] && pNode->scale[1] == pNode->scale[2] );
                 scale = pNode->scale[0];
             }
 
