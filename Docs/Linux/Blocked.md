@@ -141,7 +141,6 @@ authoritative status of each file; the rows below say what to do about it.
 
 | # | What to check | Files | Detail in |
 |---|---|---|---|
-| 2 | **The two `return`s added to `FileSystem.h`.** P8.8's fix for an upstream UB defect, and the only P8.8 change that reaches Direct3D 12. Nothing calls the affected overloads today, so a build is the whole check | `Code/Base/FileSystem/FileSystem.h` | [TouchedFiles.md](TouchedFiles.md), Progress.md 2026-09-04 P8.8 entry |
 | 3 | **The Windows frame compared against the Linux one.** Phase 5 criterion 7. The 2026-09-04 run confirmed pbrdemo renders and **looks right by eye** - no capture, no pixel diff, so a subtle difference in lighting or shadowing would not have been seen | all shader edits | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
 | 4 | **Resource compiler output byte-identical to Windows.** Phase 3 criterion 4. Debug and Release on Linux already agree byte for byte across all 38 files, which rules out the float-formatting and optimisation differences and leaves only genuinely platform-dependent ones | `Esoterica.Applications.ResourceCompiler` | Progress.md, Phase 3 entry |
 | 5 | **Whether debug draw itself ran on Windows.** P5.20's `EE_INTERSTAGE_HANDLE` and `EE_PER_PRIMITIVE` are `__spirv__`-gated no-ops on Direct3D 12 and they **compile and render**, but the 2026-09-04 run did not confirm the debug-draw path they live on was exercised. Cheapest of the five: turn on a debug draw view in the editor and look | `RHI.esh`, `DebugDraw.esf`, `DebugDrawMesh.esf`, `RendererTypes.esh` | Progress.md, P5.20 and 2026-09-04 entries |
@@ -153,11 +152,13 @@ root arguments; `EE_INDIRECT_PIXEL_ENTRY_INIT`; the two Phase 7 `#elif` edits in
 and `BaseModule.cpp`; and `HLSL_STATIC_ASSERT`, whose shared-struct size checks are absent on SPIR-V
 and **fired and passed** the moment a Windows machine compiled the shaders.
 
-**What left this queue on 2026-09-06**: three rows.
+**What left this queue on 2026-09-06**: four rows.
 
 - **Row 1** - Release and Shipping both built with 0 warnings and 0 errors, including Shipping's
   LTO pass, and the Editor and `EsotericaEngine.exe` both launched (Release) and stayed responsive
   with the Resource Server serving `PBRDemo.map`.
+- **Row 2** - `FileSystem.h`'s two `return`s are included by `Code/Base/FileSystem/FileSystem.cpp`,
+  part of `Esoterica.Base`, which the row 1 build covered. A build was the whole check.
 - **Rows 6 and 8** - opening `data://porttests/sponza/sponza.mesh`'s Mesh Component in the editor
   closed both at once: the editor survived selecting it, and the submesh rows and the Mesh
   editor's Submeshes window drew correctly.

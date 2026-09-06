@@ -709,6 +709,12 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-06 - Windows queue row 2 closed: `FileSystem.h`'s two `return`s
+
+No separate check needed. `Code/Base/FileSystem/FileSystem.cpp` includes `FileSystem.h` and is part
+of `Esoterica.Base`, which the row 1 Release and Shipping builds already compiled with 0 errors. A
+build was the whole check, as the row's own description said.
+
 ### 2026-09-06 - Windows queue rows 6 and 8 closed: Sponza's Mesh Component in the editor
 
 Opened `data://porttests/sponza/sponza.mesh` (compiled in the row 6 entry below) in the editor and
