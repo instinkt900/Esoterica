@@ -709,6 +709,28 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-06 - Windows queue row 1: Release and Shipping MSBuild, and the standalone engine
+
+**Retired the rest of [Blocked.md](Blocked.md)'s Windows queue row 1.** Debug was the only
+configuration verified before this; Release and Shipping had never been built on Windows, and
+`Esoterica.Applications.Engine` had never been launched there at all.
+
+- `MSBuild Esoterica.slnx /p:Configuration=Release` - 0 warnings, 0 errors. Built Editor, Engine,
+  ResourceServer, ResourceCompiler and Tester.
+- `MSBuild Esoterica.slnx /p:Configuration=Shipping` - 0 warnings, 0 errors. Shipping only builds
+  `EsotericaEngine.exe` per the `.slnx` (Editor, Reflector, ResourceCompiler, ResourceServer and
+  BuildGenerator are excluded from that config), and its LTO pass ("Generating code") completed -
+  this is the step most likely to expose a Linux/Windows toolchain difference, and it did not.
+- Launched `EsotericaEditor.exe` (Release): it spawned the Resource Server and its compiler
+  workers and stayed responsive.
+- Launched `EsotericaResourceServer.exe` then `EsotericaEngine.exe -map data://Demo/Render/PBR/PBRDemo.map`
+  (Release): both stayed alive and responsive for ~20 seconds with the map served. This is the
+  first time the standalone engine has run on Windows.
+
+Not a visual check - no screenshot, no comparison to the Linux frame. That is queue rows 3 and 5,
+still open. Both apps have their own in-window logging, so stdout/stderr redirection came back
+empty; process liveness and responsiveness is what was checked.
+
 ### 2026-09-04 - `ImGui::Text( nullptr )`. **A one-line segfault**, and the third defect that unnamed glTF nodes caused. Unplanned
 
 **Selecting a Sponza static mesh component in the map editor segfaulted the editor.** Third session

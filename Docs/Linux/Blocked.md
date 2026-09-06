@@ -122,12 +122,13 @@ decision was to unblock P9.4 and record the cost here.
 
 ## Needs a Windows machine
 
-**This was the highest-risk queue in the port, and on 2026-09-04 most of it was measured.** MSBuild
-built `main` in **Debug** and the editor rendered pbrdemo with picking, which retired five of the
-eight rows that used to be here - including the `Buffer<uint2>` shader change, the one with no
-`__linux__` branch to hide behind. **Nothing left here is a "this might be silently broken".** What
-remains is a second and third configuration, two comparisons nobody has run, and one render path
-nobody looked at.
+**This was the highest-risk queue in the port, and most of it has now been measured.** 2026-09-04
+built `main` in **Debug** and the editor rendered pbrdemo with picking, retiring five of the eight
+rows that used to be here - including the `Buffer<uint2>` shader change, the one with no
+`__linux__` branch to hide behind. 2026-09-06 built Release and Shipping and launched the
+standalone engine, retiring row 1. **Nothing left here is a "this might be silently broken".** What
+remains is two comparisons nobody has run, one render path nobody looked at, and the glTF, deadlock
+and submesh-label checks below.
 
 **One defect was found and fixed**: this port had hoisted `dxcapi.h` above `d3d12shader.h` in
 `ShaderReflection_ShaderCompiler.h`, and the Windows Reflector stopped compiling. PR #89. Read the
@@ -140,7 +141,6 @@ authoritative status of each file; the rows below say what to do about it.
 
 | # | What to check | Files | Detail in |
 |---|---|---|---|
-| 1 | **Release and Shipping with MSBuild, and the standalone engine.** **Debug is verified**, 2026-09-04, and it built the whole tree. The other two configurations have still never been run, and Shipping's LTO is where a Linux/Windows toolchain difference would surface. **Only the editor was run** - `Esoterica.Applications.Engine` has not been launched on Windows at all | all | [AGENTS.md](../../AGENTS.md#definition-of-done), Progress.md 2026-09-04 entry |
 | 2 | **The two `return`s added to `FileSystem.h`.** P8.8's fix for an upstream UB defect, and the only P8.8 change that reaches Direct3D 12. Nothing calls the affected overloads today, so a build is the whole check | `Code/Base/FileSystem/FileSystem.h` | [TouchedFiles.md](TouchedFiles.md), Progress.md 2026-09-04 P8.8 entry |
 | 3 | **The Windows frame compared against the Linux one.** Phase 5 criterion 7. The 2026-09-04 run confirmed pbrdemo renders and **looks right by eye** - no capture, no pixel diff, so a subtle difference in lighting or shadowing would not have been seen | all shader edits | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
 | 4 | **Resource compiler output byte-identical to Windows.** Phase 3 criterion 4. Debug and Release on Linux already agree byte for byte across all 38 files, which rules out the float-formatting and optimisation differences and leaves only genuinely platform-dependent ones | `Esoterica.Applications.ResourceCompiler` | Progress.md, Phase 3 entry |
@@ -154,6 +154,11 @@ change across all six shaders (picking included, because click-selection works);
 root arguments; `EE_INDIRECT_PIXEL_ENTRY_INIT`; the two Phase 7 `#elif` edits in `ResourceServerUI.cpp`
 and `BaseModule.cpp`; and `HLSL_STATIC_ASSERT`, whose shared-struct size checks are absent on SPIR-V
 and **fired and passed** the moment a Windows machine compiled the shaders.
+
+**What left this queue on 2026-09-06**: row 1, Release and Shipping with MSBuild and the standalone
+engine. Both configurations built with 0 warnings and 0 errors, including Shipping's LTO pass, and
+the Editor and `EsotericaEngine.exe` both launched (Release) and stayed responsive with the
+Resource Server serving `PBRDemo.map`. See that day's entry in Progress.md.
 
 ---
 
