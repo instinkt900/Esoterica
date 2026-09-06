@@ -145,9 +145,7 @@ authoritative status of each file; the rows below say what to do about it.
 | 3 | **The Windows frame compared against the Linux one.** Phase 5 criterion 7. The 2026-09-04 run confirmed pbrdemo renders and **looks right by eye** - no capture, no pixel diff, so a subtle difference in lighting or shadowing would not have been seen | all shader edits | [TouchedFiles.md](TouchedFiles.md#shader-edits) |
 | 4 | **Resource compiler output byte-identical to Windows.** Phase 3 criterion 4. Debug and Release on Linux already agree byte for byte across all 38 files, which rules out the float-formatting and optimisation differences and leaves only genuinely platform-dependent ones | `Esoterica.Applications.ResourceCompiler` | Progress.md, Phase 3 entry |
 | 5 | **Whether debug draw itself ran on Windows.** P5.20's `EE_INTERSTAGE_HANDLE` and `EE_PER_PRIMITIVE` are `__spirv__`-gated no-ops on Direct3D 12 and they **compile and render**, but the 2026-09-04 run did not confirm the debug-draw path they live on was exercised. Cheapest of the five: turn on a debug draw view in the editor and look | `RHI.esh`, `DebugDraw.esf`, `DebugDrawMesh.esf`, `RendererTypes.esh` | Progress.md, P5.20 and 2026-09-04 entries |
-| 6 | **The three glTF import fixes - build and CLI compile done, the GUI half still open.** **2026-09-06** built all three under MSBuild Release with 0 warnings, force-recompiled `Boulder.mesh`, `Floor.mesh` and `SkyDome.mesh` (byte-identical to the prior compile, matching the Linux result) and compiled `MaterialBall.mesh` fresh. Then fetched the actual Khronos Sponza sample (`glTF-Sample-Assets/Models/Sponza`, 0 named nodes, the exact shape that segfaulted the editor on Linux) into `Data/PortTests/` and compiled it standalone with `EsotericaResourceCompiler.exe -compile` - it compiled with warnings (missing material mappings, expected with no descriptor written) and did not crash. **What that does not cover**: the crash this fixed lives in `PropertyGrid_SubmeshSettings.cpp`, in the Mesh Component's property grid inside the editor GUI, not in the standalone compile path. Opening the compiled Sponza mesh's Mesh Component in the editor and confirming it survives selection is still open, and is the same action item 8 needs | `Formats/GLTF.cpp`, `RawFileInspector.cpp`, `ResourceCompiler_RenderMesh.cpp` | [UpstreamIssues.md](UpstreamIssues.md) items 2, 3 and 4; Progress.md 2026-09-04 and 2026-09-06 glTF entries |
 | 7 | **Whether MSVC deadlocks on the `DataFileSystem` re-entrant lock too.** The fix is in and needs no Windows check of its own - releasing a lock before a callback is correct either way. What is worth knowing is whether the **bug** reproduces there, because that decides whether the upstream report says "deadlocks on Windows" or "undefined behaviour that MSVC happens to survive". Re-locking a non-recursive `std::mutex` is UB; libstdc++ blocks on it. To check, open the Resource Importer on `main` before this fix, select any raw file, and save a descriptor | `DataFileSystem.cpp:1086`, `:1270` | [UpstreamIssues.md](UpstreamIssues.md) item 31 |
-| 8 | **The two unnamed-submesh label fixes.** Neither can behave differently on Windows - one is an `IsValid()` guard and the other a fallback string - so a build is the whole check. Both were verified against the crash mechanism in a headless ImGui context rather than in the editor, so **nobody has yet seen the fixed rows drawn**: open the Mesh Component of a mesh with unnamed submeshes and confirm the rows read `Submesh 0`, `Submesh 1` and so on, and that the Mesh editor's Submeshes window reads `Unnamed` instead of `(null)`. **2026-09-06** put a compiled asset in place for this: `data://porttests/sponza/sponza.mesh`, 103 unnamed submeshes, already sitting in `CompiledData` - open it rather than re-fetching or re-importing anything | `PropertyGrid_SubmeshSettings.cpp`, `ResourceEditor_Mesh.cpp` | [UpstreamIssues.md](UpstreamIssues.md) item 32 |
 
 **What left this queue on 2026-09-04**, so that nobody re-adds it: open question 8's `Buffer<uint2>`
 change across all six shaders (picking included, because click-selection works); P5.17's indirect
@@ -155,10 +153,16 @@ root arguments; `EE_INDIRECT_PIXEL_ENTRY_INIT`; the two Phase 7 `#elif` edits in
 and `BaseModule.cpp`; and `HLSL_STATIC_ASSERT`, whose shared-struct size checks are absent on SPIR-V
 and **fired and passed** the moment a Windows machine compiled the shaders.
 
-**What left this queue on 2026-09-06**: row 1, Release and Shipping with MSBuild and the standalone
-engine. Both configurations built with 0 warnings and 0 errors, including Shipping's LTO pass, and
-the Editor and `EsotericaEngine.exe` both launched (Release) and stayed responsive with the
-Resource Server serving `PBRDemo.map`. See that day's entry in Progress.md.
+**What left this queue on 2026-09-06**: three rows.
+
+- **Row 1** - Release and Shipping both built with 0 warnings and 0 errors, including Shipping's
+  LTO pass, and the Editor and `EsotericaEngine.exe` both launched (Release) and stayed responsive
+  with the Resource Server serving `PBRDemo.map`.
+- **Rows 6 and 8** - opening `data://porttests/sponza/sponza.mesh`'s Mesh Component in the editor
+  closed both at once: the editor survived selecting it, and the submesh rows and the Mesh
+  editor's Submeshes window drew correctly.
+
+See that day's entries in Progress.md.
 
 ---
 

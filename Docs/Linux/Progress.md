@@ -709,6 +709,15 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-06 - Windows queue rows 6 and 8 closed: Sponza's Mesh Component in the editor
+
+Opened `data://porttests/sponza/sponza.mesh` (compiled in the row 6 entry below) in the editor and
+selected its Mesh Component. **No crash** - the segfault this fixed on Linux does not reproduce on
+Windows either - and the submesh rows read `Submesh 0`, `Submesh 1` and so on rather than an
+invalid `StringID`. The Mesh editor's Submeshes window read `Unnamed` rather than `(null)`. Frames
+looked normal, no other regressions noticed. Closes both rows in one action, as the row 6 entry
+below anticipated.
+
 ### 2026-09-06 - Windows queue row 6: glTF import fixes, build and CLI compile
 
 **Narrowed row 6 to its GUI half.** All three glTF fixes (`GLTF.cpp:111`, `RawFileInspector.cpp:154`,
