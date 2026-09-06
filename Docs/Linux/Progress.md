@@ -709,6 +709,30 @@ Append one entry per completed task, newest first. Format:
 - Anything the next agent needs to know.
 -->
 
+### 2026-09-06 - Windows queue row 6: glTF import fixes, build and CLI compile
+
+**Narrowed row 6 to its GUI half.** All three glTF fixes (`GLTF.cpp:111`, `RawFileInspector.cpp:154`,
+`ResourceCompiler_RenderMesh.cpp:327`) compiled cleanly in the Release build (see the row 1 entry
+above). Force-recompiled `Boulder.mesh`, `Floor.mesh` and `SkyDome.mesh` through
+`EsotericaResourceCompiler.exe -force -compile` - all three hashed identical to the pre-existing
+output, so the LOD-to-submesh rewrite is deterministic on Windows too, matching the Linux result.
+`MaterialBall.mesh` had never been compiled here; it compiled clean.
+
+**Fetched the actual Sponza asset** the 2026-09-04 Linux session used to find the
+`ImGui::Text( nullptr )` segfault: `Sponza.gltf` and `Sponza.bin` from
+`KhronosGroup/glTF-Sample-Assets` (`main` branch, `Models/Sponza/glTF/`), into
+`Data/PortTests/Sponza/` - gitignored, same pattern as `FetchTestAssets.sh`. Confirmed 0 `"name"`
+keys in the glTF, the same "no node names at all" shape the Linux session measured. Wrote
+`Data/PortTests/Sponza/Sponza.mesh` (a `StaticMeshResourceDescriptor`, no material mappings) and
+compiled it standalone - `SuccessWithWarnings` (placeholder materials, expected), no crash, 162ms.
+
+**This does not close row 6.** The crash it fixed lives in `PropertyGrid_SubmeshSettings.cpp`,
+which only runs inside the editor's Mesh Component property grid - the standalone compile never
+reaches it. What this session's compile *does* prove: the geometry and submesh-naming path
+(`RawFileInspector.cpp`, `ResourceCompiler_RenderMesh.cpp`) handles the real Sponza data without
+asserting or crashing. Opening `data://porttests/sponza/sponza.mesh` in the editor and selecting
+its Mesh Component is what is left - see Blocked.md rows 6 and 8, now sharing that one action.
+
 ### 2026-09-06 - Windows queue row 1: Release and Shipping MSBuild, and the standalone engine
 
 **Retired the rest of [Blocked.md](Blocked.md)'s Windows queue row 1.** Debug was the only
